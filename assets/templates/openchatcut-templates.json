@@ -18183,5 +18183,122 @@
   ],
   "thumb": "/thumbnails/4103210c-e3ee-4589-8626-307036bc61a3.jpg",
   "code": "const EditorialShowcase = ({item}) => {\n  const frame = useCurrentFrame();\n  const {fps} = useVideoConfig();\n  const props = item.props || {};\n  \n  const safeFps = fps || 30;\n  const safeSpring = (delay = 0, config = { damping: 18, stiffness: 90, mass: 0.8 }) => {\n    return spring({ frame: Math.max(0, frame - delay), fps: safeFps, config });\n  };\n\n  const backgroundColor = props.transparentBackground ? 'transparent' : props.bgColor;\n  const rootStyle = {\n    position: 'absolute',\n    inset: 0,\n    backgroundColor,\n    padding: '100px',\n    boxSizing: 'border-box',\n    display: 'flex',\n    flexDirection: 'column',\n    fontFamily: props.fontSans,\n    color: props.textColor,\n    overflow: 'hidden'\n  };\n\n  const chapterSpring = safeSpring(5);\n  const chapterOpacity = chapterSpring;\n  const chapterY = (1 - chapterSpring) * 30;\n\n  const chartElements = [\n    { label: props.chartLabel1, valueText: props.chartValue1, fill: props.chartFill1, color: props.accentCopper },\n    { label: props.chartLabel2, valueText: props.chartValue2, fill: props.chartFill2, color: props.accentAmber },\n    { label: props.chartLabel3, valueText: props.chartValue3, fill: props.chartFill3, color: props.accentTan }\n  ].map((item, idx) => {\n    const s = safeSpring(15 + idx * 8);\n    return (\n      <div key={idx} style={{ marginBottom: 32, opacity: s, transform: `translateX(${(1 - s) * 20}px)` }}>\n        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, fontSize: 24, fontWeight: 600 }}>\n          <span>{item.label}</span>\n          <span style={{ fontFamily: props.fontSerif, fontStyle: 'italic', fontWeight: 400, color: props.textSecondaryColor }}>{item.valueText}</span>\n        </div>\n        <div style={{ height: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' }}>\n          <div style={{ height: '100%', width: `${s * item.fill}%`, backgroundColor: item.color, borderRadius: 3 }} />\n        </div>\n      </div>\n    );\n  });\n\n  const nameSpring = safeSpring(30);\n  const nameLineScale = safeSpring(35);\n\n  const bulletElements = [\n    props.bullet1, props.bullet2, props.bullet3\n  ].map((text, idx) => {\n    const s = safeSpring(40 + idx * 6);\n    return (\n      <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 24, opacity: s, transform: `translateX(${(1 - s) * -20}px)` }}>\n        <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: props.accentCopper, flexShrink: 0 }} />\n        <div style={{ fontSize: 26, color: props.textSecondaryColor, fontWeight: 500 }}>{text}</div>\n      </div>\n    );\n  });\n\n  const quoteSpring = safeSpring(60);\n\n  const tlLineSpring = safeSpring(70);\n  const timelineElements = [\n    { year: props.tlYear1, text: props.tlText1 },\n    { year: props.tlYear2, text: props.tlText2 },\n    { year: props.tlYear3, text: props.tlText3 },\n    { year: props.tlYear4, text: props.tlText4 }\n  ].map((item, idx) => {\n    const s = safeSpring(75 + idx * 8);\n    return (\n      <div key={idx} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', opacity: s, transform: `translateY(${(1 - s) * 15}px)`, width: '22%' }}>\n        <div style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: props.accentTan, marginTop: 6, marginBottom: 28, border: `4px solid ${props.bgColor}`, boxSizing: 'content-box', zIndex: 2 }} />\n        <div style={{ fontSize: 32, fontWeight: 800, marginBottom: 12, letterSpacing: 1 }}>{item.year}</div>\n        <div style={{ fontSize: 20, color: props.textSecondaryColor, lineHeight: 1.5, fontWeight: 500, paddingRight: 20 }}>{item.text}</div>\n      </div>\n    );\n  });\n\n  return (\n    <div style={rootStyle}>\n      <div style={{ display: 'flex', gap: '140px', flex: 1 }}>\n        \n        {/* Left Column */}\n        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', paddingBottom: '40px' }}>\n          <div style={{ opacity: chapterOpacity, transform: `translateY(${chapterY}px)` }}>\n            <div style={{ fontSize: 20, letterSpacing: 6, fontWeight: 700, color: props.textSecondaryColor, marginBottom: 32, textTransform: 'uppercase' }}>\n              {props.chapterSubtitle}\n            </div>\n            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>\n              <div style={{ display: 'flex', alignItems: 'baseline', gap: 24, flexWrap: 'wrap' }}>\n                <span style={{ fontSize: 92, fontWeight: 800, letterSpacing: 1 }}>{props.chapterTitleSans1}</span>\n                <span style={{ fontSize: 100, fontFamily: props.fontSerif, fontStyle: 'italic', fontWeight: 400, letterSpacing: -2 }}>{props.chapterTitleSerif}</span>\n              </div>\n              <div style={{ fontSize: 92, fontWeight: 800, letterSpacing: 1 }}>{props.chapterTitleSans2}</div>\n            </div>\n          </div>\n          \n          <div style={{ opacity: nameSpring, transform: `translateY(${(1 - nameSpring) * 20}px)` }}>\n            <div style={{ width: `${nameLineScale * 80}px`, height: 4, backgroundColor: props.accentCopper, marginBottom: 24 }} />\n            <div style={{ fontSize: 44, fontWeight: 800, letterSpacing: 1, marginBottom: 8 }}>{props.nameText}</div>\n            <div style={{ fontSize: 26, color: props.textSecondaryColor, fontFamily: props.fontSerif, fontStyle: 'italic' }}>{props.roleText}</div>\n          </div>\n        </div>\n\n        {/* Right Column */}\n        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', paddingBottom: '40px' }}>\n          <div style={{ width: '100%', paddingRight: '40px' }}>\n            {chartElements}\n          </div>\n          \n          <div style={{ marginTop: 20 }}>\n            {bulletElements}\n          </div>\n          \n          <div style={{\n            opacity: quoteSpring, \n            transform: `translateY(${(1 - quoteSpring) * 20}px)`,\n            borderLeft: `4px solid ${props.accentAmber}`,\n            paddingLeft: 36,\n            maxWidth: '90%',\n            marginTop: 20\n          }}>\n            <div style={{ fontSize: 38, fontFamily: props.fontSerif, fontStyle: 'italic', lineHeight: 1.4, color: props.textColor }}>\n              \"{props.quoteText}\"\n            </div>\n          </div>\n        </div>\n      </div>\n\n      {/* Timeline Footer */}\n      <div style={{ position: 'relative', marginTop: 40, height: 160 }}>\n        {frame >= 70 && <div style={{ position: 'absolute', top: 14, left: 0, right: 0, height: 4, backgroundColor: 'rgba(255,255,255,0.06)' }} />}\n        <div style={{ position: 'absolute', top: 14, left: 0, height: 4, width: `${tlLineSpring * 100}%`, backgroundColor: props.accentTan }} />\n        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, display: 'flex', justifyContent: 'space-between' }}>\n          {timelineElements}\n        </div>\n      </div>\n    </div>\n  );\n};"
+ },
+ {
+  "id": "rasd-quote-single",
+  "name": "Arabic Quote (Rasd Quote)",
+  "category": "quote-cards",
+  "description": "Single Arabic quote text block with Kashida auto-justification, auto font-size fitting, and full Inspector panel property controls.",
+  "width": 1080,
+  "height": 1440,
+  "fps": 30,
+  "durationInFrames": 90,
+  "props": {
+   "text": "ترامب لفوكس نيوز: كنا نحرس مضيق هرمز دون مقابل أما الآن فسنحرسه ونحصل على مقابل لذلك",
+   "fontFamily": "GhroobArabic",
+   "textColor": "#FFFFFF",
+   "baseFontSize": 150,
+   "minFontSize": 50,
+   "lineSpacing": 0.9,
+   "align": "right",
+   "direction": "rtl",
+   "kashida": true,
+   "width": 918,
+   "max_height": 576
+  },
+  "propSchema": [
+   {
+    "key": "text",
+    "type": "text",
+    "defaultValue": "ترامب لفوكس نيوز: كنا نحرس مضيق هرمز دون مقابل أما الآن فسنحرسه ونحصل على مقابل لذلك",
+    "label": "Quote Text"
+   },
+   {
+    "key": "fontFamily",
+    "type": "font",
+    "defaultValue": "GhroobArabic",
+    "label": "Font Family"
+   },
+   {
+    "key": "textColor",
+    "type": "color",
+    "defaultValue": "#FFFFFF",
+    "label": "Text Color"
+   },
+   {
+    "key": "baseFontSize",
+    "type": "number",
+    "min": 30,
+    "max": 250,
+    "step": 5,
+    "defaultValue": 150,
+    "label": "Base Font Size"
+   },
+   {
+    "key": "minFontSize",
+    "type": "number",
+    "min": 20,
+    "max": 100,
+    "step": 2,
+    "defaultValue": 50,
+    "label": "Min Font Size"
+   },
+   {
+    "key": "lineSpacing",
+    "type": "number",
+    "min": 0.5,
+    "max": 2,
+    "step": 0.1,
+    "defaultValue": 0.9,
+    "label": "Line Spacing"
+   },
+   {
+    "key": "align",
+    "type": "select",
+    "options": [
+     "right",
+     "center",
+     "left"
+    ],
+    "defaultValue": "right",
+    "label": "Text Alignment"
+   },
+   {
+    "key": "direction",
+    "type": "select",
+    "options": [
+     "rtl",
+     "ltr"
+    ],
+    "defaultValue": "rtl",
+    "label": "Text Direction"
+   },
+   {
+    "key": "kashida",
+    "type": "boolean",
+    "defaultValue": true,
+    "label": "Kashida Justification"
+   },
+   {
+    "key": "width",
+    "type": "number",
+    "min": 200,
+    "max": 1920,
+    "step": 10,
+    "defaultValue": 918,
+    "label": "Box Width"
+   },
+   {
+    "key": "max_height",
+    "type": "number",
+    "min": 100,
+    "max": 1920,
+    "step": 10,
+    "defaultValue": 576,
+    "label": "Box Height"
+   }
+  ],
+  "thumb": "/thumbnails/ss-quote-card.jpg",
+  "code": "const CONNECTABLE_LETTERS = new Set([\n  0x0626, 0x0628, 0x062a, 0x062b, 0x062c, 0x062d, 0x062e, 0x0633,\n  0x0634, 0x0635, 0x0636, 0x0637, 0x0638, 0x0639, 0x063a, 0x0641,\n  0x0642, 0x0643, 0x0644, 0x0645, 0x0646, 0x0647, 0x0649, 0x064a,\n]);\n\nconst NON_CONNECTORS = new Set([\n  0x0621, 0x0622, 0x0623, 0x0624, 0x0625, 0x0627, 0x0629, 0x062f,\n  0x0630, 0x0631, 0x0632, 0x0648,\n]);\n\nconst DIACRITICS = new Set([\n  0x064b, 0x064c, 0x064d, 0x064e, 0x064f, 0x0650, 0x0651, 0x0652, 0x0653,\n  0x0654, 0x0655, 0x0656, 0x0670,\n]);\n\nconst ALEF_VARIANTS = new Set([0x0622, 0x0623, 0x0625, 0x0627, 0x0671]);\n\nconst FLAT_LETTERS = new Set([\n  0x0628, 0x062a, 0x062b, 0x0633, 0x0634, 0x0641, 0x0643, 0x0644,\n]);\n\nconst TATWEEL = \"\\u0640\";\n\nfunction isArabicLetter(char) {\n  const cp = char ? char.codePointAt(0) : 0;\n  return CONNECTABLE_LETTERS.has(cp) || NON_CONNECTORS.has(cp);\n}\n\nfunction isDiacritic(char) {\n  const cp = char ? char.codePointAt(0) : 0;\n  return DIACRITICS.has(cp);\n}\n\nfunction isConnectable(char) {\n  const cp = char ? char.codePointAt(0) : 0;\n  return CONNECTABLE_LETTERS.has(cp);\n}\n\nfunction baseLetters(word) {\n  const result = [];\n  for (let i = 0; i < word.length; i++) {\n    if (isArabicLetter(word[i])) result.push([i, word[i]]);\n  }\n  return result;\n}\n\nlet _offscreenCtx = null;\nfunction getCtx() {\n  if (typeof OffscreenCanvas === \"undefined\") return null;\n  if (!_offscreenCtx) {\n    try {\n      const canvas = new OffscreenCanvas(1, 1);\n      _offscreenCtx = canvas.getContext(\"2d\");\n    } catch {\n      _offscreenCtx = null;\n    }\n  }\n  return _offscreenCtx;\n}\n\nfunction measureText(text, fontFamily, fontSize) {\n  const ctx = getCtx();\n  if (!ctx) return text.length * fontSize * 0.55;\n  ctx.font = `${fontSize}px \"${fontFamily}\"`;\n  return ctx.measureText(text).width;\n}\n\nfunction tatweelWidth(fontFamily, fontSize) {\n  return measureText(TATWEEL, fontFamily, fontSize);\n}\n\nfunction analyzeKashidaCandidates(lineText) {\n  const words = lineText.split(\" \");\n  const candidates = [];\n  let globalIdx = 0;\n\n  for (let wIdx = 0; wIdx < words.length; wIdx++) {\n    const word = words[wIdx];\n    const wordLen = word.length;\n    const base = baseLetters(word);\n    const numBase = base.length;\n\n    if (numBase < 2) {\n      globalIdx += wordLen + 1;\n      continue;\n    }\n\n    const lastBaseIdx = base[base.length - 1][0];\n    const nextBase = new Map();\n    for (let bi = 0; bi < base.length - 1; bi++) {\n      nextBase.set(base[bi][0], base[bi + 1]);\n    }\n\n    for (let bi = 0; bi < base.length; bi++) {\n      const [origIdx, char] = base[bi];\n      if (origIdx === lastBaseIdx) continue;\n      if (!isConnectable(char)) continue;\n\n      if (char.codePointAt(0) === 0x0644) {\n        const nxt = nextBase.get(origIdx);\n        if (nxt && ALEF_VARIANTS.has(nxt[1].codePointAt(0) || 0)) continue;\n      }\n\n      const isBeforeLastLetter = bi === numBase - 2;\n      let insertPos = origIdx + 1;\n      while (insertPos < wordLen && isDiacritic(word[insertPos])) {\n        insertPos++;\n      }\n      const fullIndex = globalIdx + insertPos;\n\n      candidates.push({\n        fullIndex,\n        charCode: char.codePointAt(0) || 0,\n        wordIndex: wIdx,\n        isFirstWord: wIdx === 0,\n        isLastWord: wIdx === words.length - 1,\n        isBeforeLastLetter,\n        wordLength: numBase,\n        currentKashidas: 0,\n      });\n    }\n    globalIdx += wordLen + 1;\n  }\n  return candidates;\n}\n\nfunction buildKashidaString(lineText, candidates) {\n  const insertionMap = new Map();\n  for (const c of candidates) {\n    if (c.currentKashidas > 0) insertionMap.set(c.fullIndex, c.currentKashidas);\n  }\n  const chars = [];\n  for (let i = 0; i < lineText.length; i++) {\n    chars.push(lineText[i]);\n    const count = insertionMap.get(i + 1) || 0;\n    if (count > 0) chars.push(TATWEEL.repeat(count));\n  }\n  return chars.join(\"\");\n}\n\nfunction kashidaJustifyLine(lineText, targetWidth, fontFamily, fontSize, maxKashidasPerWord = 5) {\n  if (!lineText.trim()) return lineText;\n  const currentWidth = measureText(lineText, fontFamily, fontSize);\n  if (currentWidth >= targetWidth) return lineText;\n\n  const twWidth = tatweelWidth(fontFamily, fontSize);\n  if (twWidth <= 0) return lineText;\n\n  const gap = targetWidth - currentWidth;\n  const candidates = analyzeKashidaCandidates(lineText);\n  if (candidates.length === 0) return lineText;\n\n  const targetCount = Math.max(1, Math.floor(gap / twWidth));\n  let distributedCount = 0;\n\n  while (distributedCount < targetCount) {\n    let bestCandidate = null;\n    let highestScore = -9999;\n\n    for (const cand of candidates) {\n      let score = 0;\n      if (cand.isBeforeLastLetter) score += 4;\n      if (cand.isLastWord) score += 3;\n      else if (cand.isFirstWord) score += 2;\n      if (FLAT_LETTERS.has(cand.charCode)) score += 1;\n      if (cand.wordLength > 4) score += 1;\n      else if (cand.wordLength < 3) score -= 2;\n      score -= cand.currentKashidas * 6;\n      if (cand.currentKashidas >= maxKashidasPerWord) score = -9999;\n\n      if (score > highestScore) {\n        highestScore = score;\n        bestCandidate = cand;\n      }\n    }\n\n    if (!bestCandidate || highestScore === -9999) break;\n    bestCandidate.currentKashidas++;\n    distributedCount++;\n  }\n\n  let result = buildKashidaString(lineText, candidates);\n  let finalWidth = measureText(result, fontFamily, fontSize);\n  while (finalWidth > targetWidth && distributedCount > 0) {\n    let worst = null;\n    for (const c of candidates) {\n      if (c.currentKashidas > 0 && (!worst || c.currentKashidas > worst.currentKashidas)) {\n        worst = c;\n      }\n    }\n    if (!worst) break;\n    worst.currentKashidas--;\n    distributedCount--;\n    result = buildKashidaString(lineText, candidates);\n    finalWidth = measureText(result, fontFamily, fontSize);\n  }\n\n  return result;\n}\n\nfunction splitTextIntoLines(rawText, fontFamily, fontSize, availableWidth, kashida) {\n  const spaceWidth = measureText(\" \", fontFamily, fontSize);\n  const paragraphs = rawText.split(\"\\n\");\n  const result = [];\n\n  for (const paragraph of paragraphs) {\n    const words = paragraph.split(/\\s+/).filter(Boolean);\n    if (words.length === 0) {\n      result.push({ text: \"\", isJustified: false });\n      continue;\n    }\n\n    const paragraphLines = [];\n    let currentWords = [];\n    let currentWidth = 0;\n\n    for (const word of words) {\n      const wordWidth = measureText(word, fontFamily, fontSize);\n      const spaceAdd = currentWords.length > 0 ? spaceWidth : 0;\n\n      if (currentWidth + wordWidth + spaceAdd <= availableWidth) {\n        currentWords.push(word);\n        currentWidth += wordWidth + spaceAdd;\n      } else {\n        if (currentWords.length > 0) paragraphLines.push(currentWords.join(\" \"));\n        currentWords = [word];\n        currentWidth = wordWidth;\n      }\n    }\n    if (currentWords.length > 0) paragraphLines.push(currentWords.join(\" \"));\n\n    for (let i = 0; i < paragraphLines.length; i++) {\n      const isLast = i === paragraphLines.length - 1;\n      if (kashida && !isLast) {\n        const justified = kashidaJustifyLine(\n          paragraphLines[i],\n          availableWidth,\n          fontFamily,\n          fontSize\n        );\n        result.push({ text: justified, isJustified: true });\n      } else {\n        result.push({ text: paragraphLines[i], isJustified: false });\n      }\n    }\n  }\n  return result;\n}\n\nfunction computeLineHeight(fontFamily, fontSize, lineSpacing, useMetricsLineSpacing) {\n  if (!useMetricsLineSpacing) {\n    return fontSize * lineSpacing;\n  }\n  const ctx = getCtx();\n  if (!ctx) return fontSize * lineSpacing;\n  ctx.font = `${fontSize}px \"${fontFamily}\"`;\n  const m = ctx.measureText(\"ب\");\n  const rawHeight =\n    (m.fontBoundingBoxAscent || m.actualBoundingBoxAscent || fontSize) +\n    (m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || 0);\n  return rawHeight * lineSpacing;\n}\n\nfunction useArabicTextFit(input) {\n  const {\n    text, fontFamily, baseFontSize, minFontSize, availableWidth,\n    maxHeight, lineSpacing, useMetricsLineSpacing, kashida,\n  } = input;\n\n  return React.useMemo(() => {\n    if (!text || availableWidth <= 0 || maxHeight <= 0) {\n      return {\n        lines: [],\n        fontSize: minFontSize,\n        lineHeight: computeLineHeight(fontFamily, minFontSize, lineSpacing, useMetricsLineSpacing),\n      };\n    }\n    let lo = minFontSize;\n    let hi = baseFontSize;\n    let bestFontSize = minFontSize;\n    let bestLines = [];\n    let bestLineHeight = computeLineHeight(fontFamily, minFontSize, lineSpacing, useMetricsLineSpacing);\n\n    const totalHeight = (fs) => {\n      const lh = computeLineHeight(fontFamily, fs, lineSpacing, useMetricsLineSpacing);\n      const ls = splitTextIntoLines(text, fontFamily, fs, availableWidth, kashida);\n      return { height: ls.length * lh, lines: ls, lineHeight: lh };\n    };\n\n    while (lo <= hi) {\n      const mid = Math.floor((lo + hi) / 2);\n      const { height, lines, lineHeight } = totalHeight(mid);\n      if (height <= maxHeight) {\n        bestFontSize = mid;\n        bestLines = lines;\n        bestLineHeight = lineHeight;\n        lo = mid + 1;\n      } else {\n        hi = mid - 1;\n      }\n    }\n\n    if (bestLines.length === 0) {\n      const { lines, lineHeight } = totalHeight(minFontSize);\n      bestLines = lines;\n      bestLineHeight = lineHeight;\n      bestFontSize = minFontSize;\n    }\n\n    return { lines: bestLines, fontSize: bestFontSize, lineHeight: bestLineHeight };\n  }, [text, fontFamily, baseFontSize, minFontSize, availableWidth, maxHeight, lineSpacing, useMetricsLineSpacing, kashida]);\n}\n\nconst FittedTextBox = ({ text, layer, opacity = 1, fontFamilyOverride, textColorOverride, baseFontSize, minFontSize, lineSpacing, align, direction, kashida }) => {\n  const fontFamily = fontFamilyOverride || \"GhroobArabic\";\n  const dir = direction || \"rtl\";\n  const textAlign = align || \"right\";\n  const color = textColorOverride || \"#FFFFFF\";\n\n  const { lines, fontSize, lineHeight } = useArabicTextFit({\n    text,\n    fontFamily,\n    baseFontSize: Number(baseFontSize) || 120,\n    minFontSize: Number(minFontSize) || 40,\n    availableWidth: layer.width,\n    maxHeight: layer.max_height,\n    lineSpacing: Number(lineSpacing) || 0.9,\n    useMetricsLineSpacing: true,\n    kashida: kashida !== false,\n  });\n\n  const totalTextHeight = lines.length * lineHeight;\n  const verticalOffset = (layer.max_height - totalTextHeight) / 2;\n  const cssTextAlign = textAlign === \"center\" ? \"center\" : dir === \"rtl\" ? \"right\" : \"left\";\n\n  return (\n    <div\n      style={{\n        position: \"absolute\",\n        top: layer.y + Math.max(0, verticalOffset),\n        left: Math.max(0, layer.x - layer.width / 2),\n        width: layer.width,\n        height: layer.max_height,\n        overflow: \"hidden\",\n        opacity,\n        zIndex: 3,\n      }}\n    >\n      {lines.map((line, i) => (\n        <div\n          key={i}\n          style={{\n            fontFamily,\n            fontSize,\n            lineHeight: `${lineHeight}px`,\n            color,\n            direction: dir,\n            textAlign: cssTextAlign,\n            unicodeBidi: \"plaintext\",\n            whiteSpace: \"pre\",\n            height: lineHeight,\n          }}\n        >\n          {line.text}\n        </div>\n      ))}\n    </div>\n  );\n};\n\nconst RasdQuote = ({ item }) => {\n  const props = (item && item.props) || {};\n  const text = props.text || \"ترامب لفوكس نيوز: كنا نحرس مضيق هرمز دون مقابل أما الآن فسنحرسه ونحصل على مقابل لذلك\";\n  const fontFamily = props.fontFamily || \"GhroobArabic\";\n  const textColor = props.textColor || \"#FFFFFF\";\n  const baseFontSize = props.baseFontSize || 150;\n  const minFontSize = props.minFontSize || 50;\n  const lineSpacing = props.lineSpacing || 0.9;\n  const align = props.align || \"right\";\n  const direction = props.direction || \"rtl\";\n  const kashida = props.kashida !== false;\n\n  const DESIGN_WIDTH = 1080;\n  const DESIGN_HEIGHT = 1440;\n  const scale = Math.min(\n    (item?.width || DESIGN_WIDTH) / DESIGN_WIDTH,\n    (item?.height || DESIGN_HEIGHT) / DESIGN_HEIGHT\n  );\n\n  const customWidth = props.width != null ? Number(props.width) : Math.round(DESIGN_WIDTH * 0.85);\n  const customMaxHeight = props.max_height != null ? Number(props.max_height) : Math.round(DESIGN_HEIGHT * 0.4);\n\n  const layer = {\n    id: \"rasd_quote_layer\",\n    type: \"text\",\n    x: Math.round(DESIGN_WIDTH / 2),\n    y: Math.round(DESIGN_HEIGHT * 0.45),\n    width: customWidth,\n    max_height: customMaxHeight,\n  };\n\n  return (\n    <div\n      style={{\n        position: 'absolute',\n        top: 0,\n        left: 0,\n        width: DESIGN_WIDTH,\n        height: DESIGN_HEIGHT,\n        transform: `scale(${scale})`,\n        transformOrigin: 'top left',\n        backgroundColor: 'transparent',\n        overflow: 'hidden',\n      }}\n    >\n      <FittedTextBox\n        text={text}\n        layer={layer}\n        fontFamilyOverride={fontFamily}\n        textColorOverride={textColor}\n        baseFontSize={baseFontSize}\n        minFontSize={minFontSize}\n        lineSpacing={lineSpacing}\n        align={align}\n        direction={direction}\n        kashida={kashida}\n      />\n    </div>\n  );\n};"
  }
 ]
