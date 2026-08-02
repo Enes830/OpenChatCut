@@ -3,7 +3,6 @@ import { TimelineComposition } from '../src/editor/TimelineComposition';
 import { timelineDuration, type TimelineState } from '../src/editor/types';
 import { resolveTimelineRenderPlan } from '../src/editor/sequenceGraph';
 import { loadProjectFonts } from '../src/fonts/googleFonts';
-import { RasdNews } from './RasdNewsTemplate';
 
 // Register local faces; TimelineComposition registers used Google faces before render.
 loadProjectFonts();
@@ -21,40 +20,30 @@ const EMPTY_STATE: TimelineState = {
 
 export function Root() {
   return (
-    <>
-      <Composition
-        id="timeline"
-        component={TimelineComposition}
-        defaultProps={{ state: EMPTY_STATE, transparent: false }}
-        // Metadata comes from the timeline itself — same source of truth as the
-        // Player (see timelineDuration in src/editor/types.ts). Min 1 frame.
-        calculateMetadata={({ props }) => {
-          const { state, project, timelineId } = props;
-          const durationInFrames = project && timelineId
-            ? resolveTimelineRenderPlan(project, timelineId).durationInFrames
-            : timelineDuration(state);
-          return {
-            durationInFrames: Math.max(1, durationInFrames),
-            fps: state.fps,
-            width: state.width,
-            height: state.height,
-          };
-        }}
-        // Fallbacks only; calculateMetadata overrides these before every render.
-        durationInFrames={Math.max(1, timelineDuration(EMPTY_STATE))}
-        fps={EMPTY_STATE.fps}
-        width={EMPTY_STATE.width}
-        height={EMPTY_STATE.height}
-      />
-      <Composition
-        id="RasdNews"
-        component={RasdNews}
-        durationInFrames={700}
-        fps={30}
-        width={1080}
-        height={1440}
-      />
-    </>
+    <Composition
+      id="timeline"
+      component={TimelineComposition}
+      defaultProps={{ state: EMPTY_STATE, transparent: false }}
+      // Metadata comes from the timeline itself — same source of truth as the
+      // Player (see timelineDuration in src/editor/types.ts). Min 1 frame.
+      calculateMetadata={({ props }) => {
+        const { state, project, timelineId } = props;
+        const durationInFrames = project && timelineId
+          ? resolveTimelineRenderPlan(project, timelineId).durationInFrames
+          : timelineDuration(state);
+        return {
+          durationInFrames: Math.max(1, durationInFrames),
+          fps: state.fps,
+          width: state.width,
+          height: state.height,
+        };
+      }}
+      // Fallbacks only; calculateMetadata overrides these before every render.
+      durationInFrames={Math.max(1, timelineDuration(EMPTY_STATE))}
+      fps={EMPTY_STATE.fps}
+      width={EMPTY_STATE.width}
+      height={EMPTY_STATE.height}
+    />
   );
 }
 
