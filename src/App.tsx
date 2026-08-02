@@ -148,7 +148,7 @@ export default function App() {
     <Dashboard
       projects={projects}
       onOpen={(id) => go(`#/editor/${id}`)}
-      onNew={async () => { const m = await createProject(randomProjectName(), emptyDoc()); await refresh(); go(`#/editor/${m.id}`); }}
+      onNew={async () => { const m = await createProject(randomProjectName(), await seedDoc()); await refresh(); go(`#/editor/${m.id}`); }}
       onRename={async (id, name) => { await renameProject(id, name); refresh(); }}
       onDuplicate={async (id) => { await duplicateProject(id); refresh(); }}
       onDelete={async (id) => { await purgeProjectCascade(id); refresh(); }}  // Cascade: delete the project + clear its exclusive assets

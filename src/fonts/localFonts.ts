@@ -69,6 +69,10 @@ export const LOCAL_CJK_FONTS: readonly LocalCjkFont[] = [
   { family: 'Douyin Meihao Ti', importName: 'DouyinMeihaoTi', aliasZh: ['抖音美好体'],
     files: { 400: '/fonts/douyin-meihaoti/DouyinMeihaoti-Bold.woff2',
              700: '/fonts/douyin-meihaoti/DouyinMeihaoti-Bold.woff2' } },
+  // Ghroob Arabic — Arabic Headline & Display Font
+  { family: 'GhroobArabic', importName: 'GhroobArabic', aliasZh: ['Ghroob', 'Ghroob Arabic', 'GhroobArabicBold'],
+    files: { 700: '/fonts/GhroobArabicitf-Bold.otf',
+             300: '/fonts/GhroobArabicitf-Light.otf' } },
 ];
 
 /** family / importName / Chinese alias → entry (normalized matching). */
@@ -88,18 +92,24 @@ const hasDom = (): boolean => typeof FontFace !== 'undefined' && typeof document
 // family → FontFace instance registered in document.fonts (single instance, preventing repeated registration).
 const registeredFaces = new Map<string, FontFace[]>();
 
+function getFontFormat(url: string): string {
+  if (url.endsWith('.otf')) return 'opentype';
+  if (url.endsWith('.ttf')) return 'truetype';
+  return 'woff2';
+}
+
 function facesOf(font: LocalCjkFont): FontFace[] {
   let faces = registeredFaces.get(font.family);
   if (!faces) {
     faces = Object.entries(font.files ?? {}).map(
       ([weight, url]) =>
-        new FontFace(font.family, `url(${url}) format('woff2')`, {
+        new FontFace(font.family, `url(${url}) format('${getFontFormat(url)}')`, {
           weight,
           style: 'normal',
           display: 'swap',
         }),
     );
-    for (const face of faces) document.fonts.add(face);
+    for (const face of faces) (document.fonts as any).add(face);
     registeredFaces.set(font.family, faces);
   }
   return faces;

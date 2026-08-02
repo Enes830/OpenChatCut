@@ -55,6 +55,7 @@
     "@huggingface/transformers": "^3.8.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@remotion/bundler": "4.0.489",
+    "@remotion/fonts": "^4.0.489",
     "@remotion/google-fonts": "^4.0.489",
     "@remotion/media": "4.0.489",
     "@remotion/player": "^4.0.489",
