@@ -1,15 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import {
-  ToolListChangedNotificationSchema,
-  type CallToolResult,
-} from '@modelcontextprotocol/sdk/types.js';
-import {
-  ExternalEditorCallError,
   pendingEditorCallsForTest,
-  invokeEditorTool,
   nextEditorCall,
   registerEditor,
   resetExternalAgentBrokerForTest,
@@ -18,17 +11,22 @@ import {
 } from './broker.ts';
 import {
   handleMcpRequest,
+  MCP_POST_BODY_LIMIT_BYTES,
   MCP_SESSION_COUNT_LIMIT,
   MCP_SESSION_IDLE_LIMIT_MS,
   mcpSessionsForTest,
   resetMcpSessionsForTest,
   setMcpSessionLastUsedForTest,
 } from './mcp.ts';
+import {
+  callOutcome,
+  closeClient,
+  connectClient,
+  verifyMcpEditSessions,
+  waitForPending,
+  type ConnectedClient,
+} from './mcp-session-verifier.ts';
 
-interface ConnectedClient {
-  client: Client;
-  sessionId: string;
-}
 
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -40,35 +38,6 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
-async function connectClient(url: URL, name: string): Promise<ConnectedClient> {
-  const before = new Set(mcpSessionsForTest().map((session) => session.id));
-  const client = new Client({ name, version: '1.0.0' });
-  const transport = new StreamableHTTPClientTransport(url);
-  await client.connect(transport);
-  const session = mcpSessionsForTest().find((candidate) => !before.has(candidate.id));
-  assert(session, 'initialization registers exactly one new MCP session');
-  return { client, sessionId: session.id };
-}
-
-async function closeClient(connection: ConnectedClient): Promise<void> {
-  await connection.client.close().catch(() => undefined);
-}
-
-async function waitForPending(sessionId: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (pendingEditorCallsForTest(sessionId).length) return;
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`editor call for MCP session ${sessionId} was never queued`);
-}
-
-function callOutcome(result: CallToolResult): unknown {
-  return result.structuredContent?.outcome;
-}
-
-function callStatus(result: CallToolResult): unknown {
-  return result.structuredContent?.status;
-}
 
 async function rawSessionRequest(
   url: URL,
@@ -90,7 +59,7 @@ async function rawSessionRequest(
   return response;
 }
 
-resetMcpSessionsForTest();
+await resetMcpSessionsForTest();
 resetExternalAgentBrokerForTest();
 
 const projectA = 'mcp-project-a';
@@ -131,6 +100,14 @@ const editTools = [
     },
   },
   {
+    name: 'discard_edit_session',
+    input_schema: {
+      type: 'object' as const,
+      properties: { editSessionId: { type: 'string' } },
+      required: ['editSessionId'],
+    },
+  },
+  {
     name: 'mcp_mutating_check',
     input_schema: {
       type: 'object' as const,
@@ -139,7 +116,27 @@ const editTools = [
     },
   },
 ];
-const editorTools = [dynamicTool, extraTool, ...editTools];
+const discoveryTools = [
+  {
+    name: 'ToolSearch',
+    description: 'Search editor tools',
+    input_schema: {
+      type: 'object' as const,
+      properties: { query: { type: 'string' } },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'load_skill',
+    description: 'Load a skill playbook',
+    input_schema: {
+      type: 'object' as const,
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+];
+const editorTools = [dynamicTool, extraTool, ...discoveryTools, ...editTools];
 registerEditor(projectA, editorA, revisionA, [dynamicTool]);
 
 const server = createServer((req, res) => {
@@ -153,6 +150,18 @@ const mcpUrl = new URL(`http://127.0.0.1:${port}/mcp`);
 const clients: ConnectedClient[] = [];
 
 try {
+  const oversized = await fetch(mcpUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payload: 'x'.repeat(MCP_POST_BODY_LIMIT_BYTES) }),
+  });
+  assert.equal(oversized.status, 413, 'MCP POST bodies over 2 MiB fail before transport dispatch');
+  const invalidJson = await fetch(mcpUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{',
+  });
+  assert.equal(invalidJson.status, 400, 'MCP POST JSON is parsed before transport dispatch');
   const boundA = await connectClient(mcpUrl, 'openchatcut-mcp-binding-a');
   clients.push(boundA);
   let notify!: () => void;
@@ -165,6 +174,65 @@ try {
     new Promise((_, reject) => setTimeout(() => reject(new Error('tools/list_changed timeout')), 2_000)),
   ]);
   assert.ok((await boundA.client.listTools()).tools.some((tool) => tool.name === extraTool.name));
+  const exposureHeaders = { 'x-openchatcut-tool-exposure': 'progressive' };
+  const progressiveA = await connectClient(mcpUrl, 'openchatcut-progressive-a', exposureHeaders);
+  const progressiveB = await connectClient(mcpUrl, 'openchatcut-progressive-b', exposureHeaders);
+  clients.push(progressiveA, progressiveB);
+  const initialProgressive = await progressiveA.client.listTools();
+  assert.equal(initialProgressive.tools.some((tool) => tool.name === 'ToolSearch'), true);
+  assert.equal(initialProgressive.tools.some((tool) => tool.name === dynamicTool.name), false);
+  await progressiveA.client.callTool({ name: 'target_project', arguments: { projectId: projectA } });
+  await progressiveB.client.callTool({ name: 'target_project', arguments: { projectId: projectA } });
+  const hiddenBeforeSearch = await progressiveA.client.callTool({
+    name: dynamicTool.name,
+    arguments: {},
+  });
+  assert.equal(hiddenBeforeSearch.isError, true, 'a hidden tool cannot bypass the session projection');
+  let progressiveChanged!: () => void;
+  const progressiveListChanged = new Promise<void>((resolve) => { progressiveChanged = resolve; });
+  progressiveA.client.setNotificationHandler(
+    ToolListChangedNotificationSchema,
+    () => progressiveChanged(),
+  );
+  const searchPending = progressiveA.client.callTool({
+    name: 'ToolSearch',
+    arguments: { query: 'dynamic check' },
+  });
+  const searchCall = await nextEditorCall(
+    projectA,
+    editorA,
+    revisionA,
+    AbortSignal.timeout(1_000),
+  );
+  assert.equal(searchCall?.name, 'ToolSearch');
+  settleEditorCall(searchCall!.id, 'applied', {
+    results: [{ name: dynamicTool.name, description: dynamicTool.description }],
+  });
+  const searchResult = await searchPending;
+  assert.notEqual(searchResult.isError, true);
+  assert.deepEqual(searchResult.structuredContent?.activatedTools, [dynamicTool.name]);
+  await Promise.race([
+    progressiveListChanged,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error('progressive tools/list_changed timeout')),
+      2_000,
+    )),
+  ]);
+  assert.equal(
+    (await progressiveA.client.listTools()).tools.some((tool) => tool.name === dynamicTool.name),
+    true,
+  );
+  assert.equal(
+    (await progressiveB.client.listTools()).tools.some((tool) => tool.name === dynamicTool.name),
+    false,
+    'tool activation remains isolated to one MCP transport session',
+  );
+  assert.equal(
+    mcpSessionsForTest().find((session) => session.id === progressiveA.sessionId)
+      ?.exposure.lastActivation?.source,
+    'tool_search',
+  );
+
 
   registerEditor(projectB, editorB, revisionB, editorTools);
   const targetA = await boundA.client.callTool({
@@ -215,7 +283,7 @@ try {
     arguments: {},
   });
   await waitForPending(switchClient.sessionId);
-  assert.equal(unregisterEditor(projectA, editorA), true);
+  assert.equal(await unregisterEditor(projectA, editorA), true);
   const switchingResult = await switchingCall;
   assert.equal(switchingResult.isError, true);
   assert.equal(callOutcome(switchingResult), 'cancelled');
@@ -242,259 +310,14 @@ try {
   assert.equal(closeOutcome, 'settled', 'transport close settles its queued editor call');
   assert.equal(pendingEditorCallsForTest(closeClientConnection.sessionId).length, 0);
 
-  const appliedClient = await connectClient(mcpUrl, 'openchatcut-mcp-manual-applied');
-  clients.push(appliedClient);
-  await appliedClient.client.callTool({
-    name: 'target_project',
-    arguments: { projectId: projectA },
+  await verifyMcpEditSessions({
+    mcpUrl,
+    clients,
+    boundB,
+    projectId: projectA,
+    editorId: editorA,
+    editorTools,
   });
-  const appliedSessionId = 'manual-applied-edit-session';
-  const beginAppliedPending = appliedClient.client.callTool({
-    name: 'begin_edit_session',
-    arguments: { approvalMode: 'manual' },
-  });
-  await waitForPending(appliedClient.sessionId);
-  const beginAppliedCall = await nextEditorCall(
-    projectA,
-    editorA,
-    'v3-mcp-project-a',
-    AbortSignal.timeout(1_000),
-  );
-  assert(beginAppliedCall);
-  assert.equal(beginAppliedCall.name, 'begin_edit_session');
-  settleEditorCall(beginAppliedCall.id, 'applied', {
-    editSessionId: appliedSessionId,
-    status: 'drafting',
-  });
-  assert.equal(callStatus(await beginAppliedPending), 'drafting');
-
-  const reviewAppliedPending = appliedClient.client.callTool({
-    name: 'review_edit_session',
-    arguments: { editSessionId: appliedSessionId, summary: 'Manual approval check' },
-  });
-  await waitForPending(appliedClient.sessionId);
-  const reviewAppliedCall = await nextEditorCall(
-    projectA,
-    editorA,
-    'v3-mcp-project-a',
-    AbortSignal.timeout(1_000),
-  );
-  assert(reviewAppliedCall);
-  assert.equal(reviewAppliedCall.name, 'review_edit_session');
-  settleEditorCall(reviewAppliedCall.id, 'applied', {
-    editSessionId: appliedSessionId,
-    status: 'awaiting_review',
-  });
-  assert.equal(callStatus(await reviewAppliedPending), 'awaiting_review');
-
-  const awaitingPollPending = appliedClient.client.callTool({
-    name: 'get_edit_session',
-    arguments: { editSessionId: appliedSessionId },
-  });
-  await waitForPending(appliedClient.sessionId);
-  const awaitingPollCall = await nextEditorCall(
-    projectA,
-    editorA,
-    'v3-mcp-project-a',
-    AbortSignal.timeout(1_000),
-  );
-  assert(awaitingPollCall);
-  settleEditorCall(awaitingPollCall.id, 'applied', {
-    editSessionId: appliedSessionId,
-    status: 'awaiting_review',
-  });
-  assert.equal(callStatus(await awaitingPollPending), 'awaiting_review');
-
-  registerEditor(projectA, editorA, 'v4-mcp-project-a-applied', editorTools);
-  const appliedPollPending = appliedClient.client.callTool({
-    name: 'get_edit_session',
-    arguments: { editSessionId: appliedSessionId },
-  });
-  await waitForPending(appliedClient.sessionId);
-  const appliedPollCall = await nextEditorCall(
-    projectA,
-    editorA,
-    'v4-mcp-project-a-applied',
-    AbortSignal.timeout(1_000),
-  );
-  assert(appliedPollCall);
-  assert.equal(
-    appliedPollCall.binding.baseRevision,
-    'v3-mcp-project-a',
-    'terminal reads preserve the MCP session expected revision at editor dispatch',
-  );
-  settleEditorCall(appliedPollCall.id, 'applied', {
-    editSessionId: appliedSessionId,
-    status: 'applied',
-    warning: 'The edit was applied, but the project list timestamp could not be updated.',
-  });
-  const appliedPoll = await appliedPollPending;
-  assert.notEqual(appliedPoll.isError, true);
-  assert.equal(callStatus(appliedPoll), 'applied');
-  assert.equal(
-    appliedPoll.structuredContent?.warning,
-    'The edit was applied, but the project list timestamp could not be updated.',
-  );
-  assert.equal(
-    mcpSessionsForTest().find((session) => session.id === appliedClient.sessionId)?.staleReason,
-    null,
-    'a successful terminal read does not permanently stale its transport',
-  );
-  registerEditor(projectA, editorA, 'v5-mcp-project-a-unrelated', editorTools);
-  const laterReadPending = appliedClient.client.callTool({
-    name: 'get_edit_session',
-    arguments: { editSessionId: appliedSessionId },
-  });
-  await waitForPending(appliedClient.sessionId);
-  const laterReadCall = await nextEditorCall(
-    projectA,
-    editorA,
-    'v5-mcp-project-a-unrelated',
-    AbortSignal.timeout(1_000),
-  );
-  assert(laterReadCall);
-  settleEditorCall(
-    laterReadCall.id,
-    'stale',
-    'The project advanced beyond the revision applied by this edit session.',
-  );
-  assert.equal(callOutcome(await laterReadPending), 'stale');
-  assert.equal(
-    mcpSessionsForTest().find((session) => session.id === appliedClient.sessionId)?.staleReason,
-    null,
-    'a stale get_edit_session result does not permanently stale its transport',
-  );
-
-
-  const sameProjectIntruder = await connectClient(mcpUrl, 'openchatcut-mcp-session-intruder');
-  clients.push(sameProjectIntruder);
-  await sameProjectIntruder.client.callTool({
-    name: 'target_project',
-    arguments: { projectId: projectA },
-  });
-  const crossOwnerMutation = await Promise.race([
-    sameProjectIntruder.client.callTool({
-      name: 'mcp_mutating_check',
-      arguments: { editSessionId: appliedSessionId },
-    }),
-    new Promise<never>((_, reject) => setTimeout(
-      () => reject(new Error('cross-owner mutation was queued instead of rejected')),
-      200,
-    )),
-  ]);
-  assert.equal(callOutcome(crossOwnerMutation), 'rejected');
-  assert.equal(
-    pendingEditorCallsForTest(sameProjectIntruder.sessionId).length,
-    0,
-    'a transport cannot enqueue mutations against another transport edit session',
-  );
-  const crossOwnerRead = await sameProjectIntruder.client.callTool({
-    name: 'get_edit_session',
-    arguments: { editSessionId: appliedSessionId },
-  });
-  assert.equal(callOutcome(crossOwnerRead), 'rejected');
-  const crossProjectRead = await boundB.client.callTool({
-    name: 'get_edit_session',
-    arguments: { editSessionId: appliedSessionId },
-  });
-  assert.equal(callOutcome(crossProjectRead), 'rejected');
-  assert.throws(
-    () => invokeEditorTool(
-      appliedClient.sessionId,
-      { projectId: projectA, editorInstanceId: 'other-editor', baseRevision: 'v3-mcp-project-a' },
-      'get_edit_session',
-      { editSessionId: appliedSessionId },
-    ),
-    (error: unknown) => (
-      error instanceof ExternalEditorCallError
-      && error.outcome === 'rejected'
-    ),
-    'an owning transport cannot read its session through another editor binding',
-  );
-
-  const oldRevisionMutation = await appliedClient.client.callTool({
-    name: 'mcp_mutating_check',
-    arguments: { editSessionId: appliedSessionId },
-  });
-  assert.equal(callOutcome(oldRevisionMutation), 'stale');
-  assert.notEqual(
-    mcpSessionsForTest().find((session) => session.id === appliedClient.sessionId)?.staleReason,
-    null,
-    'mutating calls retain permanent stale transport behavior',
-  );
-
-  const rejectedClient = await connectClient(mcpUrl, 'openchatcut-mcp-manual-rejected');
-  clients.push(rejectedClient);
-  await rejectedClient.client.callTool({
-    name: 'target_project',
-    arguments: { projectId: projectA },
-  });
-  const rejectedSessionId = 'manual-rejected-edit-session';
-  const beginRejectedPending = rejectedClient.client.callTool({
-    name: 'begin_edit_session',
-    arguments: { approvalMode: 'manual' },
-  });
-  await waitForPending(rejectedClient.sessionId);
-  const beginRejectedCall = await nextEditorCall(
-    projectA,
-    editorA,
-    'v5-mcp-project-a-unrelated',
-    AbortSignal.timeout(1_000),
-  );
-  assert(beginRejectedCall);
-  settleEditorCall(beginRejectedCall.id, 'applied', {
-    editSessionId: rejectedSessionId,
-    status: 'drafting',
-  });
-  await beginRejectedPending;
-  const reviewRejectedPending = rejectedClient.client.callTool({
-    name: 'review_edit_session',
-    arguments: { editSessionId: rejectedSessionId, summary: 'Manual rejection check' },
-  });
-  await waitForPending(rejectedClient.sessionId);
-  const reviewRejectedCall = await nextEditorCall(
-    projectA,
-    editorA,
-    'v5-mcp-project-a-unrelated',
-    AbortSignal.timeout(1_000),
-  );
-  assert(reviewRejectedCall);
-  settleEditorCall(reviewRejectedCall.id, 'applied', {
-    editSessionId: rejectedSessionId,
-    status: 'awaiting_review',
-  });
-  assert.equal(callStatus(await reviewRejectedPending), 'awaiting_review');
-  const rejectedPollPending = rejectedClient.client.callTool({
-    name: 'get_edit_session',
-    arguments: { editSessionId: rejectedSessionId },
-  });
-  await waitForPending(rejectedClient.sessionId);
-  const rejectedPollCall = await nextEditorCall(
-    projectA,
-    editorA,
-    'v5-mcp-project-a-unrelated',
-    AbortSignal.timeout(1_000),
-  );
-  assert(rejectedPollCall);
-  settleEditorCall(rejectedPollCall.id, 'applied', {
-    editSessionId: rejectedSessionId,
-    status: 'rejected',
-  });
-  assert.equal(callStatus(await rejectedPollPending), 'rejected');
-
-  assert.equal(unregisterEditor(projectA, editorA), true);
-  const switchedEditor = 'mcp-editor-a-after-switch';
-  registerEditor(projectA, switchedEditor, 'v5-mcp-project-a-unrelated', editorTools);
-  const switchedTerminalRead = await rejectedClient.client.callTool({
-    name: 'get_edit_session',
-    arguments: { editSessionId: rejectedSessionId },
-  });
-  assert.equal(callOutcome(switchedTerminalRead), 'stale');
-  assert.notEqual(
-    mcpSessionsForTest().find((session) => session.id === rejectedClient.sessionId)?.staleReason,
-    null,
-    'a real editor/project switch still permanently stales the MCP transport',
-  );
 
   const expiredClient = await connectClient(mcpUrl, 'openchatcut-mcp-expired');
   clients.push(expiredClient);
@@ -511,7 +334,7 @@ try {
   );
 
   await Promise.all(clients.splice(0).map(closeClient));
-  resetMcpSessionsForTest();
+  await resetMcpSessionsForTest();
   const cappedClients: ConnectedClient[] = [];
   for (let index = 0; index < MCP_SESSION_COUNT_LIMIT; index += 1) {
     cappedClients.push(await connectClient(mcpUrl, `openchatcut-mcp-cap-${index}`));
@@ -560,7 +383,7 @@ try {
   );
 } finally {
   await Promise.all(clients.map(closeClient));
-  resetMcpSessionsForTest();
+  await resetMcpSessionsForTest();
   resetExternalAgentBrokerForTest();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

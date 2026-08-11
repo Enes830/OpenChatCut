@@ -2,13 +2,23 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
+import { externalMcpAuthorized } from '../editor-auth.ts';
+import { mintUploadReceipt } from '../external-agent/import-token.ts';
 import {
-  externalMcpAuthorized,
+  exchangeProjectStoreLaunchToken,
+  PROJECT_STORE_LAUNCH_TOKEN_HEADER,
+  PROJECT_STORE_SESSION_HEADER,
+  projectStoreLaunchToken,
+  resetProjectStoreHttpAuthForTests,
+} from '../project-store-http-auth.ts';
+import {
   handleExternalAgentBridge,
   type BridgeOperations,
 } from './external-agent.ts';
 
 const calls: Record<keyof BridgeOperations, number> = {
+  editorRegistrationMatches: 0,
+  claimBrowserOwnership: 0,
   registerEditor: 0,
   unregisterEditor: 0,
   nextEditorCall: 0,
@@ -17,22 +27,48 @@ const calls: Record<keyof BridgeOperations, number> = {
   mcpTools: 0,
 };
 
+let staleBrowserRevision = false;
+const registrationCapability = 'r'.repeat(43);
 const operations = {
-  registerEditor: () => { calls.registerEditor += 1; },
-  unregisterEditor: () => {
+  claimBrowserOwnership: async (
+    projectId: string,
+    ownerId: string,
+    baseRevision: string,
+    _allowExistingBrowserOwner?: boolean,
+  ) => {
+    calls.claimBrowserOwnership += 1;
+    if (staleBrowserRevision) return { status: 'stale' as const, currentRevision: 'authoritative-revision' };
+    return {
+      status: 'claimed' as const,
+      claim: { projectId, ownerKind: 'browser' as const, ownerId, epoch: 1, baseRevision },
+    };
+  },
+  editorRegistrationMatches: (_projectId: string, _editorId: string, capability: unknown) => {
+    calls.editorRegistrationMatches += 1;
+    return capability === registrationCapability;
+  },
+  registerEditor: () => {
+    calls.registerEditor += 1;
+    return registrationCapability;
+  },
+  unregisterEditor: async (_projectId, _editorId, capability) => {
     calls.unregisterEditor += 1;
+    assert.equal(capability, registrationCapability);
     return true;
   },
-  nextEditorCall: async () => {
+  nextEditorCall: async (_projectId, _editorId, _revision, _signal, capability) => {
     calls.nextEditorCall += 1;
+    assert.equal(capability, registrationCapability);
     return null;
   },
-  nextEditorCancellation: async () => {
+  nextEditorCancellation: async (_projectId, _editorId, _signal, capability) => {
     calls.nextEditorCancellation += 1;
+    assert.equal(capability, registrationCapability);
     return null;
   },
-  settleEditorCall: () => {
+  settleEditorCall: (_id, _outcome, _value, capability) => {
     calls.settleEditorCall += 1;
+    assert.equal(capability, registrationCapability);
     return true;
   },
   mcpTools: () => {
@@ -42,6 +78,13 @@ const operations = {
 } satisfies BridgeOperations;
 
 const server = createServer((req, res) => {
+  if (req.url === '/api/project-store/session') {
+    const session = exchangeProjectStoreLaunchToken(req);
+    res.statusCode = session ? 200 : 403;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(session ?? { error: 'invalid launch credential' }));
+    return;
+  }
   if (req.url === '/api/external-mcp/mcp') {
     res.statusCode = externalMcpAuthorized(req) ? 204 : 401;
     res.end();
@@ -87,6 +130,8 @@ interface BridgeRequestOptions {
   origin?: string | null;
   host?: string;
   authorization?: string;
+  launchToken?: string;
+  sessionToken?: string;
 }
 
 async function requestBridge(
@@ -102,6 +147,8 @@ async function requestBridge(
   if (options.credential) {
     headers.set('X-OpenChatCut-Editor-Credential', options.credential);
   }
+  if (options.launchToken) headers.set(PROJECT_STORE_LAUNCH_TOKEN_HEADER, options.launchToken);
+  if (options.sessionToken) headers.set(PROJECT_STORE_SESSION_HEADER, options.sessionToken);
   return fetch(`${origin}/api/external-agent${path}`, { ...init, headers });
 }
 
@@ -116,12 +163,32 @@ async function bootstrap(options: BridgeRequestOptions = {}): Promise<Response> 
   }, options);
 }
 
-async function readCredential(response: Response): Promise<string> {
+interface BootstrapValue { credential: string; mcpToken: string }
+async function readBootstrap(response: Response): Promise<BootstrapValue> {
   assert.equal(response.status, 200);
   const value: unknown = await response.json();
   assert(value && typeof value === 'object' && !Array.isArray(value));
   assert('credential' in value && typeof value.credential === 'string' && value.credential);
-  return value.credential;
+  assert('mcpToken' in value && typeof value.mcpToken === 'string' && value.mcpToken);
+  return { credential: value.credential, mcpToken: value.mcpToken };
+}
+
+async function readCredential(response: Response): Promise<string> {
+  return (await readBootstrap(response)).credential;
+}
+
+async function exchangeSession(launchToken: string): Promise<string> {
+  const response = await fetch(`${origin}/api/project-store/session`, {
+    method: 'POST',
+    headers: {
+      Origin: origin,
+      [PROJECT_STORE_LAUNCH_TOKEN_HEADER]: launchToken,
+    },
+  });
+  assert.equal(response.status, 200);
+  const value = await response.json() as Record<string, unknown>;
+  assert.equal(typeof value.sessionToken, 'string');
+  return value.sessionToken as string;
 }
 
 const originalToken = process.env.OPENCHATCUT_MCP_TOKEN;
@@ -129,7 +196,9 @@ const originalEditorUrl = process.env.OPENCHATCUT_EDITOR_URL;
 try {
   process.env.OPENCHATCUT_MCP_TOKEN = 'mcp-secret';
   delete process.env.OPENCHATCUT_EDITOR_URL;
-
+  resetProjectStoreHttpAuthForTests();
+  const launchToken = projectStoreLaunchToken();
+  const sessionToken = await exchangeSession(launchToken);
   for (const [, path, init] of bridgeRequests) {
     const response = await requestBridge(path, init, {
       authorization: 'Bearer mcp-secret',
@@ -137,6 +206,8 @@ try {
     assert.equal(response.status, 401, `${path} must reject the MCP Bearer without an editor credential`);
   }
   assert.deepEqual(calls, {
+    editorRegistrationMatches: 0,
+    claimBrowserOwnership: 0,
     registerEditor: 0,
     unregisterEditor: 0,
     nextEditorCall: 0,
@@ -145,14 +216,116 @@ try {
     mcpTools: 0,
   });
 
-  const credential = await readCredential(await bootstrap());
+  assert.equal((await bootstrap()).status, 401);
+  assert.equal((await bootstrap({ launchToken })).status, 401,
+    'one-time launch credentials must not authorize editor bootstrap directly');
+  const credential = await readCredential(await bootstrap({ sessionToken }));
   assert.notEqual(credential, 'mcp-secret');
-  assert.equal(await readCredential(await bootstrap()), credential);
-  for (const [operation, path, init] of bridgeRequests) {
-    const response = await requestBridge(path, init, { credential });
+  assert.equal(await readCredential(await bootstrap({ sessionToken })), credential);
+  const mintRequest: RequestInit = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: 'sess-ticket',
+      assetId: 'asset-ticket',
+      assetType: 'video',
+      filename: 'clip.mov',
+      projectId: 'project-a',
+      method: 'POST',
+      contentType: 'video/quicktime',
+      expectedBytes: 1_024,
+    }),
+  };
+  assert.equal((await requestBridge('/import-token', mintRequest)).status, 401);
+  assert.equal((await requestBridge('/import-token', mintRequest, {
+    credential,
+    origin: 'http://evil.example',
+  })).status, 403);
+  const mintedResponse = await requestBridge('/import-token', mintRequest, { credential });
+  assert.equal(mintedResponse.status, 201);
+  const minted = await mintedResponse.json() as Record<string, unknown>;
+  assert.equal(typeof minted.uploadUrl, 'string');
+  assert.equal('token' in minted, false, 'mint response exposes the ticket only inside its intended URL');
+  assert.deepEqual(minted.allowedMethods, ['POST']);
+  const uploadReceipt = mintUploadReceipt({
+    sessionId: 'sess-receipt',
+    assetId: 'asset-receipt',
+    assetType: 'video',
+    filename: 'receipt.mov',
+    projectId: 'project-a',
+    method: 'POST',
+    contentType: 'video/quicktime',
+    expectedBytes: 4,
+  }, {
+    path: '/media/uploads/asset-receipt.mov',
+    fileKey: 'uploads/asset-receipt.mov',
+    bytes: 4,
+    contentHash: 'ab'.repeat(32),
+  });
+  const receiptRequest = (projectId: string): RequestInit => ({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ receipt: uploadReceipt, projectId }),
+  });
+  assert.equal((await requestBridge('/upload-receipt', receiptRequest('project-a'))).status, 401);
+  assert.equal((await requestBridge('/upload-receipt', receiptRequest('project-b'), { credential })).status, 409);
+  const receiptResponse = await requestBridge('/upload-receipt', receiptRequest('project-a'), { credential });
+  assert.equal(receiptResponse.status, 200);
+  const receiptValue = await receiptResponse.json() as Record<string, unknown>;
+  assert.equal(receiptValue.sessionId, 'sess-receipt');
+  assert.equal(receiptValue.contentHash, 'ab'.repeat(32));
+  assert.equal(
+    (await requestBridge('/upload-receipt', receiptRequest('project-a'), { credential })).status,
+    409,
+    'receipt must not replay',
+  );
+  const registerCount = calls.registerEditor;
+  staleBrowserRevision = true;
+  const staleRegistration = await requestBridge('/register', registerRequest, { credential });
+  staleBrowserRevision = false;
+  assert.equal(staleRegistration.status, 409);
+  assert.deepEqual(await staleRegistration.json(), {
+    error: 'project changed after the browser loaded it',
+    currentRevision: 'authoritative-revision',
+    reloadRequired: true,
+  });
+  assert.equal(calls.registerEditor, registerCount,
+    'a stale browser revision must not be installed in the broker');
+  const registrationResponse = await requestBridge('/register', registerRequest, { credential });
+  assert.equal(registrationResponse.status, 200);
+  const registrationValue = await registrationResponse.json() as Record<string, unknown>;
+  assert.equal(registrationValue.registrationCapability, registrationCapability);
+  assert.equal(calls.registerEditor, 1);
+  const wrongCapabilityHeaders = {
+    'X-OpenChatCut-Editor-Registration': 'w'.repeat(43),
+  };
+  const claimCount = calls.claimBrowserOwnership;
+  assert.equal((await requestBridge('/register', {
+    ...registerRequest,
+    headers: {
+      ...Object.fromEntries(new Headers(registerRequest.headers)),
+      ...wrongCapabilityHeaders,
+    },
+  }, { credential })).status, 409);
+  assert.equal(calls.claimBrowserOwnership, claimCount,
+    'a wrong registration capability cannot renew persisted browser ownership');
+  assert.equal((await requestBridge(
+    '/poll?projectId=project-a&editorId=editor-a&baseRevision=rev-a',
+    { headers: wrongCapabilityHeaders },
+    { credential },
+  )).status, 409);
+  assert.equal(calls.nextEditorCall, 0, 'a wrong capability cannot poll as the live editor');
+  for (const [operation, path, init] of bridgeRequests.slice(1)) {
+    const response = await requestBridge(path, {
+      ...init,
+      headers: {
+        ...Object.fromEntries(new Headers(init?.headers)),
+        'X-OpenChatCut-Editor-Registration': registrationCapability,
+      },
+    }, { credential });
     assert(
       response.status === 200 || response.status === 204,
-      `${path} must accept the bootstrapped editor credential`,
+      `${path} must accept the owning editor registration capability`,
     );
     assert.equal(calls[operation], 1);
   }
@@ -191,28 +364,33 @@ try {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
-  })).status, 415);
+  }, { sessionToken })).status, 415);
 
   process.env.OPENCHATCUT_EDITOR_URL = origin;
-  assert.equal((await bootstrap()).status, 200);
+  assert.equal((await bootstrap({ sessionToken })).status, 200);
   assert.equal((await bootstrap({
+    sessionToken,
     origin: `http://localhost:${address.port}`,
     host: `localhost:${address.port}`,
   })).status, 403);
 
   delete process.env.OPENCHATCUT_MCP_TOKEN;
   delete process.env.OPENCHATCUT_EDITOR_URL;
-  const tokenlessCredential = await readCredential(await bootstrap());
+  const tokenlessBootstrap = await readBootstrap(await bootstrap({ sessionToken }));
   const tokenlessRegister = await requestBridge('/register', registerRequest, {
-    credential: tokenlessCredential,
+    credential: tokenlessBootstrap.credential,
   });
   assert.equal(tokenlessRegister.status, 200);
-  assert.equal((await fetch(`${origin}/api/external-mcp/mcp`)).status, 204);
+  assert.equal((await fetch(`${origin}/api/external-mcp/mcp`)).status, 401);
+  assert.equal((await fetch(`${origin}/api/external-mcp/mcp`, {
+    headers: { Authorization: `Bearer ${tokenlessBootstrap.mcpToken}` },
+  })).status, 204);
 } finally {
   if (originalToken === undefined) delete process.env.OPENCHATCUT_MCP_TOKEN;
   else process.env.OPENCHATCUT_MCP_TOKEN = originalToken;
   if (originalEditorUrl === undefined) delete process.env.OPENCHATCUT_EDITOR_URL;
   else process.env.OPENCHATCUT_EDITOR_URL = originalEditorUrl;
+  resetProjectStoreHttpAuthForTests();
   server.close();
   await once(server, 'close');
 }

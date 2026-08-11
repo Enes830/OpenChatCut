@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import type { TimelineState } from '../editor/types';
+import { reduce } from '../editor/reduce';
 import { appendManualCue, newManualCaptions } from './manualCaptions';
 import { buildCues } from './captionCues';
 import { resolveCaptionSelection } from './captionSelection';
@@ -22,10 +23,11 @@ const laneId = captions.sourceEntries![0]!.id;
 captions = { ...captions, ...appendManualCue(captions, laneId, 'First', 1_000, 2_000) };
 captions = { ...captions, ...appendManualCue(captions, laneId, 'Second', 3_000, 4_000) };
 captions = { ...captions, ...appendManualCue(captions, laneId, 'Outside', 7_000, 8_000) };
+const cueIds = captions.sourceEntries![0]!.words!.map((cue) => cue.id!);
 
 const selections = [
-  { trackId: 'C1', kind: 'manual' as const, laneId, cueIndex: 0 },
-  { trackId: 'C1', kind: 'manual' as const, laneId, cueIndex: 1 },
+  { trackId: 'C1', kind: 'manual' as const, laneId, cueId: cueIds[0]! },
+  { trackId: 'C1', kind: 'manual' as const, laneId, cueId: cueIds[1]! },
 ];
 const state: TimelineState = {
   fps: 30,
@@ -114,8 +116,8 @@ const automaticCaptions = {
   template: 'plain' as const,
   pacing: 'phrase' as const,
   words: [
-    { text: 'Auto', start: 1_000, end: 1_400 },
-    { text: 'caption', start: 1_450, end: 2_000 },
+    { id: 'auto-one', text: 'Auto', start: 1_000, end: 1_400 },
+    { id: 'auto-two', text: 'caption', start: 1_450, end: 2_000 },
   ],
 };
 const automaticState: TimelineState = {
@@ -128,10 +130,11 @@ const automaticState: TimelineState = {
   tracks: { C1: { kind: 'caption', captions: automaticCaptions } },
   captions: automaticCaptions,
 };
+const automaticPageId = buildCues(automaticCaptions, [], 30)[0]!.id;
 const movedAutomatic = moveTimelineSelectionByDelta(
   automaticState,
   [],
-  [{ trackId: 'C1', kind: 'single', cueIndex: 0 }],
+  [{ trackId: 'C1', kind: 'single', pageId: automaticPageId }],
   15,
 );
 assert.deepEqual(buildCues(movedAutomatic.captions!, [], 30).map(({ start, end }) => [start, end]), [
@@ -147,14 +150,14 @@ const linkedSourceCaptions: CaptionsData = {
       id: 'manual-a',
       itemId: 'manual:a',
       trackOrder: 0,
-      words: [{ text: 'Manual A', start: 100, end: 200 }],
+      words: [{ id: 'manual-a-cue', text: 'Manual A', start: 100, end: 200 }],
     },
     { id: 'automatic-linked', itemId: 'clip-linked', trackOrder: 1 },
     {
       id: 'manual-b',
       itemId: 'manual:b',
       trackOrder: 2,
-      words: [{ text: 'Manual B', start: 2_000, end: 2_400 }],
+      words: [{ id: 'manual-b-cue', text: 'Manual B', start: 2_000, end: 2_400 }],
     },
   ],
 };
@@ -172,7 +175,8 @@ const linkedSourceState: TimelineState = {
       kind: 'video',
       name: 'Linked source',
       src: '/linked-source.mp4',
-      transcript: [{ text: 'Linked automatic', start: 0, end: 400 }],
+      transcriptGenerationId: 'linked-generation',
+      transcript: [{ id: 'linked-word', text: 'Linked automatic', start: 0, end: 400 }],
     },
   ],
   selectedId: 'clip-seed',
@@ -187,7 +191,11 @@ const linkedSourceState: TimelineState = {
     mode: 'linked',
   }],
 };
-const automaticSelection = { trackId: 'C1', kind: 'single' as const, cueIndex: 0 };
+const automaticSelection = {
+  trackId: 'C1',
+  kind: 'single' as const,
+  pageId: buildCues(linkedSourceCaptions, linkedSourceState.items, 30).find((cue) => !cue.manual)!.id,
+};
 const linkedSourceMoved = moveTimelineSelectionByDelta(
   linkedSourceState,
   ['clip-seed'],
@@ -234,10 +242,10 @@ const duplicateManualMoved = moveTimelineSelectionByDelta(
   linkedSourceState,
   [],
   [
-    { trackId: 'C1', kind: 'manual', laneId: 'manual-b', cueIndex: 0 },
-    { trackId: 'C1', kind: 'manual', laneId: 'manual-a', cueIndex: 0 },
-    { trackId: 'C1', kind: 'manual', laneId: 'manual-a', cueIndex: 0 },
-    { trackId: 'C1', kind: 'manual', laneId: 'manual-b', cueIndex: 0 },
+    { trackId: 'C1', kind: 'manual', laneId: 'manual-b', cueId: 'manual-b-cue' },
+    { trackId: 'C1', kind: 'manual', laneId: 'manual-a', cueId: 'manual-a-cue' },
+    { trackId: 'C1', kind: 'manual', laneId: 'manual-a', cueId: 'manual-a-cue' },
+    { trackId: 'C1', kind: 'manual', laneId: 'manual-b', cueId: 'manual-b-cue' },
   ],
   15,
 );
@@ -253,7 +261,7 @@ const frameBoundaryCaptions: CaptionsData = {
   enabled: true,
   template: 'plain',
   pacing: 'phrase',
-  words: [{ text: 'One frame', start: 33, end: 66 }],
+  words: [{ id: 'frame-boundary-word', text: 'One frame', start: 33, end: 66 }],
 };
 const frameBoundaryState: TimelineState = {
   fps: 30,
@@ -265,21 +273,71 @@ const frameBoundaryState: TimelineState = {
   tracks: { C1: { kind: 'caption', captions: frameBoundaryCaptions } },
   captions: frameBoundaryCaptions,
 };
+const frameBoundarySelection = {
+  trackId: 'C1',
+  kind: 'single' as const,
+  pageId: buildCues(frameBoundaryCaptions, [], 30)[0]!.id,
+};
 assert.equal(
-  clampTimelineSelectionDelta(frameBoundaryState, [], [automaticSelection], -1),
+  clampTimelineSelectionDelta(frameBoundaryState, [], [frameBoundarySelection], -1),
   -1,
   'frame-zero clamp must use the same millisecond rounding as the persisted delta',
 );
 const frameBoundaryMoved = moveTimelineSelectionByDelta(
   frameBoundaryState,
   [],
-  [automaticSelection],
+  [frameBoundarySelection],
   -1,
 );
 assert.equal(
-  resolveCaptionSelection(frameBoundaryMoved, automaticSelection)?.target.cue.start,
+  resolveCaptionSelection(frameBoundaryMoved, frameBoundarySelection)?.target.cue.start,
   0,
   'a 33ms automatic cue at 30fps must land exactly on frame zero',
+);
+
+const overlapState: TimelineState = {
+  fps: 30,
+  width: 1920,
+  height: 1080,
+  items: [
+    { id: 'left', track: 'V1', startFrame: 0, durationInFrames: 30, kind: 'video', name: 'Left', src: '/left.mp4' },
+    { id: 'right', track: 'V1', startFrame: 40, durationInFrames: 30, kind: 'video', name: 'Right', src: '/right.mp4' },
+  ],
+  selectedId: 'left',
+  selectedIds: ['left'],
+  trackOrder: ['V1'],
+  tracks: { V1: { kind: 'video' } },
+};
+const directMove = reduce(overlapState, { type: 'move', id: 'left', startFrame: 20 });
+assert.equal(
+  directMove.items.find((item) => item.id === 'left')?.startFrame,
+  10,
+  'a direct move must stop at the next same-track clip instead of overlapping it',
+);
+const selectionMove = moveTimelineSelectionByDelta(overlapState, ['left'], [], 20);
+assert.equal(
+  selectionMove.items.find((item: { id: string }) => item.id === 'left')?.startFrame,
+  10,
+  'a selection drag preview and commit must share the same non-overlap clamp',
+);
+const added = reduce(overlapState, {
+  type: 'add',
+  startFrame: 20,
+  item: { id: 'added', track: 'V1', durationInFrames: 20, kind: 'video', name: 'Added', src: '/added.mp4' },
+});
+assert.equal(
+  added.items.find((item) => item.id === 'added')?.startFrame,
+  70,
+  'adding into occupied time must use the nearest complete same-track gap',
+);
+const overlappingReplacement = {
+  ...overlapState,
+  items: overlapState.items.map((item) => item.id === 'left' ? { ...item, startFrame: 20 } : item),
+};
+assert.equal(
+  reduce(overlapState, { type: 'setFullState', state: overlappingReplacement }),
+  overlapState,
+  'atomic state replacement must reject newly introduced same-track overlap',
 );
 
 console.log('captionGroupMove.verify: unified caption selection movement OK');

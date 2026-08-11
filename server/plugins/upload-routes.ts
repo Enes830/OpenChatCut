@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ViteDevServer } from 'vite';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import {
-  constants as fsConstants, createReadStream, createWriteStream, existsSync, type Stats,
+  constants as fsConstants, createReadStream, existsSync, type Stats,
 } from 'node:fs';
 import {
   copyFile, link, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile, type FileHandle,
@@ -10,17 +10,28 @@ import {
 import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
-import { Readable, Transform } from 'node:stream';
+import { Readable } from 'node:stream';
 import {
-  configuredUploadMaxBytes, deleteUploadObject, presignGetUpload, presignPutUpload,
-  putUploadFile, r2Config, r2PresignEnabled, UploadTooLargeError,
+  deleteUploadObject, effectiveUploadMaxBytes,
+  presignGetUpload, presignPutUpload, putUploadFile, r2Config, r2PresignEnabled,
+  UploadTooLargeError,
 } from '../r2.ts';
 import {
-  DEFAULT_UPLOAD_DIR, enqueueUploadMutation, isCustomUploadDir, isSafeUploadName,
-  resolveOrHydrateUploadFile, serveDiskFile, syncLegacyUploads, uploadDir,
+  enqueueUploadMutation, isSafeUploadName, resolveOrHydrateUploadFile,
+  serveDiskFile, syncLegacyUploads, uploadDir, uploadReadDirs,
 } from '../media-dir.ts';
+import { isIsolatedDevProfile } from '../runtime-profile.ts';
 import { safePublicFetch, UnsafePublicUrlError } from '../safe-public-fetch.ts';
 import { deleteMediaPreviewDerivatives } from './media-preview.ts';
+import { streamUploadToFile } from './upload-stream.ts';
+import { sha256File } from '../../shared/node-content-hash.ts';
+import { externalUploadMediaType } from '../../src/media/uploadMediaType.ts';
+import {
+  authorizeImportUpload,
+  mintUploadReceipt,
+  type ImportTokenScope,
+} from '../external-agent/import-token.ts';
+import { editorCredentialAuthorized } from '../editor-auth.ts';
 
 const MAX_JSON_BYTES = 64 * 1024;
 const IMPORT_TIMEOUT_MS = 30 * 60_000;
@@ -39,12 +50,12 @@ const defaultUploadRouteDependencies: UploadRouteDependencies = {
 type CloudState = 'ok' | 'off' | 'failed' | 'exists';
 
 export function maxUploadBytes(): number {
-  return configuredUploadMaxBytes() ?? Number.MAX_SAFE_INTEGER;
+  return effectiveUploadMaxBytes();
 }
 
-/** Direct R2 PUT cannot enforce an application byte cap, so capped uploads stay on the proxy route. */
-export function directR2UploadAllowed(presignEnabled = r2PresignEnabled()): boolean {
-  return presignEnabled && configuredUploadMaxBytes() === null;
+/** Direct R2 PUT cannot enforce the finite application byte cap, so use the bounded proxy. */
+export function directR2UploadAllowed(_presignEnabled = r2PresignEnabled()): boolean {
+  return false;
 }
 
 function readBody(req: IncomingMessage, max = MAX_JSON_BYTES): Promise<Buffer> {
@@ -65,27 +76,6 @@ function readBody(req: IncomingMessage, max = MAX_JSON_BYTES): Promise<Buffer> {
   });
 }
 
-async function streamToFile(
-  source: Readable | NodeJS.ReadableStream,
-  destination: string,
-  maxBytes: number,
-): Promise<number> {
-  let size = 0;
-  const counter = new Transform({
-    transform(chunk: Buffer, _encoding, done) {
-      if (chunk.length > maxBytes - size) { done(new UploadTooLargeError(maxBytes)); return; }
-      size += chunk.length;
-      done(null, chunk);
-    },
-  });
-  try {
-    await pipeline(source as Readable, counter, createWriteStream(destination));
-  } catch (error) {
-    await unlink(destination).catch(() => {});
-    throw error;
-  }
-  return size;
-}
 
 function contentLengthOf(req: IncomingMessage): number | null {
   const raw = req.headers['content-length'];
@@ -135,7 +125,7 @@ function mediaName(req: IncomingMessage): string | null {
 }
 
 function diskUpload(name: string): string | undefined {
-  return [...new Set([uploadDir(), DEFAULT_UPLOAD_DIR])]
+  return uploadReadDirs()
     .map((directory) => join(directory, name))
     .find((path) => existsSync(path));
 }
@@ -175,7 +165,11 @@ function handleMediaRead(
 ): void {
   if (req.method !== 'GET' && req.method !== 'HEAD') { next(); return; }
   const name = mediaName(req);
-  if (!name) { next(); return; }
+  if (!name) {
+    if (isIsolatedDevProfile()) sendError(res, 404, 'media not found');
+    else next();
+    return;
+  }
   const local = diskUpload(name);
   if (!local) { void serveR2Media(name, req, res, logger, dependencies); return; }
   res.setHeader(MEDIA_AUTHORITY_HEADER, 'server');
@@ -189,7 +183,7 @@ function handleMediaRead(
 async function handleUploadList(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== 'GET') { sendError(res, 405, 'method not allowed — use GET'); return; }
   try {
-    const directories = isCustomUploadDir() ? [uploadDir(), DEFAULT_UPLOAD_DIR] : [DEFAULT_UPLOAD_DIR];
+    const directories = uploadReadDirs();
     const seen = new Map<string, { name: string; bytes: number; mtimeMs: number }>();
     for (const directory of directories) {
       for (const name of await readdir(directory).catch(() => [] as string[])) {
@@ -232,10 +226,12 @@ async function handleHydrate(
       return;
     }
     if (!resolved.cached) logger.info(`[upload/hydrate] ${name} (${resolved.bytes} bytes)`);
+    const contentHash = await sha256File(resolved.file);
     sendJson(res, 200, {
       ok: true,
       path: `/media/uploads/${name}`,
       bytes: resolved.bytes,
+      contentHash,
       cached: resolved.cached,
     });
   } catch (error) {
@@ -348,7 +344,7 @@ async function handleDeleteUpload(req: IncomingMessage, res: ServerResponse): Pr
       let derivativesRemoved = 0;
       let r2Removed = false;
       const failures: unknown[] = [];
-      for (const directory of new Set([uploadDir(), DEFAULT_UPLOAD_DIR])) {
+      for (const directory of uploadReadDirs()) {
         try {
           if (rollbackToken) {
             if (await deleteLocalUploadIfOwned(directory, name, rollbackToken)) removed += 1;
@@ -607,8 +603,13 @@ async function publishPartIfAbsent(
   }
 }
 
-async function handleUploadWrite(req: IncomingMessage, res: ServerResponse, logger: Logger): Promise<void> {
-  const maxBytes = maxUploadBytes();
+async function handleUploadWrite(
+  req: IncomingMessage,
+  res: ServerResponse,
+  logger: Logger,
+  handoff?: ImportTokenScope,
+): Promise<void> {
+  const maxBytes = Math.min(maxUploadBytes(), handoff?.expectedBytes ?? Number.MAX_SAFE_INTEGER);
   let partPath: string | undefined;
   let finalPath: string | undefined;
   let createdLocalIdentity: UploadFileIdentity | undefined;
@@ -627,20 +628,36 @@ async function handleUploadWrite(req: IncomingMessage, res: ServerResponse, logg
       sendError(res, 400, 'invalid rollback token');
       return;
     }
-    const extension = extname(original).toLowerCase().replace(/[^.a-z0-9]/g, '') || '.bin';
+    const extension = handoff
+      ? externalUploadMediaType(handoff.assetType, handoff.contentType)?.extension
+      : extname(original).toLowerCase().replace(/[^.a-z0-9]/g, '') || '.bin';
+    if (!extension) throw new Error('unsupported upload handoff media type');
     if (rejectDeclaredSize(req, res, maxBytes)) return;
+    const declaredBytes = contentLengthOf(req);
+    if (handoff && declaredBytes !== null && declaredBytes !== handoff.expectedBytes) {
+      req.resume();
+      sendError(res, 400, 'upload byte size does not match handoff');
+      return;
+    }
     const directory = uploadDir();
     await mkdir(directory, { recursive: true });
     const name = assetId ? `${assetId}${extension}` : `${randomUUID()}${extension}`;
     const path = `/media/uploads/${name}`;
     if (ifAbsent && diskUpload(name)) {
       req.resume();
-      sendJson(res, 200, { path, created: false, existing: true });
+      const existingContentHash = await sha256File(join(directory, name));
+      sendJson(res, 200, { path, contentHash: existingContentHash, created: false, existing: true });
       return;
     }
     partPath = join(directory, `.${name}.${randomUUID()}.part`);
     finalPath = join(directory, name);
-    const bytes = await streamToFile(req, partPath, maxBytes);
+    const { bytes, contentHash } = await streamUploadToFile(req, partPath, maxBytes);
+    if (handoff && bytes !== handoff.expectedBytes) {
+      await unlink(partPath).catch(() => {});
+      partPath = undefined;
+      sendError(res, 400, 'uploaded bytes do not match handoff');
+      return;
+    }
     if (bytes === 0) {
       await unlink(partPath).catch(() => {});
       partPath = undefined;
@@ -652,9 +669,12 @@ async function handleUploadWrite(req: IncomingMessage, res: ServerResponse, logg
         const rollbackToken = requestedRollbackToken || randomUUID();
         try {
           if (diskUpload(name)) {
+            const existingContentHash = await sha256File(finalPath!);
             await unlink(partPath!);
             partPath = undefined;
-            sendJson(res, 200, { path, created: false, existing: true });
+            sendJson(res, 200, {
+              path, contentHash: existingContentHash, created: false, existing: true,
+            });
             return;
           }
           createdServerName = name;
@@ -682,7 +702,13 @@ async function handleUploadWrite(req: IncomingMessage, res: ServerResponse, logg
               await deleteUploadObject(name, rollbackToken);
               removeCreatedR2 = false;
             }
-            sendJson(res, 200, { path, created: false, existing: true, cloud });
+            sendJson(res, 200, {
+              path,
+              contentHash: await sha256File(finalPath!),
+              created: false,
+              existing: true,
+              cloud,
+            });
             return;
           }
           createdLocalIdentity = createdIdentity;
@@ -703,13 +729,15 @@ async function handleUploadWrite(req: IncomingMessage, res: ServerResponse, logg
             }
             await unlink(partPath!);
             partPath = undefined;
-            sendJson(res, 200, { path, created: false, existing: true, cloud });
+            sendJson(res, 200, {
+              path, contentHash, created: false, existing: true, cloud,
+            });
             return;
           }
           await unlink(partPath!);
           partPath = undefined;
           sendJson(res, 200, {
-            path, bytes, fileKey: `uploads/${name}`,
+            path, bytes, contentHash, fileKey: `uploads/${name}`,
             assetId: assetId || undefined, cloud, created: true, rollbackToken,
           });
           removeCreatedLocal = false;
@@ -756,9 +784,18 @@ async function handleUploadWrite(req: IncomingMessage, res: ServerResponse, logg
       partPath = undefined;
       await clearUploadOwner(directory, name);
       const cloud = await mirrorUpload(name, finalPath!, req.headers['content-type'] || undefined, logger, 'upload→R2');
+      const fileKey = `uploads/${name}`;
+      const receipt = handoff
+        ? mintUploadReceipt(handoff, { path, fileKey, bytes, contentHash })
+        : undefined;
       sendJson(res, 200, {
-        path, bytes, fileKey: `uploads/${name}`,
-        assetId: assetId || undefined, cloud, created: true,
+        path, bytes, contentHash, fileKey,
+        sessionId: handoff?.sessionId,
+        state: handoff ? 'uploaded' : undefined,
+        assetId: assetId || undefined,
+        assetType: handoff?.assetType,
+        filename: handoff?.filename,
+        cloud, created: true, receipt,
       });
     });
   } catch (error) {
@@ -798,12 +835,39 @@ async function handleUploadWrite(req: IncomingMessage, res: ServerResponse, logg
 }
 
 async function handleUpload(req: IncomingMessage, res: ServerResponse, logger: Logger): Promise<void> {
-  if (req.method === 'DELETE') { await handleDeleteUpload(req, res); return; }
+  if (req.method === 'DELETE') {
+    if (!editorCredentialAuthorized(req, true)) {
+      req.resume();
+      sendError(res, 401, 'editor credential required');
+      return;
+    }
+    await handleDeleteUpload(req, res);
+    return;
+  }
   if (req.method !== 'POST' && req.method !== 'PUT') {
     sendError(res, 405, 'method not allowed — use POST, PUT or DELETE');
     return;
   }
-  await handleUploadWrite(req, res, logger);
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  let handoff: ImportTokenScope | undefined;
+  if (url.searchParams.has('handoff')) {
+    const authorization = authorizeImportUpload(
+      url,
+      req.method,
+      typeof req.headers['content-type'] === 'string' ? req.headers['content-type'] : undefined,
+    );
+    if (authorization.status !== 'accepted') {
+      req.resume();
+      sendError(res, 401, 'invalid or expired upload handoff');
+      return;
+    }
+    handoff = authorization.scope;
+  } else if (!editorCredentialAuthorized(req, true)) {
+    req.resume();
+    sendError(res, 401, 'editor credential required');
+    return;
+  }
+  await handleUploadWrite(req, res, logger, handoff);
 }
 
 interface RemoteImport {
@@ -862,14 +926,14 @@ async function saveRemoteImport(imported: RemoteImport, maxBytes: number, logger
   const partPath = join(directory, `.${name}.part`);
   const finalPath = join(directory, name);
   const body = Readable.fromWeb(imported.response.body as WebReadableStream);
-  const bytes = await streamToFile(body, partPath, maxBytes);
+  const { bytes, contentHash } = await streamUploadToFile(body, partPath, maxBytes);
   if (bytes === 0) {
     await unlink(partPath).catch(() => {});
     sendError(res, 400, 'upstream empty body'); return null;
   }
   await rename(partPath, finalPath);
   await mirrorUpload(name, finalPath, imported.contentType ?? undefined, logger, 'import-url→R2');
-  return { name, bytes };
+  return { name, bytes, contentHash };
 }
 
 function importedFilename(imported: RemoteImport, fallback: string): string {
@@ -891,7 +955,7 @@ async function handleImportUrl(req: IncomingMessage, res: ServerResponse, logger
     const saved = await saveRemoteImport(imported, maxBytes, logger, res);
     if (!saved) return;
     sendJson(res, 200, {
-      ok: true, path: `/media/uploads/${saved.name}`, bytes: saved.bytes,
+      ok: true, path: `/media/uploads/${saved.name}`, bytes: saved.bytes, contentHash: saved.contentHash,
       contentType: imported.contentType ?? undefined,
       filename: importedFilename(imported, saved.name), sourceUrl: imported.remote,
     });
@@ -905,6 +969,13 @@ async function handleImportUrl(req: IncomingMessage, res: ServerResponse, logger
   }
 }
 
+function requireEditorMutation(req: IncomingMessage, res: ServerResponse): boolean {
+  if (editorCredentialAuthorized(req, true)) return true;
+  req.resume();
+  sendError(res, 401, 'editor credential required');
+  return false;
+}
+
 export function registerUploadRoutes(
   server: ViteDevServer,
   dependencies: UploadRouteDependencies = defaultUploadRouteDependencies,
@@ -915,8 +986,14 @@ export function registerUploadRoutes(
     handleMediaRead(req, res, next, logger, dependencies)
   ));
   server.middlewares.use('/upload/list', handleUploadList);
-  server.middlewares.use('/upload/hydrate', (req, res) => handleHydrate(req, res, logger, dependencies));
-  server.middlewares.use('/upload/presign', handlePresign);
-  server.middlewares.use('/upload', (req, res) => handleUpload(req, res, logger));
-  server.middlewares.use('/api/import-url', (req, res) => handleImportUrl(req, res, logger));
+  server.middlewares.use('/upload/hydrate', (req, res) => {
+    if (requireEditorMutation(req, res)) void handleHydrate(req, res, logger, dependencies);
+  });
+  server.middlewares.use('/upload/presign', (req, res) => {
+    if (req.method !== 'POST' || requireEditorMutation(req, res)) void handlePresign(req, res);
+  });
+  server.middlewares.use('/upload', (req, res) => { void handleUpload(req, res, logger); });
+  server.middlewares.use('/api/import-url', (req, res) => {
+    if (requireEditorMutation(req, res)) void handleImportUrl(req, res, logger);
+  });
 }

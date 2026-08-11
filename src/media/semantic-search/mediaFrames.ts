@@ -1,10 +1,11 @@
 import type { MediaAsset } from '../../editor/types';
 import type { FramePixels } from './types';
+import {
+  readSamplingConfig,
+  type SemanticSamplingConfig,
+} from './samplingConfig';
 
 const MAX_FRAME_EDGE = 448;
-const VIDEO_SAMPLE_INTERVAL_SECONDS = 15;
-const MAX_VIDEO_SAMPLE_COUNT = 12;
-const MAX_SCENE_SAMPLE_COUNT = 96;
 const LONG_VIDEO_SECONDS = 60;
 const SHORT_SCENE_SECONDS = 4;
 const MAX_DETECTED_SCENES = 500;
@@ -73,11 +74,17 @@ async function seekVideo(video: HTMLVideoElement, time: number, signal: AbortSig
   await waitForMedia(video, 'seeked', signal);
 }
 
-function fallbackSamplePlan(duration: number): SceneSamplePlan[] {
+function fallbackSamplePlan(
+  duration: number,
+  config: SemanticSamplingConfig = readSamplingConfig(),
+): SceneSamplePlan[] {
   if (!Number.isFinite(duration) || duration <= MIN_VIDEO_DURATION_SECONDS) {
     return [{ sampleTime: 0 }];
   }
-  const count = Math.min(MAX_VIDEO_SAMPLE_COUNT, Math.max(1, Math.ceil(duration / VIDEO_SAMPLE_INTERVAL_SECONDS)));
+  const count = Math.min(
+    config.maxFallbackFrames,
+    Math.max(1, Math.ceil(duration / config.intervalSeconds)),
+  );
   const step = duration / count;
   return Array.from({ length: count }, (_, index) => {
     return {
@@ -108,12 +115,12 @@ function evenlySelect<T>(values: readonly T[], count: number): T[] {
 export function sceneAwareSamplePlan(
   duration: number,
   boundaries: readonly number[],
-  maxSamples = MAX_SCENE_SAMPLE_COUNT,
+  maxSamples: number = readSamplingConfig().maxSceneFrames,
 ): SceneSamplePlan[] {
   if (!Number.isFinite(duration) || duration <= MIN_VIDEO_DURATION_SECONDS) {
     return [{ sceneId: 'scene-0-0', sceneStart: 0, sceneEnd: Math.max(0, duration), sampleTime: 0 }];
   }
-  const cap = Math.max(1, Math.min(MAX_SCENE_SAMPLE_COUNT, Math.round(maxSamples)));
+  const cap = Math.max(1, Math.round(maxSamples));
   const cuts = [...new Set(boundaries
     .filter((time) => Number.isFinite(time) && time > 0 && time < duration)
     .map((time) => Number(time.toFixed(3))))]
@@ -146,12 +153,11 @@ export function sceneAwareSamplePlan(
   return [...selected].sort((left, right) => left.sampleTime - right.sampleTime);
 }
 
-async function scenePlanForLongVideo(
+export async function detectSceneBoundaries(
   asset: MediaAsset,
-  duration: number,
   signal: AbortSignal,
-): Promise<SceneSamplePlan[] | null> {
-  if (duration < LONG_VIDEO_SECONDS || !asset.src.startsWith('/media/uploads/')) return null;
+): Promise<number[] | null> {
+  if (!asset.src.startsWith('/media/uploads/')) return null;
   try {
     const response = await fetch('/api/detect-scenes', {
       method: 'POST',
@@ -160,17 +166,25 @@ async function scenePlanForLongVideo(
       signal,
     });
     if (!response.ok) return null;
-    const result = await response.json() as {
-      scenes?: Array<{ timeMs?: number }>;
-    };
-    const boundaries = (result.scenes ?? [])
+    const result = await response.json() as { scenes?: Array<{ timeMs?: number }> };
+    return (result.scenes ?? [])
       .map((scene) => Number(scene.timeMs) / 1000)
       .filter(Number.isFinite);
-    return sceneAwareSamplePlan(duration, boundaries);
   } catch (error) {
     if (signal.aborted) throw error;
     return null;
   }
+}
+
+async function scenePlanForLongVideo(
+  asset: MediaAsset,
+  duration: number,
+  signal: AbortSignal,
+  config: SemanticSamplingConfig,
+): Promise<SceneSamplePlan[] | null> {
+  if (duration < LONG_VIDEO_SECONDS) return null;
+  const boundaries = await detectSceneBoundaries(asset, signal);
+  return boundaries ? sceneAwareSamplePlan(duration, boundaries, config.maxSceneFrames) : null;
 }
 
 async function sampleVideo(asset: MediaAsset, signal: AbortSignal): Promise<FramePixels[]> {
@@ -181,8 +195,9 @@ async function sampleVideo(asset: MediaAsset, signal: AbortSignal): Promise<Fram
   video.src = asset.src;
   try {
     await waitForMedia(video, 'loadeddata', signal);
-    const plan = await scenePlanForLongVideo(asset, video.duration, signal)
-      ?? fallbackSamplePlan(video.duration);
+    const config = readSamplingConfig();
+    const plan = await scenePlanForLongVideo(asset, video.duration, signal, config)
+      ?? fallbackSamplePlan(video.duration, config);
     const frames: FramePixels[] = [];
     for (const sample of plan) {
       throwIfAborted(signal);

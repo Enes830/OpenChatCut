@@ -70,8 +70,9 @@ export function saveChatMode(projectId: string, mode: ChatModePref): void {
 }
 
 export function loadChatAutoApply(projectId: string): boolean {
-  // Default to YOLO mode unless the user explicitly turned it off for this
-  // project. Paid operations are still confirm-gated by the cost guard.
+  // Default to automatic Proposal application unless the user explicitly turns
+  // it off. In YOLO mode the preference also releases the paid/external
+  // runtime confirmation cards (user opted into unapproved execution).
   return readRaw(autoApplyKey(projectId)) !== '0';
 }
 

@@ -1,4 +1,5 @@
 export { EXPORT_QA_TOOL_SCHEMAS, EXPORT_QA_TOOL_NAMES } from './schemas/export-qa-tools';
+import { captionFaceQaIssues } from '../../geometry/caption-qa';
 import type { AgentContext } from '../context';
 import {
   captionLayoutQaIssues,
@@ -86,18 +87,22 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
     }
 
     const report = mergeExportQaIssues(result.report, captionLayoutQaIssues(state));
+    // Geometry-aware caption check: warns when a caption band covers the
+    // speaker's face (visual geometry cache; first use analyzes the source).
+    const faceIssues = await captionFaceQaIssues(ctx.getDoc(), state);
+    const merged = faceIssues.length ? mergeExportQaIssues(report, faceIssues) : report;
     const evidence = result.evidence;
     return {
-      ok: report.ok,
+      ok: merged.ok,
       src: resolved.src,
-      report,
+      report: merged,
       cutCount: cutTimesSeconds.length,
       evidenceSamples: evidence?.samples ?? [],
       ...(evidence?.base64 ? { __images: [{ frame: 0, base64: evidence.base64 }] } : {}),
       note: evidence?.base64
         ? 'Cut evidence is a two-column sheet: each row shows the frame immediately before and after one edit boundary.'
         : 'No adjacent edit boundaries were available for visual evidence; stream-level QA still completed.',
-      next: report.ok && report.summary.warnings === 0
+      next: merged.ok && merged.summary.warnings === 0
         ? 'Export passed automated QA.'
         : 'Inspect every issue and evidence row. Fix confirmed problems, export again, and rerun verify_export. Stop after three attempts and report any remaining issue to the user.',
     };

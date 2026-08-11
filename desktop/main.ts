@@ -22,6 +22,11 @@ import {
   createLocalMediaImportHandler,
   LOCAL_MEDIA_IMPORT_CHANNEL,
 } from './local-media-bridge.ts';
+import { installProjectStoreIpc } from './project-store-ipc.ts';
+import { installEditorAuthIpc } from './editor-auth-ipc.ts';
+import { installDesktopUpdateIpc } from './update-ipc.ts';
+import { installDesktopInferenceIpc } from './native-inference-ipc.ts';
+import { installDirectoryWatchIpc } from './directory-watch-ipc.ts';
 import {
   assertTrustedDesktopSenderUrl,
   resolveDesktopDevOrigin,
@@ -37,6 +42,7 @@ import {
   type ExportDirectoryGrantDescriptor,
 } from '../server/export-destinations.ts';
 import { resolveExportRevealTarget } from './export-reveal.ts';
+import { runDesktopSmokeProbe } from './smoke-probe.ts';
 
 // Electron main process entry. dev mode: esbuild hits desktop-dist/main.mjs,dist/ in the codebase root;
 // Packaging form: dist/, resonance-bundle, chrome-headless-shell use extraResources.
@@ -337,46 +343,6 @@ function registerDesktopHandlers(trustedOrigin: string): void {
   }));
 }
 
-async function smokeProbe(origin: string, win: BrowserWindow): Promise<void> {
-  const res = await fetch(`${origin}/api/keys`);
-  if (!res.ok) throw new Error(`/api/keys → HTTP ${res.status}`);
-  const body = (await res.json()) as Record<string, unknown>;
-  if (typeof body !== 'object' || body === null) throw new Error('/api/keys returned non-object');
-  const mcp = await fetch(`${origin}/api/external-mcp/mcp`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'desktop-smoke', version: '1' } },
-    }),
-  });
-  if (!mcp.ok || !(await mcp.text()).includes('"name":"openchatcut"')) {
-    throw new Error(`/api/external-mcp/mcp → HTTP ${mcp.status}`);
-  }
-  console.log('[smoke] external MCP endpoint ok');
-  const pickerType = await win.webContents.executeJavaScript(
-    'typeof window.openChatCutDesktop?.selectDirectory',
-  ) as unknown;
-  if (pickerType !== 'function') throw new Error('desktop directory picker preload is unavailable');
-  console.log('[smoke] desktop directory picker preload ok');
-  if (SMOKE_RENDER) {
-    const state = { fps: 30, width: 640, height: 360, items: [], selectedId: null };
-    const r = await fetch(`${origin}/render-still`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ state, frames: [0] }),
-    });
-    if (!r.ok) throw new Error(`/render-still → HTTP ${r.status}: ${await r.text()}`);
-    const rendered = (await r.json()) as { frames?: Array<{ base64?: string }> };
-    if (!rendered.frames?.[0]?.base64) throw new Error('/render-still returned no frame');
-    console.log(`[smoke] render-still ok, base64 ${rendered.frames[0].base64.length}B`);
-    // Remotion can emit late DevTools protocol callbacks after the response.
-    // Give its browser cleanup a short drain window before Electron exits.
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-}
 
 async function boot(): Promise<void> {
   await app.whenReady();
@@ -394,6 +360,15 @@ async function boot(): Promise<void> {
   });
   const origin = devOrigin ?? (await startEmbeddedServer(DIST_DIR)).origin;
   registerDesktopHandlers(origin);
+  installProjectStoreIpc(origin);
+  installEditorAuthIpc(origin);
+  installDesktopUpdateIpc(origin, { enabled: app.isPackaged && !SMOKE });
+  installDirectoryWatchIpc(origin);
+  const desktopInference = installDesktopInferenceIpc(
+    origin,
+    join(app.getPath('home'), '.openchatcut', 'asr-models'),
+  );
+  app.once('before-quit', () => desktopInference.dispose());
   console.log(`[desktop] ${devOrigin ? 'live source' : 'embedded server'} at ${origin}`);
 
   const initialBounds = resolveInitialDesktopWindowBounds(screen.getPrimaryDisplay().workArea);
@@ -425,7 +400,7 @@ async function boot(): Promise<void> {
   await win.loadURL(`${origin}/`);
 
   if (SMOKE) {
-    await smokeProbe(origin, win);
+    await runDesktopSmokeProbe(origin, win, SMOKE_RENDER);
     console.log('SMOKE-OK');
     app.exit(0);
   }

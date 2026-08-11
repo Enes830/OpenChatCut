@@ -94,6 +94,9 @@ export default {
   '云同步': 'Cloud sync',
   'Bucket 名': 'Bucket name',
   '模板 ID（可选）': 'Template ID (optional)',
+  '转写模型': 'Transcription model',
+  '转写语言': 'Transcription language',
+  '说话人分离': 'Speaker diarization',
 
   // ── routing options ──
   '每次询问（默认）': 'Ask every time (default)',
@@ -101,6 +104,27 @@ export default {
   '可灵': 'Kling',
   '{name}（未配置）': '{name} (not configured)',
   '选中未配置的厂商时，Agent 会回退为先询问。': 'If the chosen vendor is not configured, the Agent falls back to asking first.',
+  'AssemblyAI（云端）': 'AssemblyAI (cloud)',
+  'AssemblyAI（默认）': 'AssemblyAI (default)',
+  '本地模型（免费 · 离线）': 'Local model (free · offline)',
+  'OpenAI（云端）': 'OpenAI (cloud)',
+  'Mistral Voxtral（云端）': 'Mistral Voxtral (cloud)',
+  'Deepgram（云端）': 'Deepgram (cloud)',
+  'Groq（云端）': 'Groq (cloud)',
+  'ElevenLabs Scribe（云端）': 'ElevenLabs Scribe (cloud)',
+  'Cartesia（云端）': 'Cartesia (cloud)',
+  '中文（zh）': 'Chinese (zh)',
+  '英语（en）': 'English (en)',
+  '日语（ja）': 'Japanese (ja)',
+  '韩语（ko）': 'Korean (ko)',
+  '西班牙语（es）': 'Spanish (es)',
+  '法语（fr）': 'French (fr)',
+  '德语（de）': 'German (de)',
+  '启用': 'On',
+  '停用': 'Off',
+  '本地模型（whisper）': 'Local model (Whisper)',
+  '转写在本机完成：免费、离线、素材不出本机。模型按需下载（见下方列表），自动选择设备优势后端：WebGPU 不可用时回退 CPU。本地转写不含说话人分离（全部归为同一位说话人）。':
+    'Transcription runs on this machine: free, offline, and private. Download models on demand below. OpenChatCut selects the best available backend and falls back to CPU when WebGPU is unavailable. Local transcription does not support speaker diarization.',
 
   // ──Page Note/Field Note──
   'MiniMax 同一个 Key，配置一次全能力（生图 / 配音 / 视频 / 音乐）通用。': 'One MiniMax key covers every capability (image / voice / video / music) — configure once.',
@@ -237,6 +261,8 @@ export default {
   '默认 https://api-singapore.klingai.com': 'Default https://api-singapore.klingai.com',
   '默认 https://api.mureka.ai': 'Default https://api.mureka.ai',
   '默认 https://api.minimaxi.com': 'Default https://api.minimaxi.com',
+  '默认 https://api.mistral.ai/v1': 'Default https://api.mistral.ai/v1',
+  '默认 https://api.groq.com/openai/v1': 'Default https://api.groq.com/openai/v1',
 
   // ── DesignStylePanel ──
   '设计风格': 'Design Style',
@@ -346,8 +372,59 @@ export default {
   '适用场景结构无效': 'Recipe scenarios are invalid',
   '适用场景无效': 'Recipe scenario is invalid',
   '缩略图地址无效': 'Thumbnail URL is invalid',
+  '正在读取 MCP 连接令牌…': 'Loading the MCP connection token…',
+  '无法读取 MCP 连接令牌，请从受信任的编辑器窗口重试。':
+    'Could not load the MCP connection token. Retry from a trusted editor window.',
+  'MCP 端点始终要求 Bearer 令牌。令牌只在当前受信任编辑器会话中显示，不写入工程、聊天或浏览器存储；服务重启后自动生成的令牌会变化，需要重新复制配置。OPENCHATCUT_MCP_TOKEN 可覆盖自动令牌。':
+    'The MCP endpoint always requires a bearer token. The token is shown only in the current trusted editor session and is never written to the project, chat, or browser storage. An automatically generated token changes after a server restart, so copy the configuration again. OPENCHATCUT_MCP_TOKEN overrides the generated token.',
   '设置 → 连接器 → 添加自定义连接器,粘贴上面的端点地址即可。':
     'Settings → Connectors → Add custom connector, then paste the endpoint above.',
   '端点默认仅监听本机;对外暴露时请配置 OPENCHATCUT_MCP_TOKEN 鉴权。桌面端 5199 端口被占用时会回退随机端口,以启动日志与本页地址为准。':
     'The endpoint listens on localhost only by default; configure OPENCHATCUT_MCP_TOKEN before exposing it. If port 5199 is taken, the desktop app falls back to a random port — trust the startup log and the address shown here.',
+  // Local ASR model management (Settings → 转写 → 本地模型)
+  '下载中 {pct}%': 'Downloading {pct}%',
+  '下载失败': 'Download failed',
+  '已下载': 'Downloaded',
+  '未下载': 'Not downloaded',
+  '删除': 'Delete',
+  '下载': 'Download',
+  '模型按需下载到本机，不随应用打包。首次使用或下载模型时自动加速下载。':
+    'Models are downloaded to this machine on demand — they are not bundled with the app. Downloads use the accelerated pipeline automatically.',
+  '桌面原生推理加速（实验）': 'Native desktop inference acceleration (experimental)',
+  '启用后，转写、画面语义、节拍与音乐语义模型自动选择 Windows DirectML 或 macOS CoreML/原生 CPU；转写模型在编辑器打开后后台预热，其他模型首次使用时按需加载；失败时回退浏览器引擎。':
+    'When enabled, transcription, visual-semantic, rhythm, and music-semantic models automatically use Windows DirectML or macOS CoreML/native CPU. Transcription preloads after the editor opens; other models load on first use. Failures fall back to the browser engine.',
+  '无法读取模型列表：{err}': 'Cannot load the model list: {err}',
+  '默认模型': 'Default model',
+  '自动（按设备内存选择）': 'Auto (by device memory)',
+  '选中的模型需已下载；未选择时按设备内存自动挑选（内存 ≥6GB 用 Small，否则 Base）。':
+    'The selected model must be downloaded first; when unset, the device memory picks automatically (≥6GB → Small, otherwise Base).',
+  'Whisper Tiny（约 100MB · 最快）': 'Whisper Tiny (~100MB · fastest)',
+  'Whisper Base（约 80MB · 均衡）': 'Whisper Base (~80MB · balanced)',
+  'Whisper Small（约 250MB · 推荐）': 'Whisper Small (~250MB · recommended)',
+  'Whisper Medium（约 1.1GB · 精度最高）': 'Whisper Medium (~1.1GB · highest accuracy)',
+  // Downloadable music intelligence model packs
+  '本地音乐智能模型': 'Local music intelligence models',
+  '模型不会自动安装。安装后，节拍与音乐语义分析只在本机运行。':
+    'Models are never installed automatically. Once installed, beat and music-semantic analysis runs locally.',
+  '无法读取模型包列表：{err}': 'Cannot load model packs: {err}',
+  '节奏分析轻量包': 'Rhythm Lite',
+  '音乐语义轻量包': 'Music Semantics Lite',
+  '本地分析节拍、下拍、速度、拍号与节拍能量。':
+    'Analyze beats, downbeats, tempo, meter, and beat energy locally.',
+  '在本机生成音乐语义向量，用于检索与相似度匹配。':
+    'Generate music-semantic embeddings locally for search and similarity matching.',
+  '节拍定位': 'Beat tracking',
+  '下拍定位': 'Downbeat tracking',
+  'BPM 与拍号': 'BPM and meter',
+  '节拍能量': 'Beat energy',
+  '音乐语义向量': 'Music-semantic embeddings',
+  '音乐相似度': 'Music similarity',
+  '建议内存 {memory}': 'Recommended memory {memory}',
+  '安装中 {pct}%（{done}/{total} 个文件）': 'Installing {pct}% ({done}/{total} files)',
+  '已安装': 'Installed',
+  '安装中': 'Installing',
+  '安装错误': 'Install error',
+  '未安装': 'Not installed',
+  '重新安装': 'Reinstall',
+  '安装': 'Install',
 } as Record<string, string>;

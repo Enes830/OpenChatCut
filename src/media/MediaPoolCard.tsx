@@ -1,5 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { Icon, type IconName } from '../components/icons';
+import { MusicAnalysisBadge } from '../audio/intelligence/MusicAnalysisBadge';
+import type { MusicAnalysisCardState } from '../audio/intelligence/useMusicAnalysisCards';
 import type { MediaAsset, MediaFolder } from '../editor/types';
 import { useT } from '../i18n/locale';
 import { theme } from '../theme';
@@ -18,6 +20,7 @@ interface MediaAssetCardProps {
   missing: boolean;
   used: boolean;
   view: 'grid' | 'list';
+  musicAnalysis?: MusicAnalysisCardState;
   canRelink: boolean;
   onAdd: (asset: MediaAsset) => void;
   onPointerChange: (id: string | null) => void;
@@ -136,6 +139,8 @@ export const MediaAssetCard = memo(function MediaAssetCard(props: MediaAssetCard
       }}
       onDragEnd={() => props.onDragChange(null)}
       onClickCapture={(event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest('[data-music-analysis-control]')) return;
         // Plain click selects and opens the asset menu beside the card;
         // Ctrl/Shift/meta toggles extra items. Clicking the selected card
         // again deselects it. Double-click adds to the timeline.
@@ -156,6 +161,7 @@ export const MediaAssetCard = memo(function MediaAssetCard(props: MediaAssetCard
       }}
       onDoubleClick={() => { if (!missing) props.onAdd(asset); }}
       onContextMenu={(event) => {
+        if (event.target instanceof Element && event.target.closest('[data-music-analysis-control]')) return;
         event.preventDefault();
         const target = event.target instanceof Element
           ? event.target.closest<HTMLElement>('button, input, [tabindex]')
@@ -175,6 +181,7 @@ export const MediaAssetCard = memo(function MediaAssetCard(props: MediaAssetCard
     >
       <AssetThumbArea {...props} />
       <button className="cc-asset-name" title={asset.name} tabIndex={-1}>{asset.name}</button>
+      {!missing && props.musicAnalysis && <MusicAnalysisBadge asset={asset} state={props.musicAnalysis} />}
     </div>
   );
 });
@@ -264,6 +271,8 @@ interface FolderDropTargetProps {
   onDropFiles: (files: FileList, folderId?: string) => void;
   onMoveAsset: (id: string, folderId?: string) => void;
   onMoveAssets?: (ids: string[], folderId?: string) => void;
+  /** Optional ⋯ / right-click menu (child folders only). */
+  onOpenMenu?: (anchor: HTMLElement, point?: { x: number; y: number }) => void;
 }
 
 interface MediaFolderCardProps {
@@ -273,13 +282,15 @@ interface MediaFolderCardProps {
   onDropFiles: (files: FileList, folderId?: string) => void;
   onMoveAsset: (id: string, folderId?: string) => void;
   onMoveAssets?: (ids: string[], folderId?: string) => void;
+  onOpenMenu?: (folderId: string, anchor: HTMLElement, point?: { x: number; y: number }) => void;
 }
 
 /** Shared droppable folder tile (child folder or "up one level"). */
 function FolderDropTarget({
   label, ariaLabel, className, icon, targetFolderId,
-  onActivate, onFocusChange, onDropFiles, onMoveAsset, onMoveAssets,
+  onActivate, onFocusChange, onDropFiles, onMoveAsset, onMoveAssets, onOpenMenu,
 }: FolderDropTargetProps) {
+  const t = useT();
   // Use a div (not <button>): Chromium often refuses HTML5 drops onto buttons,
   // so pool assets / OS files never land in the folder (issue #42).
   return (
@@ -288,6 +299,7 @@ function FolderDropTarget({
       tabIndex={0}
       className={className ?? 'cc-folder-card'}
       aria-label={ariaLabel}
+      data-cc-media-folder-id={targetFolderId}
       onClick={onActivate}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -297,6 +309,12 @@ function FolderDropTarget({
       }}
       onFocus={() => onFocusChange(true)}
       onBlur={() => onFocusChange(false)}
+      onContextMenu={(event) => {
+        if (!onOpenMenu) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenMenu(event.currentTarget, { x: event.clientX, y: event.clientY });
+      }}
       onDragEnter={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -329,12 +347,26 @@ function FolderDropTarget({
     >
       <span className="cc-media-entry-thumb"><Icon name={icon} size={28} strokeWidth={1.4} /></span>
       <strong className="cc-media-entry-name">{label}</strong>
+      {onOpenMenu && (
+        <button
+          type="button"
+          className="cc-asset-more cc-folder-more"
+          aria-label={t('文件夹菜单')}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onOpenMenu(event.currentTarget);
+          }}
+        >
+          <Icon name="more" size={17} />
+        </button>
+      )}
     </div>
   );
 }
 
 export const MediaFolderCard = memo(function MediaFolderCard({
-  folder, onOpen, onFocusChange, onDropFiles, onMoveAsset, onMoveAssets,
+  folder, onOpen, onFocusChange, onDropFiles, onMoveAsset, onMoveAssets, onOpenMenu,
 }: MediaFolderCardProps) {
   return (
     <FolderDropTarget
@@ -347,6 +379,9 @@ export const MediaFolderCard = memo(function MediaFolderCard({
       onDropFiles={onDropFiles}
       onMoveAsset={onMoveAsset}
       onMoveAssets={onMoveAssets}
+      onOpenMenu={onOpenMenu
+        ? (anchor, point) => onOpenMenu(folder.id, anchor, point)
+        : undefined}
     />
   );
 });

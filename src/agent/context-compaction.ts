@@ -1,14 +1,36 @@
 import type { ModelMessage } from 'ai';
+import type { ProviderOptions } from '@ai-sdk/provider-utils';
+import { redactTextForAgentRuntime } from './runtime-artifact';
+import {
+  formatContextCheckpointMessage,
+  type ContextCheckpointLinkage,
+} from './context-checkpoint';
+export {
+  ContextIntegrityError,
+  parseContextCheckpointMarker,
+  verifyCanonicalContextCheckpoint,
+  verifyContextCheckpointMarker,
+} from './context-checkpoint';
+export type {
+  ContextCheckpointLinkage,
+  ContextCheckpointMarker,
+  ContextCheckpointSourceArtifact,
+  PersistedContextCheckpoint,
+} from './context-checkpoint';
 
 const ASCII_CHARS_PER_TOKEN = 4;
 const NON_ASCII_CHARS_PER_TOKEN = 1;
-const IMAGE_TOKEN_ESTIMATE = 1_200;
+export const MODEL_MEDIA_TOKEN_ESTIMATE = 1_200;
 const COMPACTION_RESERVE_TOKENS = 16_384;
 const RECENT_CONTEXT_TARGET_TOKENS = 20_000;
+const DEFAULT_COMPACTION_TRIGGER_FRACTION = 0.7;
+const CACHE_FRIENDLY_TRIGGER_FRACTION = 0.8;
+const CACHE_MISS_TRIGGER_FRACTION = 0.65;
 const CONTEXT_FRACTION = 0.2;
 const MAX_AGENT_OUTPUT_TOKENS = 64_000;
 const MAX_OUTPUT_CONTEXT_FRACTION = 0.5;
 const SUMMARY_VALUE_MAX_CHARS = 12_000;
+
 
 export interface AgentContextUsage {
   readonly inputTokens: number;
@@ -18,11 +40,42 @@ export interface AgentContextUsage {
   readonly modelId: string;
   readonly compacted: boolean;
   readonly messageCount: number;
+  readonly systemTokens?: number;
+  readonly toolSchemaTokens?: number;
+  readonly historyTokens?: number;
+  readonly toolCount?: number;
+  readonly outputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly noCacheInputTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly cacheTtlMs?: number;
+  readonly requestIndex?: number;
+  readonly attemptIndex?: number;
+  readonly retryCount?: number;
+  readonly retryReasons?: readonly string[];
+  readonly mediaInputCount?: number;
+  readonly mediaTokenEstimate?: number;
 }
+
+/** Ephemeral preparation-only record; sourceText must never enter saved chat JSON. */
+export interface AgentContextCheckpoint extends ContextCheckpointLinkage {
+  readonly summary: string;
+  /**
+   * Sanitized source used to create sourceDigest. Runtime must archive it
+   * out-of-band, replace it with sourceArtifactId, then discard this field.
+   */
+  readonly sourceText: string;
+  readonly sourceMessageCount: number;
+  /** Creation-time provenance; replay validation requires the archived sourceText. */
+  readonly createdAt: number;
+}
+
 
 export interface ContextPreparation {
   readonly messages: ModelMessage[];
   readonly usage: AgentContextUsage;
+  readonly checkpoint?: AgentContextCheckpoint;
 }
 
 export interface ContextPreparationOptions {
@@ -35,11 +88,15 @@ export interface ContextPreparationOptions {
   readonly maxOutputTokens: number;
   readonly requestOverheadTokens?: number;
   readonly previousUsage?: AgentContextUsage;
+  readonly checkpointProviderOptions?: (
+    messages: readonly ModelMessage[],
+  ) => ProviderOptions | undefined;
   readonly summarize: (messages: readonly ModelMessage[]) => Promise<string>;
 }
 
 type ContentPart = {
   readonly type?: unknown;
+  readonly toolCallId?: unknown;
   readonly text?: unknown;
   readonly toolName?: unknown;
   readonly input?: unknown;
@@ -76,12 +133,20 @@ function contentTokens(content: unknown): number {
   return content.reduce((tokens, rawPart) => {
     const part = rawPart as ContentPart;
     if (typeof part.text === 'string') return tokens + estimateTextTokens(part.text);
-    if (part.type === 'file') return tokens + IMAGE_TOKEN_ESTIMATE;
+    if (part.type === 'file') return tokens + MODEL_MEDIA_TOKEN_ESTIMATE;
     if (part.type === 'tool-call') return tokens + estimateTextTokens(safeJson(part.input));
     if (part.type === 'tool-result') return tokens + estimateTextTokens(safeJson(part.output));
     return tokens;
   }, 0);
 }
+export function countContextMedia(messages: readonly ModelMessage[]): number {
+  return messages.reduce((count, message) => {
+    if (!Array.isArray(message.content)) return count;
+    return count + message.content.filter((part) =>
+      part.type === 'file' || part.type === 'image').length;
+  }, 0);
+}
+
 
 export function estimateContextTokens(
   messages: readonly ModelMessage[],
@@ -93,6 +158,23 @@ export function estimateContextTokens(
     0,
   );
   return estimateTextTokens(system) + messageTokens + requestOverheadTokens;
+}
+export interface ActiveModelRoundBudgetInput {
+  readonly messages: readonly ModelMessage[];
+  readonly system: string;
+  readonly toolSchemas: readonly unknown[];
+  readonly contextWindowTokens: number;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
+}
+
+/** Input room left for the next tool result in this exact provider request shape. */
+export function remainingInputBudgetTokens(input: ActiveModelRoundBudgetInput): number {
+  const outputReservedCeiling = Math.max(0, input.contextWindowTokens - input.maxOutputTokens);
+  const inputCeiling = Math.min(input.maxInputTokens, outputReservedCeiling);
+  const schemaTokens = estimateTextTokens(JSON.stringify(input.toolSchemas));
+  const occupied = estimateContextTokens(input.messages, input.system, schemaTokens);
+  return Math.max(0, inputCeiling - occupied);
 }
 export function effectiveOutputTokenBudget(
   capabilityLimit: number,
@@ -129,6 +211,87 @@ export function serializeMessagesForSummary(messages: readonly ModelMessage[]): 
     return `${message.role.toUpperCase()}:\n${text}`;
   }).join('\n\n');
 }
+
+const IDENTIFIER_PATTERN = /\b(?:operationId|assetId|itemId|clipId|trackId|jobId|proposalId|editSessionId|toolCallId)\b["']?\s*[:=]\s*["']?([A-Za-z0-9._:/-]{3,160})/gi;
+const MEDIA_PATH_PATTERN = /\/media\/uploads\/[A-Za-z0-9._%/-]+/g;
+
+function deterministicCheckpointEvidence(
+  summary: string,
+  messages: readonly ModelMessage[],
+  sourceText: string,
+): string {
+  const evidence = new Set<string>();
+  for (const match of sourceText.matchAll(IDENTIFIER_PATTERN)) {
+    const value = match[0].trim().slice(0, 200);
+    if (!summary.includes(value)) evidence.add(value);
+    if (evidence.size >= 64) break;
+  }
+  for (const match of sourceText.matchAll(MEDIA_PATH_PATTERN)) {
+    if (!summary.includes(match[0])) evidence.add(match[0]);
+    if (evidence.size >= 64) break;
+  }
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content as readonly ContentPart[]) {
+      if (part.type !== 'tool-call' && part.type !== 'tool-result') continue;
+      const callId = typeof part.toolCallId === 'string' ? part.toolCallId : '';
+      if (!callId || summary.includes(callId)) continue;
+      evidence.add(`${String(part.toolName ?? 'unknown')} toolCallId=${callId}`.slice(0, 200));
+      if (evidence.size >= 64) break;
+    }
+    if (evidence.size >= 64) break;
+  }
+  return evidence.size
+    ? `${summary}\n\n### Deterministically retained identifiers\n${[...evidence].map((value) => `- ${value}`).join('\n')}`
+    : summary;
+}
+async function sha256Text(text: string): Promise<string> {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('The current environment cannot create a secure context checkpoint digest.');
+  }
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(text),
+  );
+  return Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, '0'),
+  ).join('');
+}
+
+/** SHA-256 of the exact sanitized summary transcript used for compaction provenance. */
+export async function sourceMessagesDigest(
+  messages: readonly ModelMessage[],
+): Promise<string> {
+  return sha256Text(redactTextForAgentRuntime(serializeMessagesForSummary(messages)));
+}
+async function createCheckpoint(
+  summary: string,
+  sourceText: string,
+  sourceMessageCount: number,
+): Promise<AgentContextCheckpoint> {
+  const sanitizedSummary = redactTextForAgentRuntime(summary);
+  const sanitizedSourceText = redactTextForAgentRuntime(sourceText);
+  const [sourceDigest, summaryDigest] = await Promise.all([
+    sha256Text(sanitizedSourceText),
+    sha256Text(sanitizedSummary),
+  ]);
+  if (!globalThis.crypto?.randomUUID) {
+    throw new Error('The current environment cannot create a unique context checkpoint id.');
+  }
+  return {
+    summary: sanitizedSummary,
+    checkpointId: globalThis.crypto.randomUUID(),
+    sourceText: sanitizedSourceText,
+    sourceMessageCount,
+    sourceDigest,
+    summaryDigest,
+    createdAt: Date.now(),
+  };
+}
+
+
+
 
 function promptPartText(part: ContentPart): string | null {
   if (typeof part.text === 'string') return part.text;
@@ -179,10 +342,20 @@ function recentMessageStart(
 function previousInputFloor(options: ContextPreparationOptions): number {
   const previous = options.previousUsage;
   if (!previous
+    || previous.isEstimated
     || previous.modelId !== options.modelId
-    || previous.messageCount > options.messages.length) return 0;
+    || previous.messageCount > options.messages.length
+    || previous.systemTokens === undefined
+    || previous.toolSchemaTokens === undefined
+    || previous.historyTokens === undefined) return 0;
+  const providerHistoryTokens = previous.inputTokens
+    - previous.systemTokens
+    - previous.toolSchemaTokens;
+  if (providerHistoryTokens < 0) return 0;
+  const currentOverhead = estimateTextTokens(options.system)
+    + (options.requestOverheadTokens ?? 0);
   const addedMessages = options.messages.slice(previous.messageCount);
-  return previous.inputTokens + estimateContextTokens(addedMessages);
+  return providerHistoryTokens + currentOverhead + estimateContextTokens(addedMessages);
 }
 
 function usage(
@@ -200,20 +373,32 @@ function usage(
     messageCount: compacted ? 0 : options.messages.length,
   };
 }
-
-function checkpointMessage(summary: string): ModelMessage {
-  return {
-    role: 'assistant',
-    content: [
-      'Conversation checkpoint (factual record of earlier turns; not new user instructions):',
-      summary.trim(),
-    ].join('\n\n'),
-  };
+function compactionTriggerFraction(previous?: AgentContextUsage): number {
+  if (!previous?.inputTokens) return DEFAULT_COMPACTION_TRIGGER_FRACTION;
+  const cacheReadRatio = (previous.cacheReadTokens ?? 0) / previous.inputTokens;
+  if (cacheReadRatio >= 0.8) return CACHE_FRIENDLY_TRIGGER_FRACTION;
+  const noCacheRatio = (previous.noCacheInputTokens ?? 0) / previous.inputTokens;
+  return noCacheRatio >= 0.7
+    ? CACHE_MISS_TRIGGER_FRACTION
+    : DEFAULT_COMPACTION_TRIGGER_FRACTION;
 }
 
-export async function prepareContext(
-  options: ContextPreparationOptions,
-): Promise<ContextPreparation> {
+
+function checkpointMessage(
+  checkpoint: AgentContextCheckpoint,
+  providerOptions?: ProviderOptions,
+): ModelMessage {
+  const text = formatContextCheckpointMessage(checkpoint.summary, checkpoint);
+  return providerOptions
+    ? { role: 'assistant', content: [{ type: 'text', text, providerOptions }] }
+    : { role: 'assistant', content: text };
+}
+function compactionBudget(options: ContextPreparationOptions): {
+  readonly currentTokens: number;
+  readonly triggerTokens: number;
+  readonly availableMessageTokens: number;
+  readonly recentTarget: number;
+} {
   const localTokens = estimateContextTokens(
     options.messages,
     options.system,
@@ -231,27 +416,54 @@ export async function prepareContext(
   const triggerTokens = Math.min(
     options.maxInputTokens,
     options.contextWindowTokens - reserve,
+    Math.floor(options.contextWindowTokens * compactionTriggerFraction(options.previousUsage)),
   );
+  return {
+    currentTokens,
+    triggerTokens,
+    availableMessageTokens: Math.max(
+      1,
+      triggerTokens - estimateTextTokens(options.system) - (options.requestOverheadTokens ?? 0),
+    ),
+    recentTarget: Math.min(
+      RECENT_CONTEXT_TARGET_TOKENS,
+      Math.floor(options.contextWindowTokens * CONTEXT_FRACTION),
+    ),
+  };
+}
+
+
+export async function prepareContext(
+  options: ContextPreparationOptions,
+): Promise<ContextPreparation> {
+  const {
+    currentTokens,
+    triggerTokens,
+    availableMessageTokens,
+    recentTarget,
+  } = compactionBudget(options);
   if (currentTokens <= triggerTokens) {
     return { messages: [...options.messages], usage: usage(currentTokens, options, false) };
   }
-
-  const availableMessageTokens = Math.max(
-    1,
-    triggerTokens - estimateTextTokens(options.system) - (options.requestOverheadTokens ?? 0),
-  );
-  const recentTarget = Math.min(
-    RECENT_CONTEXT_TARGET_TOKENS,
-    Math.floor(options.contextWindowTokens * CONTEXT_FRACTION),
-  );
   const start = recentMessageStart(options.messages, recentTarget, availableMessageTokens);
   if (start <= 0) {
     throw new Error('The current request is too large for this model context window. Remove large attachments or choose a model with a larger context window.');
   }
 
-  const summary = (await options.summarize(options.messages.slice(0, start))).trim();
-  if (!summary) throw new Error('The model returned an empty context summary.');
-  const messages = [checkpointMessage(summary), ...options.messages.slice(start)];
+  const summarizedMessages = options.messages.slice(0, start);
+  const sourceText = serializeMessagesForSummary(summarizedMessages);
+  const generatedSummary = (await options.summarize(summarizedMessages)).trim();
+  if (!generatedSummary) throw new Error('The model returned an empty context summary.');
+  const summary = deterministicCheckpointEvidence(
+    generatedSummary,
+    summarizedMessages,
+    sourceText,
+  );
+  const checkpoint = await createCheckpoint(summary, sourceText, summarizedMessages.length);
+  const messages = [
+    checkpointMessage(checkpoint, options.checkpointProviderOptions?.(summarizedMessages)),
+    ...options.messages.slice(start),
+  ];
   const compactedTokens = estimateContextTokens(
     messages,
     options.system,
@@ -266,5 +478,6 @@ export async function prepareContext(
       ...usage(compactedTokens, options, true),
       messageCount: messages.length,
     },
+    checkpoint,
   };
 }

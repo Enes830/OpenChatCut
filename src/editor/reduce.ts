@@ -11,6 +11,9 @@ import { reconcileTransitions } from './transitionReconcile';
 import { planSlip } from './slip';
 import { sequenceGraphError, sequenceReferencesTo } from './sequenceGraph';
 import { createMediaSourceRevision, revisionAfterRelink, sourceRevisionOf, withMediaSourceRevision } from './mediaSourceRevision';
+import { setBackgroundFillState } from './backgroundFill';
+import { normalizeSha256Hash } from '../../shared/content-hash.js';
+import { canonicalizeMediaAsset } from './mediaContentIdentity.js';
 import {
   mapTimelineAssetItems,
   removeAssetFromTimeline,
@@ -24,10 +27,12 @@ import {
   retimeItemWithGroups,
   unlinkItems,
 } from './linkGroups';
+import { clampMoveDeltaToTrackGaps, introducesTrackOverlap } from './trackCollision';
 import type { CaptionsData } from '../captions/types';
 import type { SerializableFxDef } from '../gl/fx/uniforms';
 import type { TranscriptWord, TranscriptVariant } from '../transcript/types';
 import { hasOperationalTranscript } from '../transcript/types';
+import { newTranscriptGeneration } from '../transcript/identity';
 import { editedFrames, fillerIndices, itemEditOpts, splitClipTranscript } from '../transcript/edit';
 
 const TRACK_KIND_ORDER: readonly TrackKind[] = ['caption', 'video', 'audio'];
@@ -63,6 +68,7 @@ export type Action =
   | { type: 'setFade'; id: string; fadeInFrames?: number; fadeOutFrames?: number }
   | { type: 'setTransform'; id: string; patch: ClipTransform }
   | { type: 'setFilters'; id: string; patch: ClipFilters }
+  | { type: 'setBackgroundFill'; id: string; enabled: boolean; strength?: number }
   | { type: 'setZoom'; id: string; patch: Partial<ZoomEffect> | null }
   | { type: 'setEffects'; id: string; effects: ClipEffect[]; defs?: SerializableFxDef[] }
   | { type: 'setSpeed'; id: string; rate: number }
@@ -142,6 +148,7 @@ export type ProjectAction =
   | { type: 'pool.updateAsset'; id: string; patch: Partial<Pick<MediaAsset, 'name' | 'favorite' | 'code' | 'props' | 'sourceTimecode' | 'captureClock'>> }
   | { type: 'pool.setTranscription'; id: string; patch: Partial<Pick<MediaAsset, 'transcript' | 'transcriptSourceRevision' | 'transcriptStale' | 'transcribeStatus' | 'transcribeError'>> }
   | ({ type: 'pool.relinkAsset'; id: string } & MediaAssetRelinkPatch)
+  | { type: 'pool.canonicalizeAsset'; duplicateId: string; canonicalId: string }
   | { type: 'pool.removeAsset'; id: string }
   | { type: 'design.set'; style: DesignStyle | null }
   | { type: 'design.patch'; patch: Partial<DesignStyle> };
@@ -179,7 +186,7 @@ export type ProjectDispatch = (a: AnyAction | HistoryControlAction) => void;
 const MUTATING = new Set(['add', 'updateProps', 'relinkTimelineItem', 'move', 'retime', 'slip', 'setVolume', 'setFade', 'setTransform', 'setFilters', 'setZoom', 'setEffects', 'setSpeed', 'replaceMedia', 'reframeKeyframe', 'removeReframeKeyframe', 'setKeyframe', 'removeKeyframe', 'clearKeyframes', 'addTransition', 'setTransition', 'removeTransition', 'addMarker', 'updateMarker', 'removeMarker', 'duplicate', 'remove', 'split', 'clear', 'addAsset', 'setCanvas', 'toggleTrack', 'track.create', 'track.update', 'track.delete', 'track.tighten', 'setCaptions', 'updateCaptions', 'setCaptionsHidden', 'updateWatermark', 'setItemTranscript', 'setItemVariants', 'toggleWord', 'deleteWords', 'cleanScript', 'setGapCap', 'setTranscriptPlayOrder', 'reorderTrackItems', 'clearEdits', 'fixTranscriptWord', 'renameSpeaker', 'setItemDenoise', 'setFullState',
   // project-level (tl.switch is navigation → deliberately NOT here, so it makes no history step)
   'tl.create', 'tl.duplicate', 'tl.delete', 'tl.rename', 'tl.retarget', 'tl.setHidden', 'tl.setDoc',
-  'pool.createFolder', 'pool.renameFolder', 'pool.deleteFolder', 'pool.moveAssets', 'pool.updateAsset', 'pool.setTranscription', 'pool.relinkAsset', 'pool.removeAsset']);
+  'pool.createFolder', 'pool.renameFolder', 'pool.deleteFolder', 'pool.moveAssets', 'pool.updateAsset', 'pool.setTranscription', 'pool.relinkAsset', 'pool.canonicalizeAsset', 'pool.removeAsset', 'setBackgroundFill'])
 
 const EMPTY_CURVE = { version: 1, timebase: 'effect-frame', coordinateSpace: 'composition-normalized', keyframes: [] } as const;
 
@@ -205,8 +212,9 @@ function editedDuration(it: TimelineItem, deleted: Set<number>, fps: number): nu
 }
 
 /**
- * Starting from `fromFrame`, the subsequent segment ids of the same track are connected end to end, and stop when encountering the first gap. Overlap counts as connected
- * (The same track allows overlapping placement), the end of the chain takes the largest right edge of the swept clip. exported for verify.
+ * Starting from `fromFrame`, collect the following same-track connected chain
+ * until the first gap. Legacy overlapping clips still count as connected so
+ * ripple edits can safely repair old project data.
  */
 export function contiguousFollowers(
   items: readonly TimelineItem[],
@@ -431,9 +439,19 @@ export function applyOverwriteLaneAction(
   }
 }
 
+const OVERLAP_GUARDED_ACTIONS: ReadonlySet<Action['type']> = new Set([
+  'add', 'relinkTimelineItem', 'move', 'retime', 'setSpeed', 'remove',
+  'track.tighten', 'toggleWord', 'deleteWords', 'cleanScript', 'setGapCap',
+  'setTranscriptPlayOrder', 'reorderTrackItems', 'clearEdits', 'setFullState',
+]);
+
+
 export function reduce(s: TimelineState, a: Action): TimelineState {
-  // Any changes may be changed to durationInFrames, which will be self-healed at the exit, eliminating the need to add guards to each case.
-  const next = fitTimelineItems(applyAction(s, a));
+  // Duration-derived values are self-healed before collision and transition checks.
+  const applied = fitTimelineItems(applyAction(s, a));
+  const next = OVERLAP_GUARDED_ACTIONS.has(a.type) && introducesTrackOverlap(s, applied)
+    ? s
+    : applied;
   if (!TRANSITION_RECONCILING_ACTIONS.has(a.type) || !next.transitions?.length) return next;
   return { ...next, transitions: reconcileTransitions(next.items, next.transitions) };
 }
@@ -442,21 +460,32 @@ function applyAction(s: TimelineState, a: Action): TimelineState {
   switch (a.type) {
     case 'add': {
       if (s.tracks?.[a.item.track]?.locked) return s;
-      // compute placement from CURRENT state (correct for sequential adds)
-      const startFrame = a.startFrame ?? trackEnd(s, a.item.track);
-      const item: TimelineItem = { ...a.item, startFrame };
-      // Ripple insert: push same-track clips at/after the
-      // insertion point right by the new clip's duration to make room (no overwrite).
-      let base = s.items;
+      if (s.items.some((item) => item.id === a.item.id)) return s;
+      const requestedStart = a.startFrame ?? trackEnd(s, a.item.track);
+      let baseState = s;
       if (a.ripple) {
         const shifts = new Map(s.items
-          .filter((it) => it.track === item.track && it.startFrame >= startFrame)
-          .map((it) => [it.id, item.durationInFrames]));
+          .filter((item) => item.track === a.item.track && item.startFrame >= requestedStart)
+          .map((item) => [item.id, a.item.durationInFrames]));
         const shifted = applyRippleShifts(s, shifts);
         if (!shifted) return s;
-        base = shifted.items;
+        baseState = shifted;
       }
-      return { ...s, items: [...base, item], selectedId: item.id, selectedIds: [item.id] };
+      const requested: TimelineItem = { ...a.item, startFrame: requestedStart };
+      const delta = clampMoveDeltaToTrackGaps(
+        baseState,
+        [requested],
+        new Set([requested.id]),
+        0,
+      );
+      if (delta === null) return s;
+      const item = { ...requested, startFrame: requested.startFrame + delta };
+      return {
+        ...baseState,
+        items: [...baseState.items, item],
+        selectedId: item.id,
+        selectedIds: [item.id],
+      };
     }
     case 'updateProps':
       if (lockedItem(s, a.id)) return s;
@@ -486,6 +515,9 @@ function applyAction(s: TimelineState, a: Action): TimelineState {
         height: a.height ?? target.height,
         kind: a.kind ?? target.kind,
         sourceRevision: 'sourceRevision' in a ? a.sourceRevision : target.sourceRevision,
+        sourceContentHash: 'sourceContentHash' in a
+          ? normalizeSha256Hash(a.sourceContentHash)
+          : target.sourceContentHash,
         sourceSize: 'sourceSize' in a ? a.sourceSize : sourceIndependent.sourceSize,
         sourceModifiedAt: 'sourceModifiedAt' in a ? a.sourceModifiedAt : sourceIndependent.sourceModifiedAt,
         sourceFilename: 'sourceFilename' in a ? a.sourceFilename : target.sourceFilename,
@@ -575,6 +607,9 @@ function applyAction(s: TimelineState, a: Action): TimelineState {
         ...s,
         items: s.items.map((it) => (it.id === a.id ? { ...it, filters: { ...it.filters, ...a.patch } } : it)),
       };
+    case 'setBackgroundFill':
+      if (lockedItem(s, a.id)) return s;
+      return setBackgroundFillState(s, a.id, a.enabled, a.strength);
     case 'setZoom':
       if (lockedItem(s, a.id)) return s;
       return {
@@ -889,21 +924,14 @@ function applyAction(s: TimelineState, a: Action): TimelineState {
       return { ...s, watermark: { ...next, opacity: Math.max(0, Math.min(1, next.opacity)) } };
     }
     case 'setItemTranscript':
-      // Attach words only — keep media duration. Rewriting duration to ASR span
-      // collapsed long VO clips when AssemblyAI returned a short word range
-      // (looked like "only one incomplete segment"). Duration shrinks only via
-      // deleteWords / cleanScript (delete-text = delete-video).
       return {
         ...s,
         items: s.items.map((it) =>
           it.id === a.id
             ? {
                 ...it,
-                transcript: a.words,
+                ...newTranscriptGeneration(a.words),
                 transcriptStale: false,
-                // A retained stale transcript used a different source revision (and,
-                // while stale, media-frame coordinates). Its old trim cannot be
-                // reinterpreted as an offset into the new packed word stream.
                 srcInFrame: it.transcriptStale === true ? 0 : it.srcInFrame,
                 deletedWordIdx: [],
                 silenceFrames: undefined,
@@ -1268,6 +1296,7 @@ export function projectReduce(p: ProjectDoc, a: AnyAction): ProjectDoc {
         const patch = 'transcript' in a.patch
           ? {
               ...a.patch,
+              ...newTranscriptGeneration(a.patch.transcript ?? []),
               transcriptSourceRevision: a.patch.transcriptSourceRevision ?? sourceRevisionOf(asset),
               transcriptStale: false,
             }
@@ -1287,6 +1316,9 @@ export function projectReduce(p: ProjectDoc, a: AnyAction): ProjectDoc {
           height: a.height ?? asset.height,
           kind: a.kind ?? asset.kind,
           sourceRevision: a.sourceRevision,
+          sourceContentHash: 'sourceContentHash' in a
+            ? normalizeSha256Hash(a.sourceContentHash)
+            : asset.sourceContentHash,
           sourceSize: a.sourceSize,
           sourceModifiedAt: a.sourceModifiedAt,
           sourceFilename: 'sourceFilename' in a ? a.sourceFilename : asset.sourceFilename,
@@ -1295,10 +1327,12 @@ export function projectReduce(p: ProjectDoc, a: AnyAction): ProjectDoc {
           sourceTimecode: undefined,
           captureClock: undefined,
         };
+        const nextSourceRevision = revisionAfterRelink(asset, replacement);
+        const sourceChanged = nextSourceRevision !== sourceRevisionOf(asset);
         const nextAsset: MediaAsset = {
           ...replacement,
-          sourceRevision: revisionAfterRelink(asset, replacement),
-          transcriptStale: asset.transcript?.length ? true : asset.transcriptStale,
+          sourceRevision: nextSourceRevision,
+          transcriptStale: sourceChanged && asset.transcript?.length ? true : asset.transcriptStale,
         };
         type RelinkableTimelineItem = TimelineItem & {
           sourceTimecode?: MediaAsset['sourceTimecode'];
@@ -1321,13 +1355,14 @@ export function projectReduce(p: ProjectDoc, a: AnyAction): ProjectDoc {
             sourceAssetId: asset.id,
             src: a.src,
             sourceRevision: nextAsset.sourceRevision,
+            sourceContentHash: nextAsset.sourceContentHash,
             sourceFilename: 'sourceFilename' in a ? a.sourceFilename : item.sourceFilename,
             originalFilePath: 'originalFilePath' in a ? a.originalFilePath : item.originalFilePath,
             name: a.name ?? item.name,
             width: a.width ?? item.width,
             height: a.height ?? item.height,
             durationInFrames: a.durationInFrames ?? item.durationInFrames,
-            transcriptStale: item.transcript?.length ? true : item.transcriptStale,
+            transcriptStale: sourceChanged && item.transcript?.length ? true : item.transcriptStale,
           };
         };
         return {
@@ -1341,6 +1376,8 @@ export function projectReduce(p: ProjectDoc, a: AnyAction): ProjectDoc {
           )),
         };
       }
+      case 'pool.canonicalizeAsset':
+        return canonicalizeMediaAsset(p, a.duplicateId, a.canonicalId);
       case 'pool.removeAsset': {
         const asset = p.assets.find((item) => item.id === a.id);
         if (!asset) return p;

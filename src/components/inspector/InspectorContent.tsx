@@ -1,13 +1,14 @@
 import { useEffect, useId, type KeyboardEvent } from 'react';
 import type { PropSpec } from '../../types';
 import type { TimelineItem } from '../../editor/types';
+import { backgroundFillStrengthOf } from '../../editor/backgroundFill';
 import { KEYFRAME_PROPS, getKeyframePropertyDefinition } from '../../editor/keyframeRegistry';
 import { inspectorMixedValue } from '../../editor/inspectorBatch';
 import { useT } from '../../i18n/locale';
 import { PropSchemaField } from './PropSchemaField';
 import { TransformControl, VolumeControl } from './InspectorKeyframeControls';
 import { FadeControl, IsolateVoiceControl, SpeedControl, TextControl, TransitionControl, ZoomControl } from './InspectorMediaControls';
-import { EffectsControl, FilterControl, SectionLabel } from './InspectorVisualControls';
+import { BackgroundFillControl, EffectsControl, FilterControl, SectionLabel } from './InspectorVisualControls';
 import type { InspectorPanelProps } from './InspectorTypes';
 import { InspectorSlipControl } from './InspectorSlipControl';
 import { groupInspectorPropSchema } from './inspectorPropSchemaLayout';
@@ -168,6 +169,19 @@ function VideoTab({ panel, item }: InspectorContentProps) {
   const effectsMixed = isMixed(panel, (entry) => entry.effects ?? []);
   return (
     <>
+      {panel.backgroundFillAvailable && panel.onItemBackgroundFillChange && (
+        <>
+          <SectionLabel>{t('画布')}</SectionLabel>
+          <BackgroundFillControl
+            enabled={item.backgroundFill === true}
+            mixed={isMixed(panel, (entry) => entry.backgroundFill === true)}
+            strength={backgroundFillStrengthOf(item)}
+            strengthMixed={isMixed(panel, (entry) => backgroundFillStrengthOf(entry))}
+            onChange={panel.onItemBackgroundFillChange}
+            onApplyToAll={panel.onApplyBackgroundFillToAll}
+          />
+        </>
+      )}
       <SectionLabel onReset={() => panel.onItemFiltersChange({ brightness: 1, contrast: 1, saturate: 1, blur: 0 })} resetDisabled={resetDisabled && !isMixed(panel, (entry) => entry.filters)}>{t('滤镜')}</SectionLabel>
       <FilterControl item={item} mixed={{
         brightness: isMixed(panel, (entry) => entry.filters?.brightness ?? 1),

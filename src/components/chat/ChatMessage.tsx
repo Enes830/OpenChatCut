@@ -39,7 +39,7 @@ function ThinkingBlock({ text }: { text: string }) {
         {t('思考过程')}
       </button>
       {open && (
-        <Markdown text={text} style={{ marginTop: 4, maxHeight: 180, overflowY: 'auto', padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontStyle: 'italic', fontSize: 11.5, lineHeight: 1.55, color: theme.textDim, whiteSpace: 'pre-wrap', background: theme.panelAlt, border: `0.5px solid ${theme.border}`, borderRadius: 4 }} />
+        <Markdown text={text} style={{ marginTop: 4, maxHeight: 180, overflowY: 'auto', padding: '6px 8px', fontFamily: 'Geist Mono, ui-monospace, SFMono-Regular, Menlo, monospace', fontStyle: 'italic', fontSize: 11.5, lineHeight: 1.55, color: theme.textDim, whiteSpace: 'pre-wrap', background: theme.panelAlt, border: `0.5px solid ${theme.border}`, borderRadius: 4 }} />
       )}
     </div>
   );
@@ -84,7 +84,7 @@ export function ChatMessage({ msg, streaming, onWidgetSubmit, onContinue }: Chat
         {/* Tool name + summary + error in a wrappable block: minWidth:0 to allow it to shrink within the flex parent,
 overflowWrap:anywhere breaks long tokens - long errors/summaries are wrapped in the panel, no longer cut off when a single line overflows.*/}
         <span style={{ minWidth: 0, overflowWrap: 'anywhere', lineHeight: 1.45 }}>
-          <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', letterSpacing: 0.2 }}>{tool.name}</span>
+          <span style={{ fontFamily: 'Geist Mono, ui-monospace, SFMono-Regular, Menlo, monospace', letterSpacing: 0.2 }}>{tool.name}</span>
           {summary && <span style={{ opacity: 0.8 }}> · {summary}</span>}
           {!ok && <span style={{ color: theme.danger }}>：{String(r!.error)}</span>}
         </span>
@@ -117,6 +117,7 @@ overflowWrap:anywhere breaks long tokens - long errors/summaries are wrapped in 
   // The <widget> form block may be embedded in the assistant text and needs to be separated into paragraphs to render separately.
   // The plain text segment uses lightweight Markdown (**bold** / `code` / list / code block), and no longer spits out ** to the user as it is
   const segments = parseWidgets(msg.text);
+  if (!segments.length && !msg.thinking?.trim()) return null;
   return (
     <div style={{ margin: '16px 0' }}>
       {!!msg.thinking?.trim() && <ThinkingBlock text={msg.thinking} />}
@@ -134,7 +135,7 @@ overflowWrap:anywhere breaks long tokens - long errors/summaries are wrapped in 
           seg.text ? <Markdown key={i} text={seg.text} /> : null
         ),
       )}
-      {!streaming && msg.text.trim() && (
+      {!streaming && segments.some((segment) => segment.type === 'text' && !!segment.text.trim()) && (
         <div style={{ marginTop: 6, marginLeft: -5 }}>
           <button title={copied ? t('已复制') : t('复制文本')} onClick={copy}
             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 5, borderRadius: 6, lineHeight: 0, color: copied ? theme.text : theme.textDim, display: 'grid', placeItems: 'center' }}

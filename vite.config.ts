@@ -1,17 +1,28 @@
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, searchForWorkspaceRoot } from 'vite';
 import react from '@vitejs/plugin-react';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { serverPlugins } from './server/plugins/index.ts';
 import { seedKeystore, getKey } from './server/keystore.ts';
 import { productAssetsPlugin } from './server/product-assets.ts';
+import { projectStoreLaunchToken } from './server/project-store-http-auth.ts';
+import { runtimeProfile } from './server/runtime-profile.ts';
 
 const appPackage = JSON.parse(readFileSync('package.json', 'utf8')) as { version?: unknown };
 if (typeof appPackage.version !== 'string') throw new Error('package.json is missing a valid version');
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  // load ALL env (incl. non-VITE_ prefixed) from .env.local — server-side only
-  const env = loadEnv(mode, process.cwd(), '');
+  const profile = runtimeProfile();
+  // The first isolated start may bootstrap from checkout env. Once profile settings
+  // exist, only the wrapper-merged process env is authoritative for that profile.
+  const env = profile.mode === 'isolated-dev' && existsSync(profile.keystorePath)
+    ? Object.fromEntries(
+      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    )
+    : loadEnv(mode, process.cwd(), '');
+  if (profile.mode === 'isolated-dev') {
+    process.stdout.write(`[OpenChatCut] isolated profile ${profile.id} · ${profile.rootDir}\n`);
+  }
   // Seed the runtime keystore so the settings UI (POST /api/keys) can override any key
   // live. Server plugins (assembled in server/plugins/index.ts, shared with the
   // Electron embedded server) read the keystore through GETTERS, so a saved value
@@ -63,6 +74,12 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5199,
       strictPort: true,
+      fs: {
+        // Worktrees may symlink node_modules to the primary checkout. Keep
+        // imported runtime assets (for example ONNX Runtime WASM) readable.
+        allow: [searchForWorkspaceRoot(process.cwd()), realpathSync('node_modules')],
+      },
+      open: `/#openchatcut-editor-token=${projectStoreLaunchToken()}`,
       proxy: {
         // AssemblyAI transcription — key injected server-side (never in browser).
         '/assemblyai': {

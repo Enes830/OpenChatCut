@@ -1,4 +1,8 @@
 import { kvDel, kvGet, kvSet } from './sharedKv';
+import {
+  isTranscriptionProviderId,
+  type TranscriptionProviderId,
+} from '../transcript/types';
 
 export type TranscriptionProviderStatus =
   | 'preparing'
@@ -20,11 +24,12 @@ export interface TranscriptionCheckpoint {
   projectId: string;
   assetId: string;
   sourceRevision: string;
-  provider: 'assemblyai';
+  provider: TranscriptionProviderId;
   providerJobId?: string;
   providerStatus: TranscriptionProviderStatus;
   uploadUrl?: string;
   languageCode: string;
+  diarize?: boolean;
   retry: TranscriptionRetryMetadata;
   createdAt: number;
   updatedAt: number;
@@ -61,7 +66,7 @@ function parseCheckpoint(value: unknown, expected: TranscriptionCheckpointKey): 
   if (item.projectId !== expected.projectId
     || item.assetId !== expected.assetId
     || item.sourceRevision !== expected.sourceRevision
-    || item.provider !== 'assemblyai'
+    || !isTranscriptionProviderId(item.provider)
     || !statuses.has(item.providerStatus as TranscriptionProviderStatus)
     || typeof item.languageCode !== 'string'
     || !item.retry
@@ -69,6 +74,7 @@ function parseCheckpoint(value: unknown, expected: TranscriptionCheckpointKey): 
     || !Number.isFinite(item.retry.lastAttemptAt)
     || !Number.isFinite(item.createdAt)
     || !Number.isFinite(item.updatedAt)) return null;
+  if (item.diarize !== undefined && typeof item.diarize !== 'boolean') return null;
   if (item.providerJobId !== undefined && typeof item.providerJobId !== 'string') return null;
   if (item.uploadUrl !== undefined && typeof item.uploadUrl !== 'string') return null;
   return item as TranscriptionCheckpoint;

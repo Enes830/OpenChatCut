@@ -12,9 +12,11 @@ import {
   type TimelineLinkGroup,
   type TimelineState,
 } from '../../editor/types.js';
+import { isBackgroundFillStrength } from '../../editor/backgroundFill.js';
 import { isSourceClockMetadata } from '../../editor/timecode.js';
 import { withMediaSourceRevision } from '../../editor/mediaSourceRevision.js';
-import { safeSourceFilename } from '../../media/sourceFilename.js';
+import { normalizeSha256Hash } from '../../../shared/content-hash.js';
+import { safeSourceFilename, stripInvalidXml10Characters } from '../../media/sourceFilename.js';
 
 export type LooseProjectShape = {
   version?: unknown;
@@ -36,25 +38,92 @@ const ITEM_KINDS: Record<TimelineItem['kind'], true> = {
   solid: true,
   sequence: true,
 };
+const LEGACY_BACKGROUND_FILL_PRESETS = ['soft', 'medium', 'strong', 'maximum'] as const;
+
+function isLegacyBackgroundFillPreset(value: unknown): boolean {
+  return typeof value === 'string'
+    && LEGACY_BACKGROUND_FILL_PRESETS.includes(value as typeof LEGACY_BACKGROUND_FILL_PRESETS[number]);
+}
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const optionalFinite = (value: unknown): boolean => value === undefined || finite(value);
-function normalizeSourceFilename<T extends { readonly sourceFilename?: string }>(value: T): T {
-  if (!Object.hasOwn(value, 'sourceFilename')) return value;
-  const sourceFilename: unknown = Reflect.get(value, 'sourceFilename');
-  const safeFilename = safeSourceFilename(sourceFilename);
-  if (safeFilename === sourceFilename) return value;
-  const { sourceFilename: _sourceFilename, ...rest } = value;
-  return (safeFilename === undefined ? rest : { ...rest, sourceFilename: safeFilename }) as T;
+const nonNegativeFinite = (value: unknown): value is number => finite(value) && value >= 0;
+
+type PersistedSourceMetadata = {
+  sourceFilename?: unknown;
+  originalFilePath?: unknown;
+  sourceRevision?: unknown;
+  sourceContentHash?: unknown;
+  sourceSize?: unknown;
+  sourceModifiedAt?: unknown;
+};
+
+function safeMetadataString(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value || value.trim() !== value) return undefined;
+  return stripInvalidXml10Characters(value) === value ? value : undefined;
+}
+
+function safeOriginalFilePath(value: unknown): string | undefined {
+  const path = safeMetadataString(value);
+  if (!path) return undefined;
+  return path.startsWith('/')
+    || /^[A-Za-z]:[\\/]/.test(path)
+    || /^(?:\\\\|\/\/)[^\\/]/.test(path)
+    ? path
+    : undefined;
+}
+
+function normalizeSourceMetadata<T extends object>(value: T): T {
+  const raw = value as T & PersistedSourceMetadata;
+  const sourceFilename = safeSourceFilename(raw.sourceFilename);
+  const originalFilePath = safeOriginalFilePath(raw.originalFilePath);
+  const sourceRevision = safeMetadataString(raw.sourceRevision);
+  const sourceContentHash = normalizeSha256Hash(raw.sourceContentHash);
+  const sourceSize = nonNegativeFinite(raw.sourceSize) ? raw.sourceSize : undefined;
+  const sourceModifiedAt = nonNegativeFinite(raw.sourceModifiedAt) ? raw.sourceModifiedAt : undefined;
+  const {
+    sourceFilename: _sourceFilename,
+    originalFilePath: _originalFilePath,
+    sourceRevision: _sourceRevision,
+    sourceContentHash: _sourceContentHash,
+    sourceSize: _sourceSize,
+    sourceModifiedAt: _sourceModifiedAt,
+    ...rest
+  } = raw;
+  return {
+    ...rest,
+    ...(sourceFilename === undefined ? {} : { sourceFilename }),
+    ...(originalFilePath === undefined ? {} : { originalFilePath }),
+    ...(sourceRevision === undefined ? {} : { sourceRevision }),
+    ...(sourceContentHash === undefined ? {} : { sourceContentHash }),
+    ...(sourceSize === undefined ? {} : { sourceSize }),
+    ...(sourceModifiedAt === undefined ? {} : { sourceModifiedAt }),
+  } as T;
+}
+
+function isMediaAssetKind(kind: TimelineItem['kind']): kind is MediaAsset['kind'] {
+  return kind !== 'text' && kind !== 'solid' && kind !== 'sequence';
+}
+
+function normalizeTimelineMediaItem(item: TimelineItem): TimelineItem {
+  const normalized = normalizeSourceMetadata(item);
+  if (!normalized.src
+    || !normalized.sourceContentHash
+    || !isMediaAssetKind(normalized.kind)) return normalized;
+  return withMediaSourceRevision({
+    ...normalized,
+    kind: normalized.kind,
+    src: normalized.src,
+  });
 }
 
 function normalizeTimelineSourceFilenames(timeline: Timeline): Timeline {
-  const items = timeline.items.map(normalizeSourceFilename);
+  const items = timeline.items.map(normalizeTimelineMediaItem);
   const multicamGroups = timeline.multicamGroups?.map((group) => ({
     ...group,
     angles: group.angles.map((angle) => ({
       ...angle,
-      source: normalizeSourceFilename(angle.source),
+      source: normalizeTimelineMediaItem(angle.source),
     })),
   }));
   return {
@@ -68,6 +137,7 @@ function normalizeTimelineSourceFilenames(timeline: Timeline): Timeline {
 export function isTimelineItem(value: unknown): value is TimelineItem {
   if (!value || typeof value !== 'object') return false;
   const item = value as Partial<TimelineItem>;
+  const legacyPreset = 'backgroundFillPreset' in value ? value.backgroundFillPreset : undefined;
   return typeof item.id === 'string' && !!item.id
     && typeof item.track === 'string' && !!item.track
     && typeof item.name === 'string'
@@ -77,6 +147,9 @@ export function isTimelineItem(value: unknown): value is TimelineItem {
     && optionalFinite(item.srcInFrame) && (item.srcInFrame === undefined || item.srcInFrame >= 0)
     && optionalFinite(item.playbackRate) && (item.playbackRate === undefined || item.playbackRate > 0)
     && optionalFinite(item.volume) && (item.volume === undefined || (item.volume >= 0 && item.volume <= 2))
+    && (item.backgroundFill === undefined || typeof item.backgroundFill === 'boolean')
+    && (item.backgroundFillStrength === undefined || isBackgroundFillStrength(item.backgroundFillStrength))
+    && (legacyPreset === undefined || isLegacyBackgroundFillPreset(legacyPreset))
     && (item.sourceAssetId === undefined || typeof item.sourceAssetId === 'string')
     && (item.kind !== 'sequence' || (typeof item.timelineId === 'string' && item.timelineId.length > 0));
 }
@@ -129,7 +202,8 @@ export function dedupeAssets(values: readonly unknown[]): MediaAsset[] {
   const unique = new Map<string, MediaAsset>();
   for (const value of values) {
     if (isMediaAsset(value) && !unique.has(value.id)) {
-      unique.set(value.id, withMediaSourceRevision(normalizeSourceFilename(normalizeAssetClocks(value))));
+      const normalized = normalizeAssetClocks(normalizeSourceMetadata(value));
+      unique.set(value.id, withMediaSourceRevision(normalized));
     }
   }
   return [...unique.values()];

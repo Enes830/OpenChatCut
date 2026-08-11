@@ -79,6 +79,8 @@ export interface TranscribeOptions {
    * Pass `auto` to use AssemblyAI language_detection instead.
    */
   languageCode?: string | 'auto';
+  /** Enable provider speaker diarization. Defaults to the existing enabled behavior. */
+  diarize?: boolean;
   /**
    * Pre-extracted small ASR track path (from race-ahead extract-audio).
    * When set, skip another extract-audio call.
@@ -107,7 +109,7 @@ export type AssemblyAiCheckpointWriter = (
 async function createTranscript(audioUrl: string, opts: TranscribeOptions = {}): Promise<string> {
   const body: Record<string, unknown> = {
     audio_url: audioUrl,
-    speaker_labels: true,
+    speaker_labels: opts.diarize ?? true,
     // Word-level timestamps (default true for universal model; be explicit)
     punctuate: true,
     format_text: true,
@@ -246,8 +248,9 @@ async function shouldExtractForAsr(path: string): Promise<boolean> {
  * Transcribe a same-origin media path. Videos (and large audio) first extract a
  * small ASR track server-side; then only that small blob is sent to AssemblyAI.
  * Pass opts.asrPath when extract already raced ahead of normalize/finalize.
+ * Shared with the local ASR provider — do not break its callers.
  */
-async function transcriptionSourceForPath(path: string, opts: TranscribeOptions): Promise<string> {
+export async function transcriptionSourceForPath(path: string, opts: TranscribeOptions): Promise<string> {
   if (opts.asrPath && opts.asrPath.startsWith('/media/')) return opts.asrPath;
   if (await shouldExtractForAsr(path)) {
     const extracted = await extractAudioForAsr(path);

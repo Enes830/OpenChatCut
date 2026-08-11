@@ -6,6 +6,7 @@ import type { AudioAsset } from '../audio/library';
 import type { CaptionsData } from '../captions/types';
 import type { SerializableFxDef } from '../gl/fx/uniforms';
 import type { TranscriptWord, TranscriptVariant } from '../transcript/types';
+import { copyTranscriptIdentity } from '../transcript/identity';
 import type { AnyAction, AtomicAction, ProjectDispatch } from './reduce';
 import { historyReduce, isHistoryControlAction, maxOrder, projectReduce } from './reduce';
 import { resolveTimelineRenderPlan, sequenceReferenceError, type SequenceGraphErrorDetails } from './sequenceGraph';
@@ -32,7 +33,7 @@ export interface EditorCommands {
   addMotionGraphic: (tpl: Tpl, at?: { track?: TrackId; startFrame?: number; ripple?: boolean; overwrite?: boolean }) => void;
   addAudio: (asset: AudioAsset, at?: { track?: TrackId; startFrame?: number; ripple?: boolean; overwrite?: boolean }) => void;
   addAsset: (asset: MediaAsset) => void;
-  addMediaItem: (asset: MediaAsset, at?: { track?: TrackId; startFrame?: number; ripple?: boolean; overwrite?: boolean }) => string;
+  addMediaItem: (asset: MediaAsset, at?: { track?: TrackId; startFrame?: number; srcInFrame?: number; ripple?: boolean; overwrite?: boolean }) => string;
   /** Add an instance of another timeline without copying its contents. */
   addSequence: (timelineId: string, at?: {
     track?: TrackId;
@@ -56,6 +57,7 @@ export interface EditorCommands {
   removeMediaAsset: (id: string) => void;
   /** Remove selected assets and all linked timeline references as one undoable action. */
   removeMediaAssets: (ids: string[]) => void;
+  canonicalizeMediaAsset: (duplicateId: string, canonicalId: string) => void;
   /**
    * Relink missing or offline media.
    * Updates the pool asset and every timeline clip that still points at the old src.
@@ -93,6 +95,7 @@ export interface EditorCommands {
   setItemFade: (id: string, fade: { fadeInFrames?: number; fadeOutFrames?: number }) => void;
   setItemTransform: (id: string, patch: ClipTransform) => void;
   setItemFilters: (id: string, patch: ClipFilters) => void;
+  setItemBackgroundFill: (id: string, enabled: boolean, strength?: number) => void;
   setItemZoom: (id: string, patch: Partial<ZoomEffect> | null) => void;
   /** Replace a clip's per-clip WebGL effect stack. */
   setItemEffects: (id: string, effects: ClipEffect[], defs?: SerializableFxDef[]) => void;
@@ -321,6 +324,11 @@ function buildCommands(dispatch: ProjectDispatch, getDoc: () => ProjectDoc): Edi
         actions: ids.map((id) => ({ type: 'pool.removeAsset', id })),
         label: 'Delete media',
       }),
+      canonicalizeMediaAsset: (duplicateId, canonicalId) => dispatch({
+        type: 'pool.canonicalizeAsset',
+        duplicateId,
+        canonicalId,
+      }),
       relinkMediaAsset: (id, next) => dispatch({ type: 'pool.relinkAsset', id, ...next }),
       relinkTimelineItem: (id, next) => dispatch({ type: 'relinkTimelineItem', id, ...next }),
       addSolidItem: (at) => {
@@ -409,6 +417,7 @@ function buildCommands(dispatch: ProjectDispatch, getDoc: () => ProjectDoc): Edi
               sourceAssetId: asset.id,
               name: asset.name,
               sourceRevision: sourceRevisionOf(asset),
+              sourceContentHash: asset.sourceContentHash,
               code: asset.code,
               props: { ...asset.props },
               width: asset.width,
@@ -425,13 +434,16 @@ function buildCommands(dispatch: ProjectDispatch, getDoc: () => ProjectDoc): Edi
               sourceFilename: asset.sourceFilename,
               originalFilePath: asset.originalFilePath,
               sourceRevision: sourceRevisionOf(asset),
+              sourceContentHash: asset.sourceContentHash,
+              srcInFrame: typeof at?.srcInFrame === 'number'
+                ? Math.max(0, Math.round(at.srcInFrame))
+                : undefined,
               volume: asset.kind === 'audio' || asset.kind === 'video' ? 1 : undefined,
               width: asset.width,
               height: asset.height,
               // A clip inherits a copy of the asset's ingest transcript,
               // so per-clip word edits never mutate the asset master.
-              transcript: asset.transcript?.length ? [...asset.transcript] : undefined,
-              transcriptStale: asset.transcript?.length ? asset.transcriptStale : undefined,
+              ...copyTranscriptIdentity(asset),
             };
         placeItem(item, at);
         return item.id;
@@ -494,6 +506,7 @@ function buildCommands(dispatch: ProjectDispatch, getDoc: () => ProjectDoc): Edi
       setItemFade: (id, fade) => dispatch({ type: 'setFade', id, ...fade }),
       setItemTransform: (id, patch) => dispatch({ type: 'setTransform', id, patch }),
       setItemFilters: (id, patch) => dispatch({ type: 'setFilters', id, patch }),
+      setItemBackgroundFill: (id, enabled, strength) => dispatch({ type: 'setBackgroundFill', id, enabled, strength }),
       setItemZoom: (id, patch) => dispatch({ type: 'setZoom', id, patch }),
       setItemEffects: (id, effects, defs) => dispatch({ type: 'setEffects', id, effects, defs }),
       setItemSpeed: (id, rate) => dispatch({ type: 'setSpeed', id, rate }),

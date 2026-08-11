@@ -85,22 +85,30 @@ export function BlankMediaMenuPortal(props: BlankMediaMenuActionsProps & { posit
   );
 }
 
-export function AssetMenuPortal(props: AssetMenuPortalProps) {
-  const { asset, onClose, position } = props;
-  const menuRef = useRef<HTMLDivElement>(null);
-  const t = useT();
+function usePopoverDismiss(
+  active: boolean,
+  onClose: () => void,
+  menuRef: RefObject<HTMLDivElement | null>,
+) {
   useEffect(() => {
-    if (!asset || !position) return;
+    if (!active) return;
     menuRef.current?.querySelector<HTMLElement>('button:not(:disabled), select')?.focus();
-  }, [asset, position]);
+  }, [active, menuRef]);
   useEffect(() => {
-    if (!asset || !position) return;
+    if (!active) return;
     const closeOutside = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) onClose();
     };
     document.addEventListener('pointerdown', closeOutside, true);
     return () => document.removeEventListener('pointerdown', closeOutside, true);
-  }, [asset, onClose, position]);
+  }, [active, menuRef, onClose]);
+}
+
+export function AssetMenuPortal(props: AssetMenuPortalProps) {
+  const { asset, onClose, position } = props;
+  const menuRef = useRef<HTMLDivElement>(null);
+  const t = useT();
+  usePopoverDismiss(!!asset && !!position, onClose, menuRef);
   if (!props.asset || !props.position) return null;
   return createPortal(
       <div
@@ -116,6 +124,51 @@ export function AssetMenuPortal(props: AssetMenuPortalProps) {
       >
         <AssetMenuActions {...props} asset={props.asset} />
       </div>,
+    document.body,
+  );
+}
+
+interface FolderMenuPortalProps {
+  folder?: MediaFolder;
+  position: CSSProperties | null;
+  /** Empty folders only — delete is disabled when the folder still has children. */
+  canDelete: boolean;
+  onClose: () => void;
+  onOpen: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}
+
+export function FolderMenuPortal(props: FolderMenuPortalProps) {
+  const { folder, onClose, position } = props;
+  const menuRef = useRef<HTMLDivElement>(null);
+  const t = useT();
+  usePopoverDismiss(!!folder && !!position, onClose, menuRef);
+  if (!folder || !position) return null;
+  return createPortal(
+    <div
+      ref={menuRef}
+      className="cc-media-popover cc-asset-menu-portal"
+      style={position}
+      role="menu"
+      aria-label={t('管理文件夹 {name}', { name: folder.name })}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) onClose();
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button type="button" onClick={props.onOpen}>{t('打开')}</button>
+      <button type="button" onClick={props.onRename}>{t('重命名')}</button>
+      <button
+        type="button"
+        className="danger"
+        disabled={!props.canDelete}
+        title={props.canDelete ? undefined : t('只能删除空文件夹，请先移出或删除其中的内容')}
+        onClick={props.onDelete}
+      >
+        {t('删除')}
+      </button>
+    </div>,
     document.body,
   );
 }
@@ -184,7 +237,16 @@ export function RelinkAllDialog(props: RelinkAllDialogProps) {
       <div className="cc-modal" style={{ width: 'min(420px, 92vw)', maxHeight: '70vh', overflow: 'auto' }} onClick={(event) => event.stopPropagation()}>
         <strong>{t('重新链接离线素材')}</strong>
         <p style={{ margin: '8px 0 12px', fontSize: 12, color: theme.textMuted, lineHeight: 1.45 }}>{t('工程中的文件已移动或重命名。选一个文件夹按文件名批量重链，或从下方逐个重新链接。')}</p>
-        <input ref={props.inputRef} type="file" multiple hidden onChange={(event) => props.onPickFolder(event.target.files)} />
+        <input
+          ref={(node) => {
+            props.inputRef.current = node;
+            // React does not understand webkitdirectory; without it the button
+            // opens a plain file picker and folder relink can never work.
+            node?.setAttribute('webkitdirectory', '');
+            node?.setAttribute('directory', '');
+          }}
+          type="file" multiple hidden onChange={(event) => props.onPickFolder(event.target.files)}
+        />
         <button type="button" className="primary" disabled={props.busy} onClick={() => props.inputRef.current?.click()} style={{ width: '100%', marginBottom: 10 }}>
           {props.busy ? t('正在按文件名匹配…') : t('选择文件夹批量重链（按文件名匹配）')}
         </button>

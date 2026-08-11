@@ -5,12 +5,12 @@
 // never auto-applied — there is no billing integration and no way to undo a
 // paid API call once made).
 //
-// High-cost tools ALWAYS confirm before execution. The guard is not
-// configurable: generation, export, transcription, web scraping, and sandbox
-// calls are paid surfaces, so even in auto/YOLO mode they require a
-// confirmation card (which may be remembered per scope).
+// High-cost tools ALWAYS confirm in Ask mode. YOLO/auto mode skips the card
+// entirely: the user explicitly opted into unapproved paid execution
+// (generation, export, transcription, web scraping, sandbox). The per-scope
+// "remember" authorization (cc.skillGuardAllow.v1) still applies to Ask mode.
 
-import { isHighCostTool } from '../settings/agentSettings';
+import { isHighCostTool, transcriptionIsPaid } from '../settings/agentSettings';
 import type { Proposal } from '../proposal';
 
 /** User-determined guard card. allow-scope = remember authorization (scope is determined by category, see rememberCostAllowed). */
@@ -49,19 +49,17 @@ export function rememberCostAllowed(category: string, projectId: string): void {
   } catch { /* quota: This session is still effective outside the memory judgment and is ignored */ }
 }
 
-/** True when auto-apply should be blocked so the proposal card can confirm.
- * High-cost tools are never auto-applied — this is not configurable. */
-/** Proposal auto-apply gate. Ask mode always shows the card; YOLO mode is the
- * user's explicit full-automation choice for this project, so paid operations
- * apply without a card too (the execution-time guard releases them the same
- * way — see useAgent's yoloAutoApply). External MCP sessions keep their own
- * confirmation gate regardless. */
+/** Proposal auto-apply gate. This controls only whether reversible editor
+ * actions wait on a Proposal card. Paid/external side effects are independently
+ * confirmed before execution unless the user previously remembered permission
+ * for that cost category; auto-apply never releases that runtime guard. */
 export function shouldBlockAutoApply(_proposal: Proposal, autoApply: boolean): boolean {
   return !autoApply;
 }
 
 export function highCostOps(proposal: Proposal): string[] {
   return proposal.options[0].operations
-    .filter((op) => isHighCostTool(op.tool))
+    .filter((op) => isHighCostTool(op.tool)
+      && !(op.tool === 'transcribe_track' && !transcriptionIsPaid()))
     .map((op) => op.tool);
 }

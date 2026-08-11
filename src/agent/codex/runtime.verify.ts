@@ -42,6 +42,26 @@ const rejectedMutation = await executeOpenChatCutTool(
 assert.equal(rejectedMutation.success, false);
 assert.match(JSON.stringify(rejectedMutation.result), /no item missing/);
 
+const followupSchema = TOOL_SCHEMAS.find((schema) => schema.name === 'ask_followup_questions');
+assert.ok(followupSchema);
+const settlementOrder: string[] = [];
+const settledFollowup = await executeOpenChatCutTool(
+  followupSchema,
+  { fields: [{ id: 'style', label: 'Which style?', type: 'text' }] },
+  {
+    ctx: context,
+    onEvent: (event) => {
+      if (event.type === 'tool') settlementOrder.push(`tool:${event.name}`);
+    },
+    settings: DEFAULT_AGENT_SETTINGS,
+    resolveGuard: async () => null,
+    onFollowup: () => settlementOrder.push('followup'),
+  },
+);
+assert.equal(settledFollowup.success, true);
+assert.deepEqual(settlementOrder, ['followup', 'tool:ask_followup_questions'],
+  'the real tool boundary exposes the follow-up before emitting its tool event');
+
 const followupFailures = new ToolFailureTracker();
 followupFailures.record('edit_item', {
   success: false,
@@ -58,6 +78,10 @@ globalThis.fetch = (async (input, init) => {
           type: 'context-usage',
           inputTokens: 30_000,
           contextWindowTokens: 400_000,
+        })}\n`));
+        controller.enqueue(encoder.encode(`${JSON.stringify({
+          type: 'text-delta',
+          delta: 'I need one choice before editing.',
         })}\n`));
         controller.enqueue(encoder.encode(`${JSON.stringify({
           type: 'tool-start',
@@ -116,10 +140,10 @@ try {
         description: 'Ask for missing input',
         inputSchema: { type: 'object', properties: {} },
       }],
-      executeTool: async () => {
-        const followupText = 'Which editing style should I use?';
-        events.push({ type: 'text-start' });
-        events.push({ type: 'text-delta', delta: followupText });
+      executeTool: async (_name, _args, _toolCallId, _signal, _harness, onFollowup) => {
+        const followupText = '<widget><form-text id="style" label="Which editing style?"/></widget>';
+        onFollowup?.(followupText);
+        events.push({ type: 'tool', name: 'ask_followup_questions', args: {}, result: { __followup: followupText } });
         followups += 1;
         return { success: true, result: { __followup: followupText }, followupText };
       },
@@ -139,20 +163,40 @@ try {
     requestId: submittedResults[0].requestId,
     callId: 'followup-call',
     success: true,
-    result: { __followup: 'Which editing style should I use?' },
+    result: { __followup: '<widget><form-text id="style" label="Which editing style?"/></widget>' },
   });
   assert.equal(result.at(-1)?.role, 'assistant');
-  assert.equal(result.at(-1)?.content, 'Which editing style should I use?');
+  assert.deepEqual(result.at(-1)?.content, [{
+    type: 'text',
+    text: 'I need one choice before editing.\n\n<widget><form-text id="style" label="Which editing style?"/></widget>',
+    providerOptions: {
+      openchatcut: { activatedTools: ['ask_followup_questions'] },
+    },
+  }]);
+  assert.ok(JSON.stringify(result).includes('__followup'),
+    'follow-up pause preserves the submitted tool result in history');
   assert.equal(events.some((event) => event.type === 'error'), false);
   assert.equal(events.filter((event) => event.type === 'tool-input-start').length, 1);
+  const visibleOrder = events.flatMap((event) => event.type === 'text-delta'
+    ? [`text:${event.delta}`]
+    : event.type === 'tool' ? [`tool:${event.name}`] : []);
+  assert.deepEqual(visibleOrder, [
+    'text:I need one choice before editing.',
+    'tool:ask_followup_questions',
+    'text:<widget><form-text id="style" label="Which editing style?"/></widget>',
+  ], 'Codex renders the explanation, then the tool call, then the interaction card');
   assert.equal(followupFailures.hasUnresolved, true, 'follow-up must preserve earlier tool failures');
 } finally {
   globalThis.fetch = originalFetch;
 }
 
-globalThis.fetch = (async (input) => {
+globalThis.fetch = (async (input, init) => {
   const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   if (path !== '/api/codex/turn') throw new Error(`Unexpected fetch: ${path}`);
+  const submitted = JSON.parse(String(init?.body)) as { askOnly?: boolean; tools?: Array<{ name?: string }> };
+  assert.equal(submitted.askOnly, true);
+  assert.deepEqual(submitted.tools?.map((tool) => tool.name), ['load_skill'],
+    'Q&A Codex turns retain the read-only tools selected by the shared runtime');
   const payload = [
     { type: 'text-delta', delta: 'The edit was completed successfully.' },
     { type: 'done' },
@@ -174,7 +218,11 @@ try {
       contextWindowEstimated: false,
       maxOutputTokens: 64_000,
       toolFailures: followupFailures,
-      tools: [],
+      tools: [{
+        name: 'load_skill',
+        description: 'Load the selected skill.',
+        inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+      }],
       executeTool: async () => ({ success: true, result: null }),
     },
   );
@@ -224,6 +272,10 @@ globalThis.fetch = (async (input, init) => {
       type: 'context-usage',
       inputTokens: 1_000,
       contextWindowTokens: 1_000_000,
+      outputTokens: 120,
+      reasoningTokens: 40,
+      cacheReadTokens: 700,
+      noCacheInputTokens: 300,
     })}\n${JSON.stringify({ type: 'done' })}\n`));
     normalController.close();
     return new Response(null, { status: 200 });
@@ -232,6 +284,8 @@ globalThis.fetch = (async (input, init) => {
 }) as typeof fetch;
 const normalEvents: AgentEvent[] = [];
 const normalFailures = new ToolFailureTracker();
+const persistedCodexUsages: Extract<AgentEvent, { type: 'context-usage' }>['usage'][] = [];
+let persistedCodexTools: readonly { readonly name: string }[] = [];
 normalFailures.record('read_project', { success: false, result: { error: 'stale read' } });
 
 try {
@@ -247,6 +301,11 @@ try {
       maxOutputTokens: 64_000,
       toolFailures: normalFailures,
       tools: [{ name: 'read_project', inputSchema: { type: 'object' } }],
+      onContextUsage: async (usage, tools) => {
+        await Promise.resolve();
+        persistedCodexUsages.push(usage);
+        persistedCodexTools = tools;
+      },
       executeTool: async () => ({ success: true, result: { duration: 42 } }),
     },
   );
@@ -257,6 +316,16 @@ try {
   const usageEvent = normalEvents.find((event) => event.type === 'context-usage');
   assert.equal(usageEvent?.type === 'context-usage' ? usageEvent.usage.contextWindowTokens : 0, 64_000,
     'Codex provider usage cannot replace an explicit context override');
+  assert.equal(persistedCodexUsages.length, 1,
+    'Codex completion persists exactly one observed usage sample');
+  const [persistedCodexUsage] = persistedCodexUsages;
+  assert.ok(persistedCodexUsage, 'the persisted Codex usage sample must be available for inspection');
+  assert.equal(persistedCodexUsage.outputTokens, 120);
+  assert.equal(persistedCodexUsage.reasoningTokens, 40);
+  assert.equal(persistedCodexUsage.cacheReadTokens, 700);
+  assert.equal(persistedCodexUsage.noCacheInputTokens, 300);
+  assert.deepEqual(persistedCodexTools.map((tool) => tool.name), ['read_project'],
+    'Codex usage persistence receives the exact tool schema shape before completion');
 } finally {
   globalThis.fetch = originalFetch;
 }

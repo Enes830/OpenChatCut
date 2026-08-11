@@ -1,20 +1,19 @@
-// Generic (non-library) item ops for edit_item — the unified entry for
-// video/image/audio/gif/svg/motion-graphic/text/solid updates + deletes. Kept in its own
-// PURE module (imports only editor types) so it's unit-testable without pulling the GL
-// `.frag` chain that edit-item-tools.ts drags in. Validation is pure; commit delegates to
-// the same editor commands the dedicated move_item / set_item_timing / remove_item tools
-// use — no logic duplication, just atomic-batch semantics.
+// Pure validation for generic edit_item adds/updates/deletes; kept separate from
+// edit-item-tools.ts so unit checks avoid its GL .frag dependency.
+// Committers delegate to EditorCommands, preserving atomic-batch semantics.
 import type {
   ClipFilters, ClipTransform, ItemKeyframes, Keyframe, KeyframeProp,
-  MediaAsset, TimelineItem, TimelineState,
+  MediaAsset, MediaAssetRelinkPatch, TimelineItem, TimelineState,
 } from '../../editor/types';
 import { defaultTrackId, resolveTrackId } from '../../editor/types';
 import { isValidEasing } from '../../editor/keyframes';
+import { validateBackgroundFillUpdate } from './edit-item-background-fill';
 import { getKeyframePropertyDefinition, KEYFRAME_PROPS, supportsKeyframeProperty } from '../../editor/keyframeRegistry';
 import { planSlip, type SlipFailure, type SlipResult } from '../../editor/slip';
 import { rejectUnknownFields } from './edit-item-fields';
 import { clampNum, parseFiltersArg, parseTransformArg } from './edit-item-visual';
 import { validateMediaSourceUpdate } from './edit-item-media-ops';
+import { validateSourceWindow } from './edit-item-source-window';
 export { didYouMean, rejectUnknownFields } from './edit-item-fields';
 export { validateMediaSourceUpdate } from './edit-item-media-ops';
 
@@ -69,6 +68,8 @@ const GENERIC_UPDATE_KEYS: Record<string, true> = {
   keyframes: true,
   filters: true,
   transform: true,
+  backgroundFill: true,
+  backgroundFillStrength: true,
   speed: true,
   playbackRate: true,
   clearKeyframes: true,
@@ -82,6 +83,10 @@ const GENERIC_ADD_KEYS: Record<string, true> = {
   startFrame: true,
   fromFrame: true,
   durationInFrames: true,
+  sourceStartSeconds: true,
+  sourceEndSeconds: true,
+  sourceStartMs: true,
+  sourceEndMs: true,
 };
 
 const AUTHORED_ADD_KEYS: Record<string, true> = {
@@ -119,10 +124,11 @@ export interface GenericCommands {
   setItemKeyframe: (id: string, prop: KeyframeProp, frame: number, value: number, easing?: Keyframe['easing']) => void;
   setItemFilters: (id: string, patch: ClipFilters) => void;
   setItemTransform: (id: string, patch: ClipTransform) => void;
+  setItemBackgroundFill: (id: string, enabled: boolean, strength?: number) => void;
   setItemSpeed: (id: string, rate: number) => void;
   clearItemKeyframes: (id: string, prop?: KeyframeProp) => void;
   replaceItemMedia: (id: string, src: string) => void;
-  relinkTimelineItem: (id: string, next: { src: string; name?: string; durationInFrames?: number; width?: number; height?: number; sourceRevision?: string; sourceFilename?: string }) => void;
+  relinkTimelineItem: (id: string, next: MediaAssetRelinkPatch) => void;
   removeItem: (id: string) => void;
   rippleDeleteItem: (id: string) => void;
 }
@@ -219,6 +225,18 @@ export function validateGenericUpdate(state: TimelineState, entry: Record<string
     if (parsed.error) return { error: parsed.error };
     plan.transform = parsed.transform;
   }
+  const backgroundFill = validateBackgroundFillUpdate(
+    state,
+    it,
+    entry.backgroundFill,
+    entry.backgroundFillStrength,
+    typeof plan.track === 'string' ? plan.track : undefined,
+  );
+  if (backgroundFill && 'error' in backgroundFill) return backgroundFill;
+  if (backgroundFill) {
+    plan.backgroundFill = backgroundFill.enabled;
+    if (backgroundFill.strength !== undefined) plan.backgroundFillStrength = backgroundFill.strength;
+  }
   const speedRaw = entry.speed ?? entry.playbackRate;
   if (speedRaw !== undefined) {
     if (it.kind !== 'video' && it.kind !== 'audio' && it.kind !== 'gif') {
@@ -240,11 +258,12 @@ export function validateGenericUpdate(state: TimelineState, entry: Record<string
 
   const FIELDS = [
     'track', 'startFrame', 'durationInFrames', 'srcInFrame', 'props', 'volume',
-    'fadeInFrames', 'fadeOutFrames', 'keyframes', 'filters', 'transform', 'speed', 'clearKeyframes',
+    'fadeInFrames', 'fadeOutFrames', 'keyframes', 'filters', 'transform',
+    'backgroundFill', 'backgroundFillStrength', 'speed', 'clearKeyframes',
   ];
   if (!FIELDS.some((k) => k in plan)) {
     return {
-      error: 'update needs at least one of: track/trackId, startFrame/fromFrame, durationInFrames, srcInFrame, props, volume, fadeInSeconds, fadeOutSeconds, keyframes, clearKeyframes, filters, transform, speed',
+      error: 'update needs at least one of: track/trackId, startFrame/fromFrame, durationInFrames, srcInFrame, props, volume, fadeInSeconds, fadeOutSeconds, keyframes, clearKeyframes, filters, transform, backgroundFill, backgroundFillStrength, speed',
     };
   }
   return plan;
@@ -362,13 +381,9 @@ export function validateAuthoredAdd(
   };
 }
 
-// Place an existing POOL asset (video/image/gif/svg/audio) onto a track as a clip.
-// submit_*/import only registers the asset; it's placed onto the timeline by a
-// separate edit_item. The library adds (effect/transition/mg/
-// sfx) never covered pool media, so the agent previously had NO way to place B-roll — this
-// closes that. Pure: resolves asset (id/prefix, G2) + track + position; the committer calls
-// addMediaItem. Optional durationInFrames trims stills/clips at placement (applied as an
-// asset copy so the committer needs no post-placement item lookup).
+// Validate placement of an existing pool asset. submit/import only registers it;
+// this resolves asset, track, and timing for addMediaItem. Optional duration trims
+// a copied asset without requiring a post-placement lookup.
 export function validateGenericAdd(
   state: TimelineState,
   assets: readonly MediaAsset[],
@@ -382,27 +397,41 @@ export function validateGenericAdd(
       supported: [...GENERIC_ADD_KINDS, ...AUTHORED_ADD_KINDS],
     };
   }
-  // Pool media add: reject extra keys (live: unknown field "name" on adds[0]).
   const unknown = rejectUnknownFields(entry, GENERIC_ADD_KEYS);
   if (unknown) return { error: unknown };
   const q = String(entry.assetId ?? '').trim();
   if (!q) return { error: `${type} add needs assetId (a pool asset id/prefix; see manage_media_pool action=list)` };
-  const exact = assets.find((a) => a.id === q);
-  const hits = exact ? [exact] : assets.filter((a) => a.id.startsWith(q));
-  if (hits.length === 0) return { error: `no pool asset matching "${q}"`, hint: 'manage_media_pool action=list shows asset ids/names' };
+  const exact = assets.find((asset) => asset.id === q);
+  const hits = exact ? [exact] : assets.filter((asset) => asset.id.startsWith(q));
+  if (hits.length === 0) {
+    return { error: `no pool asset matching "${q}"`, hint: 'manage_media_pool action=list shows asset ids/names' };
+  }
   if (hits.length > 1) {
-    return { error: `ambiguous asset prefix "${q}"`, candidates: hits.slice(0, 6).map((a) => ({ id: a.id, name: a.name, kind: a.kind })) };
+    return { error: `ambiguous asset prefix "${q}"`, candidates: hits.slice(0, 6).map((asset) => ({ id: asset.id, name: asset.name, kind: asset.kind })) };
   }
   const asset = hits[0]!;
-  if (asset.kind !== type) return { error: `asset ${asset.id} is kind=${asset.kind}, not ${type} — pass type:"${asset.kind}"` };
-
+  if (asset.kind !== type) {
+    return { error: `asset ${asset.id} is kind=${asset.kind}, not ${type} — pass type:"${asset.kind}"` };
+  }
   const family = type === 'audio' ? 'audio' : 'video';
   const track = resolveTrackId(state, entry.track ?? entry.trackId ?? (family === 'audio' ? 'A1' : 'V1'), family)
     ?? defaultTrackId(state, family);
   if (!track) return { error: `no ${family} track for placement — create one with edit_track first` };
-
   const startFrame = finiteNum(entry.startFrame) ?? finiteNum(entry.fromFrame);
   const durationInFrames = finiteNum(entry.durationInFrames);
+  const sourceWindow = validateSourceWindow(type, asset, state.fps || 30, entry, durationInFrames);
+  if (sourceWindow?.error) return sourceWindow;
+  if (sourceWindow) {
+    return {
+      ok: true,
+      kind: type,
+      plan: 'addMedia',
+      assetId: asset.id,
+      track,
+      ...sourceWindow,
+      ...(startFrame !== undefined ? { startFrame: Math.max(0, Math.round(startFrame)) } : {}),
+    };
+  }
   return {
     ok: true,
     kind: type,
@@ -439,6 +468,13 @@ export function applyGeneric(plan: OpResult, commands: GenericCommands): OpResul
     }
     if (plan.filters !== undefined) commands.setItemFilters(id, plan.filters as ClipFilters);
     if (plan.transform !== undefined) commands.setItemTransform(id, plan.transform as ClipTransform);
+    if (plan.backgroundFill !== undefined) {
+      commands.setItemBackgroundFill(
+        id,
+        plan.backgroundFill as boolean,
+        plan.backgroundFillStrength as number | undefined,
+      );
+    }
     if (plan.speed !== undefined) commands.setItemSpeed(id, plan.speed as number);
     if (plan.clearKeyframes === true) commands.clearItemKeyframes(id);
     else if (typeof plan.clearKeyframes === 'string') {
@@ -463,6 +499,7 @@ export function applyGeneric(plan: OpResult, commands: GenericCommands): OpResul
   if (plan.plan === 'relinkMedia') {
     commands.relinkTimelineItem(id, {
       src: String(plan.src),
+      sourceContentHash: undefined,
       name: plan.name as string | undefined,
       durationInFrames: plan.durationInFrames as number | undefined,
       width: plan.width as number | undefined,

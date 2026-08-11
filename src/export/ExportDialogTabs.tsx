@@ -14,6 +14,7 @@ import {
   type ExportVideoSettings,
 } from './useExportDialogModel';
 import type { ExportQaUiState, ExportTab } from './useExportWorkflow';
+import { fcpxmlBackgroundFillCount } from './fcpxml';
 
 const resolutionLabel = (value: string): string => value === '4k' ? '4K' : value;
 const clampBitrate = (value: number): number => Math.max(
@@ -163,6 +164,7 @@ function SubtitlesTab({ state, subtitles }: { state: TimelineState; subtitles: E
 }
 
 interface XmlTabProps {
+  state: TimelineState;
   nleFormat: 'fcp_xml' | 'fcp_xml_resolve';
   includeMg: boolean;
   mgCount: number;
@@ -170,11 +172,21 @@ interface XmlTabProps {
   setIncludeMg: (include: boolean) => void;
 }
 
-function XmlTab({ nleFormat, includeMg, mgCount, setNleFormat, setIncludeMg }: XmlTabProps) {
+function XmlTab({ state, nleFormat, includeMg, mgCount, setNleFormat, setIncludeMg }: XmlTabProps) {
   const t = useT();
+  const backgroundFillCount = fcpxmlBackgroundFillCount(state);
   return (
     <>
       <InfoCard icon="clipboard" title={t('可继续编辑的工程')} text={t('生成带轨道与素材引用的 FCPXML，交给 Premiere Pro 或达芬奇继续制作。')} />
+      {backgroundFillCount > 0 && (
+        <InfoCard
+          icon="film"
+          title={t('当前 FCPXML 会保留背景参数，但不生成图层')}
+          text={t('OpenChatCut 会把 {n} 个片段的背景填充开关与百分比写入 FCPXML 元数据，但目标剪辑软件不会据此还原模糊图层；如需完全一致，请同时导出成片。', {
+            n: backgroundFillCount,
+          })}
+        />
+      )}
       <Row label={t('目标软件')}>
         <Segmented
           options={[{ value: 'fcp_xml', label: 'Premiere Pro' }, { value: 'fcp_xml_resolve', label: '达芬奇' }] as const}

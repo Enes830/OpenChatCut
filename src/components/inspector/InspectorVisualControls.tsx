@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import './InspectorVisualControls.css';
 import { theme } from '../../theme';
 import type { ClipEffect, ClipEffectValue, ClipFilters, TimelineItem } from '../../editor/types';
 import { ALL_FX as FX_EFFECTS, LUT_EFFECTS } from '../../gl/fx/effects';
@@ -7,6 +8,7 @@ import { useT } from '../../i18n/locale';
 import { ColorParamInput, SliderRow } from './InspectorKeyframeControls';
 import type { AutoGradeControlProps } from './InspectorTypes';
 import { PreviewFidelityStatus } from './PreviewFidelityStatus';
+export { BackgroundFillControl } from './BackgroundFillControl';
 
 const FX_IDS = Object.keys(FX_EFFECTS);
 const compactNumber = (value: number) => String(Number(value.toFixed(2)));
@@ -101,6 +103,7 @@ export function FilterControl({ item, mixed, onChange, autoGrade }: {
     </div>
   );
 }
+
 
 
 // Per-clip WebGL effect stack (effects / builtin:fx-*). Order is render

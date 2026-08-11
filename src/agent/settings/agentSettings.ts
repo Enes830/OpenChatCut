@@ -1,16 +1,22 @@
 // Agent settings that actually change code paths (not soft prompt hints).
 // Cost guard: high-cost tools (generation/export/transcription/web/sandbox)
-// always confirm before execution and never auto-apply — not configurable.
+// confirm before execution in Ask mode; YOLO/auto mode skips confirmation
+// (the user opted into unapproved paid execution).
 
 /** MG generates three levels of quality. */
 export type MgTier = 'speed' | 'balance' | 'quality';
 export const MG_TIERS: readonly MgTier[] = ['speed', 'balance', 'quality'];
+export type AgentCacheMode = 'short' | 'long';
+export const AGENT_CACHE_MODES: readonly AgentCacheMode[] = ['short', 'long'];
+
 
 export interface AgentSettings {
   /** MG quality file (default balance), injected through <agent_settings>. */
   mgTier: MgTier;
   /** Plan mode (Agent Settings planMode switch): come up with the numbering plan first, and then start after the user confirms it. */
   planMode: boolean;
+  /** Provider prompt-cache duration: short sessions favor the default TTL; long sessions request 1h where supported. */
+  cacheMode: AgentCacheMode;
 }
 
 const KEY = 'cc.agentSettings.v1';
@@ -18,6 +24,7 @@ const KEY = 'cc.agentSettings.v1';
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   mgTier: 'balance',
   planMode: false,
+  cacheMode: 'short',
 };
 
 export function loadAgentSettings(): AgentSettings {
@@ -28,6 +35,9 @@ export function loadAgentSettings(): AgentSettings {
     return {
       mgTier: MG_TIERS.includes(parsed.mgTier as MgTier) ? (parsed.mgTier as MgTier) : DEFAULT_AGENT_SETTINGS.mgTier,
       planMode: parsed.planMode === true,
+      cacheMode: AGENT_CACHE_MODES.includes(parsed.cacheMode as AgentCacheMode)
+        ? parsed.cacheMode as AgentCacheMode
+        : DEFAULT_AGENT_SETTINGS.cacheMode,
     };
   } catch {
     return { ...DEFAULT_AGENT_SETTINGS };
@@ -198,6 +208,19 @@ export function isHighCostTool(name: string): boolean {
   return HIGH_COST_TOOLS[name] === true;
 }
 
+/**
+ * Local (on-device) transcription is free; only the cloud AssemblyAI path makes
+ * transcribe_track a paid tool. Reads the same flag the provider router uses
+ * (cc.transcriptionProvider); missing/unknown storage falls back to paid.
+ */
+export function transcriptionIsPaid(): boolean {
+  try {
+    return (globalThis.localStorage?.getItem('cc.transcriptionProvider') ?? 'assemblyai') !== 'local';
+  } catch {
+    return true;
+  }
+}
+
 export type CostGuardCategory =
   | 'image-gen'
   | 'motion-graphic-gen'
@@ -225,5 +248,7 @@ export function costCategoryForTool(tool: string): CostGuardCategory | null {
     tool === 'submit_export' || tool === 'submit_render_job' || tool === 'export_timeline'
     || tool === 'export_motion_graphic_prores' || tool === 'convert_motion_graphic_to_video'
   ) return 'irreversible-export';
+  // Local transcription is free — no confirmation card when the on-device model is active.
+  if (tool === 'transcribe_track' && !transcriptionIsPaid()) return null;
   return isHighCostTool(tool) ? 'high-cost-operation' : null;
 }

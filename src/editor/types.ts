@@ -3,7 +3,7 @@
 
 import type { CaptionsData } from '../captions/types.js';
 import type { SerializableFxDef } from '../gl/fx/uniforms.js';
-import type { TranscriptWord, TranscriptVariant } from '../transcript/types.js';
+import type { TranscriptCarrier, TranscriptVariant } from '../transcript/types.js';
 import type { CURRENT_PROJECT_VERSION } from '../../shared/project-version.js';
 
 /** Stable track id. Human aliases (C1/V1/A1/...) are derived from track order. */
@@ -35,7 +35,7 @@ export interface SourceClockMetadata {
   dropFrame: boolean;
 }
 
-export interface MediaAsset {
+export interface MediaAsset extends TranscriptCarrier {
   id: string;
   name: string;
   /** Immutable filename captured from the source before internal UUID renaming. */
@@ -47,6 +47,11 @@ export interface MediaAsset {
   durationInFrames: number;
   /** Stable identity of the source bytes/representation used by derivatives. */
   sourceRevision?: string;
+  /**
+   * Canonical lowercase SHA-256 of the imported master bytes when known.
+   * It deliberately remains the master identity when `src` points at a compatibility proxy or normalized derivative.
+   */
+  sourceContentHash?: string;
   /** File metadata used to deterministically derive sourceRevision when available. */
   sourceSize?: number;
   sourceModifiedAt?: number;
@@ -61,14 +66,8 @@ export interface MediaAsset {
   /** media-pool organization only; does not affect timeline clips */
   folderId?: string;
   favorite?: boolean;
-  /** ingest ASR ("Upload and Transcribe"): the asset's word-level source transcript.
-   * A clip created from this asset copies the transcript into item.transcript so
-   * per-clip edits stay isolated from the asset master. Audio/video only. */
-  transcript?: TranscriptWord[];
   /** Source revision captured when the current transcript was committed. */
   transcriptSourceRevision?: string;
-  /** The source changed after this transcript was produced; keep it for review. */
-  transcriptStale?: boolean;
   /** ingest ASR state; undefined = never transcribed (image/no-audio or pre-ingest). */
   transcribeStatus?: AssetTranscribeStatus;
   /** last ASR failure reason (transcribeStatus='failed'), for the pool badge tooltip. */
@@ -84,6 +83,7 @@ export interface MediaAssetRelinkPatch {
   height?: number;
   kind?: MediaAsset['kind'];
   sourceRevision?: string;
+  sourceContentHash?: string;
   sourceSize?: number;
   sourceModifiedAt?: number;
   sourceFilename?: string;
@@ -180,7 +180,7 @@ export interface Keyframe {
 }
 
 /** keyframable properties (PRD §4.5: Position/scale/transparency/rotation can be K frames; volume is the audio/video volume envelope) */
-export type KeyframeProp = 'x' | 'y' | 'scale' | 'rotation' | 'opacity' | 'borderRadius' | 'volume';
+export type KeyframeProp = 'x' | 'y' | 'scale' | 'scaleX' | 'scaleY' | 'rotation' | 'opacity' | 'borderRadius' | 'volume';
 /** per-prop sparse keyframe curves on an item (sorted by frame — reducer invariant) */
 export type ItemKeyframes = Partial<Record<KeyframeProp, Keyframe[]>>;
 
@@ -197,8 +197,12 @@ export interface ClipCrop {
 
 /** per-clip visual transform (scale/position/rotation) — scale tab */
 export interface ClipTransform {
-  /** 1 = 100% */
+  /** Uniform scale 1 = 100%. Fallback when scaleX/scaleY are unset. */
   scale?: number;
+  /** Horizontal scale 1 = 100%. Overrides `scale` on the X axis when set. */
+  scaleX?: number;
+  /** Vertical scale 1 = 100%. Overrides `scale` on the Y axis when set. */
+  scaleY?: number;
   /** horizontal offset as percent of canvas width (-100..100) */
   x?: number;
   /** vertical offset as percent of canvas height (-100..100) */
@@ -224,7 +228,7 @@ export interface ClipEffect {
   overrides?: Record<string, ClipEffectValue>;
 }
 
-export interface TimelineItem {
+export interface TimelineItem extends TranscriptCarrier {
   id: string;
   track: TrackId;
   startFrame: number;
@@ -248,6 +252,8 @@ export interface TimelineItem {
   sourceAssetId?: string;
   /** Revision copied from the pool asset when this clip was placed or relinked. */
   sourceRevision?: string;
+  /** Source byte identity copied from the pool asset for detached clip snapshots. */
+  sourceContentHash?: string;
   /** Nested sequence reference. Required when kind='sequence'; absent on legacy items. */
   timelineId?: string;
   /** Persistent multicam membership; copied by split so angle identity survives edits. */
@@ -269,6 +275,10 @@ export interface TimelineItem {
   keyframes?: ItemKeyframes;
   /** color/blur adjustments for visual clips (special effects/LUT) */
   filters?: ClipFilters;
+  /** blurred cover copy behind the contained clip */
+  backgroundFill?: boolean;
+  /** user-selected background blur/dimming intensity, 0..100 percent */
+  backgroundFillStrength?: number;
   /** animated zoom (builtin:zoom) — shape curve or reframe keyframes */
   zoom?: ZoomEffect;
   /** per-clip WebGL effect stack (effects[]: builtin:fx-* / lut) */
@@ -276,11 +286,6 @@ export interface TimelineItem {
   /** Playback speed: 1 = normal, 2 = 2× faster. Retiming keeps the source span,
    * so durationInFrames scales by 1/rate. Applies to video/audio/sequence items. */
   playbackRate?: number;
-  /** transcript-based editing: the clip's words + which are deleted (by index).
-   * durationInFrames reflects the EDITED length (kept words only). */
-  transcript?: TranscriptWord[];
-  /** Relink preserved the transcript for review, but it no longer matches source bytes. */
-  transcriptStale?: boolean;
   deletedWordIdx?: number[];
   /** text-only translation / correction variants of `transcript`. Each keys words
    * by their SOURCE index and carries only text — timing always comes from the

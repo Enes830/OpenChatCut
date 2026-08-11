@@ -141,6 +141,7 @@ function commitMediaPlan(ctx: AgentContext, plan: OpResult): OpResult {
   const itemId = ctx.commands.addMediaItem(placed, {
     track: plan.track as string,
     startFrame: plan.startFrame as number | undefined,
+    srcInFrame: plan.srcInFrame as number | undefined,
   });
   return {
     ok: true,
@@ -153,6 +154,7 @@ function commitMediaPlan(ctx: AgentContext, plan: OpResult): OpResult {
       track: plan.track,
       startFrame: plan.startFrame ?? 'appended',
       durationInFrames: placed.durationInFrames,
+      srcInFrame: plan.srcInFrame,
     },
   };
 }

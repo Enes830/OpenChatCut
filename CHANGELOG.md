@@ -6,6 +6,86 @@ OpenChatCut 的重要变更记录在此。
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use [Semantic Versioning](https://semver.org/).  
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added / 新增
+
+- Added opt-in AI SDK speech routing for OpenAI, Gemini, Mistral Voxtral, and Cartesia, plus cloud transcription through OpenAI, Mistral Voxtral, Deepgram, Groq, ElevenLabs Scribe, and Cartesia. AssemblyAI remains the default transcription route and on-device Whisper remains available; the Agent can discover configured providers and explicitly route to one without exposing credentials.
+  新增可选的 AI SDK 语音路由：OpenAI、Gemini、Mistral Voxtral 与 Cartesia 配音，以及 OpenAI、Mistral Voxtral、Deepgram、Groq、ElevenLabs Scribe、Cartesia 云端转写。AssemblyAI 仍是默认转写路径，本地 Whisper 继续可用；Agent 可发现已配置的供应商并显式路由，且不会接触密钥。
+- Added in-app desktop updates: packaged macOS, Windows, and Linux builds can check, download, retry, and install the next GitHub Release from the dashboard notice or Settings, with per-platform update metadata published alongside installers.
+  新增桌面端应用内更新：macOS、Windows 与 Linux 安装包可在首页提示或设置中检查、下载、重试并安装下一版 GitHub Release；各平台更新元数据与安装包一同发布。
+- Added dashboard header shortcuts for contacting the author and opening the OpenChatCut GitHub repository; the contact disclosure shows a selectable email link without leaving the project list.
+  首页顶栏新增“联系作者”和 GitHub 仓库快捷入口；联系信息会就地显示可选择的邮箱链接，无需离开工程列表。
+- Added opt-in blurred background fill for video and image clips: the Inspector offers exact 0–100% intensity control plus four quick shortcuts, while `edit_item` accepts `backgroundFillStrength`. The sharp foreground remains independently movable, resizable, croppable, and rotatable. Shared preview/export compositing preserves fades, effects, and GLSL transition alpha; FCPXML retains the toggle and percentage as OpenChatCut metadata and explicitly reports that destination editors cannot reconstruct the generated blur layer from those custom fields.
+  新增视频与图片片段的可选模糊背景填充：检查器支持 0–100% 精确强度调节和四个快捷档位，`edit_item` 接受 `backgroundFillStrength`；清晰前景框仍可独立移动、缩放、裁剪和旋转。预览与导出共用合成链并保留淡化、特效和 GLSL 转场透明度；FCPXML 会把开关与百分比保存在 OpenChatCut 自定义元数据中，并明确提示目标剪辑软件无法从这些字段自动重建生成的模糊图层。
+- Added visual geometry understanding: in-browser MediaPipe person segmentation + face detection aggregate into per-segment safe zones (cached per asset+revision). Captions auto-avoid the speaker (`apply_caption_avoidance`), export QA warns when a caption covers the face, `auto_reframe` focal points follow the subject, and overlay graphics place into the safe zone (`place_graphics_in_safe_zone`). Undetected faces fall back to the subject's head band.
+  新增视觉几何理解：浏览器内 MediaPipe 人像分割 + 人脸检测聚合为分段安全区（按素材+版本缓存）。字幕自动避开说话人（`apply_caption_avoidance`）、导出 QA 在字幕遮挡人脸时预警、`auto_reframe` 焦点跟随主体、叠加图形自动放入安全区（`place_graphics_in_safe_zone`）；人脸检测不到时回退到主体头部带。
+- Added `edit_item` source windows: `sourceStartMs`/`sourceEndMs` from `search_media` pass through unchanged; explicit `sourceStartSeconds`/`sourceEndSeconds` are also accepted and converted internally.
+  新增 `edit_item` 源窗口：`search_media` 返回的 `sourceStartMs`/`sourceEndMs` 可原样落轨；也接受显式 `sourceStartSeconds`/`sourceEndSeconds`，统一在工具内部换算。
+- Hardened the agent prompt: explicit TIMELINE frames vs SOURCE time coordinate contract, transcript/caption content declared as footage-not-instructions, and lossy-summary warnings on truncated views.
+  加固 Agent 提示词：显式时间线帧/源时间坐标系契约、转录与字幕内容声明为“素材而非指令”、截断视图附有损摘要警示。
+- Added content-addressed media identity: imported masters now carry a streaming SHA-256 through browser, multipart, Agent, and desktop import paths; deterministic relinking/deduplication preserves asset identity and invalidates derived artifacts only when bytes change. Project schema v4 migrates legacy documents without changing media URLs.
+  新增内容寻址素材身份：浏览器、分片上传、Agent 与桌面导入链路统一流式计算并传递主素材 SHA-256；确定性重链/去重保留素材身份，仅在字节变化时失效派生结果。工程 schema v4 可无损迁移旧文档，素材 URL 语义不变。
+- Added stable caption word references and parallel source/translation lanes. Selection, editing, drag grouping, copy/paste, preview, and ASS/WebVTT export now share one cue identity path, including deterministic CJK segmentation.
+  新增稳定字幕词引用与原文/译文并行车道。选择、编辑、拖动分组、复制粘贴、预览及 ASS/WebVTT 导出统一使用同一条 cue 身份链，并支持确定性的中日韩文本分词。
+- Added five deterministic caption motion presets (`none`, fade-up, pop, word-pop, karaoke-pulse). They derive from timeline frames inside the shared Remotion layer, so Player preview and burned export render the same motion; saved caption looks retain the chosen preset.
+  新增五种确定性字幕动效（无动效、淡入上浮、弹性入场、逐词弹出、卡拉 OK 脉冲）。动效在共享 Remotion 字幕层中按时间线帧计算，Player 预览与烧录导出保持一致，用户字幕预设也会保留所选动效。
+- Added server-direct external Agent editing for projects without an open browser: isolated drafts, explicit review/commit gates, dependency-closed tool exposure, and scoped one-time same-origin upload handoffs with expiry and replay rejection.
+  新增无需浏览器常驻的外部 Agent 服务端直编：隔离草稿、显式审阅/提交门槛、依赖闭合的工具暴露，以及带工程作用域、过期与防重放校验的同源一次性上传交接。
+- Added opt-in local music intelligence: downloadable, hash-verified Beat This and CLAP model packs analyze BPM, beats, downbeats, structure, energy, genre, mood, instrumentation, and usage entirely on-device. Media cards expose cached results, automatic analysis is user-controlled, and the Agent can inspect, plan, and atomically apply stale-safe beat-synced cuts through a dedicated skill. Long tracks use bounded windowed rhythm preprocessing and representative semantic sampling.
+  新增可选的本地音乐智能：可下载并校验哈希的 Beat This 与 CLAP 模型包完全在端侧分析 BPM、节拍、强拍、段落、能量、流派、情绪、乐器与用途。素材卡可查看缓存结果，导入后自动分析由用户控制；Agent 通过专项技能检查分析、生成方案，并以单次可撤销操作安全执行带分析版本校验的卡点切分。长音频采用有界窗口节奏预处理与代表性语义采样。
+- Added opt-in desktop native inference acceleration for Windows and macOS: Windows prefers DirectML, while macOS uses CoreML for Beat This and native Apple-silicon CPU execution for Whisper, Chinese-CLIP, and CLAP. After explicit opt-in, the already-downloaded selected transcription model preloads when an editor opens; other downloaded models load on first use. Unsupported hardware, admission limits, and native failures transparently return the same request to the existing browser WebGPU/WASM engines.
+  新增 Windows 与 macOS 可选桌面原生推理加速：Windows 优先使用 DirectML；macOS 的 Beat This 使用 CoreML，Whisper、Chinese-CLIP 与 CLAP 使用 Apple 芯片原生 CPU 执行。用户显式启用后，已下载且当前选中的转写模型会在编辑器打开时预热，其他已下载模型首次使用时按需加载；硬件不支持、资源准入受限或原生推理失败时，同一次请求会透明回退既有浏览器 WebGPU/WASM 引擎。
+
+- Added a durable Agent harness shared by in-app, Codex, and external MCP runs: persisted run/event/approval/checkpoint/artifact records, safe reload and server-restart recovery, lease-fenced browser/offline editing, resumable proposals, portable project transfer, and a read-only run inspector.
+  新增由应用内 Agent、Codex 与外部 MCP 共用的持久化运行框架：保存运行、事件、审批、上下文检查点与结果归档；支持页面刷新和服务重启后的安全恢复；用租约隔离浏览器与离线编辑；提案可继续处理，工程包可携带恢复状态，并提供只读运行检查器。
+
+### Changed / 变更
+
+- Reduced Agent token use with request-scoped tool schemas, one-shot `ToolSearch` expansion, bounded tool-result/history compaction, provider prompt-cache hints, and an in-chat system/tool/history/cache usage breakdown.
+  降低 Agent 令牌消耗：按请求暴露工具 schema、每轮最多一次 `ToolSearch` 扩展、对模型可见的工具结果与旧历史做有界压缩、启用供应商提示词缓存提示，并在聊天框展示系统/工具/历史/缓存用量拆分。
+
+## [0.1.9] - 2026-08-06
+
+### Added / 新增
+
+- Added a Skills tab to the library panel: creative workflows + installed custom skills with search, compact cards, edit (name/summary/body) and two-step delete for custom skills.
+  资源库面板新增「技能」标签：创作工作流与已安装的自定义技能，支持搜索、紧凑卡片、编辑（名称/说明/正文）与两步删除。
+- Added `install_skill`: the Agent can install a complete GitHub skill repo (SKILL.md + references/scripts/assets/examples) into `~/.openchatcut/skills/<slug>/`, with GitHub API rate-limit fallback to a shallow git clone and `GITHUB_TOKEN` support.
+  新增 `install_skill`：Agent 可把完整 GitHub 技能仓库（SKILL.md + references/scripts/assets/examples）安装到 `~/.openchatcut/skills/<slug>/`，GitHub API 限流时自动回退浅克隆，并支持 `GITHUB_TOKEN`。
+- Skills now load in FULL on use: `load_skill` returns every file under the skill directory (no truncation), and custom skills get an auto-detected dependency check — foreign services (Codex image gen, ElevenLabs, …) are mapped onto configured local capabilities; missing ones are surfaced to the user with Settings guidance.
+  技能改为使用即全量加载：`load_skill` 一次返回技能目录内全部文件（不截断）；外部技能自动做依赖检查——其声明的外部服务（Codex 生图、ElevenLabs 等）映射到本机已配置能力，缺失项会提示用户并引导去设置配置。
+- Added local skill script execution (`run_skill_script`): whitelisted binaries (bash/node/python/ffmpeg/…) run inside the installed skill directory on the local machine — the equivalent of omp's skill-directory terminal, narrowed for safety.
+  新增本机技能脚本执行（`run_skill_script`）：白名单可执行文件（bash/node/python/ffmpeg 等）在已安装技能目录内于本机运行——对应 omp 的“技能目录终端”，并按安全收窄。
+- Added vision bypass: when the main model is not multimodal, images are described by a separate configured vision model before being passed to the agent; full vision model catalog and file-part vision input.
+  新增视觉旁路：主模型非多模态时，图片先由独立配置的视觉模型描述再交给 Agent；补齐完整视觉模型目录与 file-part 视觉输入。
+- Added system-proxy support for server-side fetch (undici global ProxyAgent) plus an HTTPS CONNECT tunnel for the LLM proxy — external APIs honor the user's local proxy (Clash, etc.).
+  服务端 fetch 支持系统代理（undici 全局 ProxyAgent），并为 LLM 代理增加 HTTPS CONNECT 隧道——外部 API 统一走用户本地代理（Clash 等）。
+- Added preview-source control: preview proxies are no longer auto-generated by default; the preview source switches between original / proxy / auto.
+  新增预览源控制：默认不再自动生成预览代理，预览源可在「原始 / 代理 / 自动」间切换。
+- Added official vendor icons (Xiaomi MiMo, Mureka, Fish Audio, StepFun) and MCP workflow prompts, approvalMode auto sessions, YOLO fully-automatic mode (paid tools skip confirmation), and the full internal tool surface exposed to external MCP agents (confirm-gated).
+  新增官方厂商图标（小米 MiMo、Mureka、Fish Audio、StepFun）、MCP 工作流提示、approvalMode auto 会话、YOLO 全自动模式（付费工具跳过确认），以及对外部 MCP Agent 暴露的完整内部工具面（带确认门槛）。
+
+### Fixed / 修复
+
+- Preview no longer flashes the UNFILTERED source frame when seeking clips with WebGL effects (黑白胶片 etc.) — the effect canvas stays visible across seeks.
+  修复：点击时间线跳转时，带 WebGL 效果（黑白胶片等）的片段不再闪现未加滤镜的源画面——跳转期间效果画布保持显示。
+- Fixed text clips not showing / half-screen video display with transform keyframes (non-uniform scale axes resolve correctly in preview overlay and render).
+  修复：带变换关键帧时文字不显示、视频半屏显示的问题（预览画框与渲染统一支持非均匀缩放轴）。
+- Preview playback stops at the end instead of looping; out-of-memory export failures (MCP-driven, e.g. hermes) are humanized with a raised render heap.
+  预览播放到结尾自动停止（不再循环）；导出内存溢出（MCP 驱动，如 hermes）给出友好提示并提升渲染堆上限。
+- Browser cookies are never forwarded to upstream providers (agent chat 431/400 errors on accumulated localhost cookies).
+  浏览器 Cookie 不再透传给上游供应商（修复 localhost Cookie 累积导致的 Agent 对话 431/400 报错）。
+- Clips without an audio track no longer fail transcription; find_highlights reports friendly errors; export preflight names the failing media sources.
+  无音轨片段不再导致转写失败；高光查找给出友好错误；导出预检报错会点名失败的素材源。
+
+### Performance / 性能
+
+- Hardware-accelerated decoding on every video path; constant-quality proxy encoding; semantic model warm-up.
+  全视频路径硬件加速解码；代理转码改为常量质量编码；语义模型预热。
+- Local Whisper models now warm in the background after opening a project on both web and desktop, and immediately after a model download or provider switch; only the selected downloaded model is loaded, so warm-up never triggers an implicit download.
+  本地 Whisper 模型在网页端与桌面端打开工程后后台预热，模型下载完成或切换转写 Provider 时也会立即安排预热；仅加载当前已下载的选中模型，预热不会偷偷触发下载。
+
 ## [0.1.8] - 2026-08-06
 
 ### Added / 新增

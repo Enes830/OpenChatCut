@@ -1,16 +1,16 @@
-// Server-side in-memory API-key store backing the settings UI. Seeded from .env.local
-// at Vite startup, live-updated by POST /api/keys, and persisted back to .env.local so
-// runtime edits survive a restart. SECRET key VALUES (any name NOT in NON_SECRET_NAMES)
-// live ONLY here (server-side) and in .env.local (gitignored) — they NEVER appear in
-// any response; the browser sees booleans only (keyStatus / caps). Model ids and vendor
+// Server-side in-memory API-key store backing the settings UI. Seeded at Vite
+// startup, live-updated by POST /api/keys, and persisted to the active runtime
+// profile's private settings file. Secret values never appear in responses; the
+// browser sees booleans only (keyStatus / caps). Model ids and vendor
 // routing are configuration, not credentials: the explicit NON_SECRET_NAMES whitelist
 // lets keyStatus() echo their raw values (keyStatus().models) so the settings UI can
 // show and edit them.
 import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { atomicWriteFile } from "./plugins/project-store-durable.ts";
 import { AI_SDK_BASE_URL_FORMAT, resolveLlmBaseUrl } from "./llm-config.ts";
 import { decodePersistedEnvValue, mergeEnvText } from "./env-text.ts";
 export { mergeEnvText } from "./env-text.ts";
+import { isIsolatedDevProfile, runtimeProfile } from "./runtime-profile.ts";
 import {
   LLM_PROVIDER_PRESETS,
   llmProviderConfigNames,
@@ -23,7 +23,8 @@ import {
   type ModelCapabilityOverride,
 } from "../shared/model-capabilities.ts";
 
-const ENV_PATH = resolve(process.cwd(), ".env.local");
+const ACTIVE_PROFILE = runtimeProfile();
+const ENV_PATH = ACTIVE_PROFILE.keystorePath;
 
 // Whitelist of settable env vars — mirrors what vite.config.ts reads. POST /api/keys
 // rejects anything outside this set so the endpoint can never write arbitrary env.
@@ -88,6 +89,10 @@ export const KEY_NAMES = [
   "BYTEPLUS_BASE_URL",
   "ELEVENLABS_API_KEY",
   "ELEVENLABS_BASE_URL",
+  "DEEPGRAM_API_KEY",
+  "GROQ_API_KEY",
+  "GROQ_BASE_URL",
+  "CARTESIA_API_KEY",
   "DOUBAO_TTS_APP_ID",
   "DOUBAO_TTS_ACCESS_KEY",
   "DOUBAO_TTS_BASE_URL",
@@ -133,6 +138,16 @@ export const KEY_NAMES = [
   "BYTEPLUS_IMAGE_MODEL",
   "BYTEPLUS_VIDEO_MODEL",
   "ELEVENLABS_TTS_MODEL",
+  "OPENAI_TTS_MODEL",
+  "GEMINI_TTS_MODEL",
+  "MISTRAL_TTS_MODEL",
+  "CARTESIA_TTS_MODEL",
+  "OPENAI_TRANSCRIPTION_MODEL",
+  "MISTRAL_TRANSCRIPTION_MODEL",
+  "DEEPGRAM_TRANSCRIPTION_MODEL",
+  "GROQ_TRANSCRIPTION_MODEL",
+  "ELEVENLABS_TRANSCRIPTION_MODEL",
+  "CARTESIA_TRANSCRIPTION_MODEL",
   "DOUBAO_TTS_RESOURCE_ID",
   "INWORLD_TTS_MODEL",
   "FISHAUDIO_TTS_MODEL",
@@ -149,6 +164,10 @@ export const KEY_NAMES = [
   "PREFERRED_VOICE_VENDOR",
   "PREFERRED_VIDEO_VENDOR",
   "PREFERRED_MUSIC_VENDOR",
+  "PREFERRED_TRANSCRIPTION_PROVIDER",
+  "LOCAL_ASR_MODEL",
+  "TRANSCRIPTION_LANGUAGE",
+  "TRANSCRIPTION_DIARIZATION",
   "OPENCHATCUT_SKILLS_DIR",
 ] as const;
 export type KeyName = (typeof KEY_NAMES)[number];
@@ -165,7 +184,22 @@ export const NON_SECRET_NAMES: ReadonlySet<string> = new Set([
   "LLM_OPENAI_API_MODE",
   MODEL_CAPABILITY_OVERRIDES_KEY,
   "GEMINI_IMAGE_MODEL",
+  "IMAGE_BASE_URL",
+  "GEMINI_BASE_URL",
   "ELEVENLABS_TTS_MODEL",
+  "OPENAI_TTS_MODEL",
+  "GEMINI_TTS_MODEL",
+  "MISTRAL_TTS_MODEL",
+  "CARTESIA_TTS_MODEL",
+  "OPENAI_TRANSCRIPTION_MODEL",
+  "MISTRAL_TRANSCRIPTION_MODEL",
+  "DEEPGRAM_TRANSCRIPTION_MODEL",
+  "GROQ_TRANSCRIPTION_MODEL",
+  "ELEVENLABS_TRANSCRIPTION_MODEL",
+  "CARTESIA_TRANSCRIPTION_MODEL",
+  "GROQ_BASE_URL",
+  "TRANSCRIPTION_LANGUAGE",
+  "TRANSCRIPTION_DIARIZATION",
   "ELEVENLABS_SOUND_MODEL",
   "DOUBAO_TTS_RESOURCE_ID",
   "SEEDANCE_VIDEO_MODEL",
@@ -185,6 +219,8 @@ export const NON_SECRET_NAMES: ReadonlySet<string> = new Set([
   "PREFERRED_VOICE_VENDOR",
   "PREFERRED_VIDEO_VENDOR",
   "PREFERRED_MUSIC_VENDOR",
+  "PREFERRED_TRANSCRIPTION_PROVIDER",
+  "LOCAL_ASR_MODEL",
   "R2_ENABLED", // Cloud synchronization switch ('' default = enabled, '0' = disabled) - configuration is not credentials
   "R2_PRESIGN", // Browser pre-signed direct transmission ('' default = enabled, '0' = server-side write-through only)
   "MEDIA_DIR", // Asset saving directory (local path, '' = default public/media/uploads) - configuration is not credentials
@@ -322,7 +358,11 @@ export function computeCaps(): Caps {
       has("MINIMAX_API_KEY") ||
       has("INWORLD_TTS_API_KEY") ||
       has("FISHAUDIO_TTS_API_KEY") ||
-      has("SPEECHIFY_TTS_API_KEY"),
+      has("SPEECHIFY_TTS_API_KEY") ||
+      (getKey("PREFERRED_VOICE_VENDOR") === "openai" && has("OPENAI_API_KEY")) ||
+      (getKey("PREFERRED_VOICE_VENDOR") === "gemini" && has("GEMINI_API_KEY")) ||
+      (getKey("PREFERRED_VOICE_VENDOR") === "mistral" && has("LLM_MISTRAL_API_KEY")) ||
+      (getKey("PREFERRED_VOICE_VENDOR") === "cartesia" && has("CARTESIA_API_KEY")),
     video:
       has("SEEDANCE_API_KEY") || has("KLING_API_KEY") || has("MINIMAX_API_KEY") || has("BYTEPLUS_API_KEY"),
     music: has("MUREKA_API_KEY") || has("MINIMAX_API_KEY"),
@@ -333,10 +373,19 @@ export function computeCaps(): Caps {
       has("UNSPLASH_ACCESS_KEY") ||
       has("FREESOUND_API_KEY") ||
       has("FIRECRAWL_API_KEY"),
-    transcription: has("ASSEMBLYAI_API_KEY"),
+    transcription:
+      getKey("PREFERRED_TRANSCRIPTION_PROVIDER") === "local" ||
+      has("ASSEMBLYAI_API_KEY") ||
+      (getKey("PREFERRED_TRANSCRIPTION_PROVIDER") === "openai" && has("OPENAI_API_KEY")) ||
+      (getKey("PREFERRED_TRANSCRIPTION_PROVIDER") === "mistral" && has("LLM_MISTRAL_API_KEY")) ||
+      (getKey("PREFERRED_TRANSCRIPTION_PROVIDER") === "deepgram" && has("DEEPGRAM_API_KEY")) ||
+      (getKey("PREFERRED_TRANSCRIPTION_PROVIDER") === "groq" && has("GROQ_API_KEY")) ||
+      (getKey("PREFERRED_TRANSCRIPTION_PROVIDER") === "elevenlabs" && has("ELEVENLABS_API_KEY")) ||
+      (getKey("PREFERRED_TRANSCRIPTION_PROVIDER") === "cartesia" && has("CARTESIA_API_KEY")),
     sandbox: has("E2B_API_KEY"),
     web: has("FIRECRAWL_API_KEY"),
     storage:
+      !isIsolatedDevProfile() &&
       has("R2_ACCOUNT_ID") &&
       has("R2_ACCESS_KEY_ID") &&
       has("R2_SECRET_ACCESS_KEY") &&
@@ -397,8 +446,13 @@ export async function setKeys(patch: Record<string, unknown>): Promise<void> {
       throw err;
     },
   );
-  const merged = mergeEnvText(existing, clean);
-  await writeFile(ENV_PATH, merged, "utf8");
+  const isolated = isIsolatedDevProfile(ACTIVE_PROFILE);
+  const merged = mergeEnvText(existing, clean, isolated);
+  if (isolated) {
+    await atomicWriteFile(ENV_PATH, merged, { mode: 0o600 });
+  } else {
+    await writeFile(ENV_PATH, merged, "utf8");
+  }
   for (const [name, v] of clean) {
     if (v) {
       store.set(name, v);

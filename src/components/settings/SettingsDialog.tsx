@@ -5,6 +5,12 @@ import { Icon } from '../icons';
 import { VendorIcon } from './vendorIcons';
 import { applyLiveCaps, applyLiveKeyStatus, applyLiveModels } from '../../agent/capabilities';
 import { applyAgentModelStatus } from '../../agent/model-selection';
+import {
+  TRANSCRIPTION_DIARIZATION_KEY,
+  TRANSCRIPTION_LANGUAGE_KEY,
+  setPreferredTranscriptionProvider,
+} from '../../transcript/provider';
+import { isTranscriptionProviderId } from '../../transcript/types';
 import { FieldRow, ON, VendorPane, WARN, type FieldCtx } from './settingsVendorPane';
 import { useCodexSettings } from './useCodexSettings';
 import type { CodexAgentStatus } from '../../../shared/codex-agent';
@@ -14,9 +20,13 @@ import {
   CURRENT_APP_VERSION,
   formatDisplayVersion,
   getUpstreamUpdateState,
-  requestUpstreamUpdateCheck,
+  hasDesktopUpdateSupport,
   subscribeUpstreamUpdate,
 } from '../../ui/upstreamUpdate';
+import {
+  resolveUpstreamUpdateAction,
+  runUpstreamUpdateCommand,
+} from '../../ui/upstreamUpdateAction';
 import {
   SETTINGS_CATEGORIES, buildPatch, categoryGroupStats, findGroup, groupConfigured,
   modelValue, omitKey, savedMessage, vendorConfigured,
@@ -57,6 +67,32 @@ function useKeyStatus(): {
     return () => { alive = false; };
   }, []);
   return { status, setStatus, loadError };
+}
+
+/** Keep runtime transcription preferences in sync with server-saved settings. */
+function syncTranscriptionPreferences(models: Record<string, string>): void {
+  try {
+    localStorage.setItem(TRANSCRIPTION_LANGUAGE_KEY, models.TRANSCRIPTION_LANGUAGE?.trim() || 'zh');
+    localStorage.setItem(
+      TRANSCRIPTION_DIARIZATION_KEY,
+      models.TRANSCRIPTION_DIARIZATION === '0' ? '0' : '1',
+    );
+  } catch {
+    // Best-effort; runtime language and diarization defaults remain in effect.
+  }
+  const provider = models.PREFERRED_TRANSCRIPTION_PROVIDER;
+  setPreferredTranscriptionProvider(isTranscriptionProviderId(provider) ? provider : 'assemblyai');
+}
+
+/** Keep the runtime ASR model tier in sync with the saved setting ('' → auto). */
+function syncLocalAsrModel(saved: string | undefined): void {
+  try {
+    if (saved === 'tiny' || saved === 'base' || saved === 'small' || saved === 'medium' || saved === '') {
+      localStorage.setItem('cc.asrModel', saved ?? '');
+    }
+  } catch {
+    // Best-effort; the auto tier stays in effect.
+  }
 }
 
 function useSaveKeys(values: Values, onSaved: (next: KeyStatusResponse) => void): {
@@ -196,14 +232,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const { group, page, selectGroup, selectVendor } = useTreeSelection();
   const [reveal, setReveal] = useState(false);
   const ctx = useFieldContext(status, values, setValues, reveal);
+  useEffect(() => {
+    if (!status?.models) return;
+    syncTranscriptionPreferences(status.models);
+    syncLocalAsrModel(status.models.LOCAL_ASR_MODEL);
+  }, [status]);
   const { save, saving, msg, error } = useSaveKeys(values, (next) => {
     setStatus(next);
     applySavedToAgent(next);
+    // The status effect synchronizes all transcription runtime preferences.
     setValues({});
   });
   const dirty = Object.keys(values).length > 0;
   const { requestClose, warn } = useCloseGuard(dirty, onClose);
   useEscape(requestClose);
+
+  const updateAction = resolveUpstreamUpdateAction(updateState, hasDesktopUpdateSupport());
 
   const codexStatus = ctx.codex.status;
 
@@ -223,10 +267,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <SettingsVersionControl
               versionLabel={t('当前版本号：{version}', { version: formatDisplayVersion(CURRENT_APP_VERSION) })}
-              checkLabel={t('检查更新')}
-              checkingLabel={t('检查中…')}
-              checking={updateState.phase === 'checking'}
-              onCheck={() => { void requestUpstreamUpdateCheck('manual'); }}
+              actionLabel={updateAction.label}
+              disabled={updateAction.disabled}
+              onAction={() => { runUpstreamUpdateCommand(updateAction.command); }}
             />
             <button type="button" onClick={requestClose} title={t('关闭')} style={iconBtn}><Icon name="x" size={15} /></button>
           </div>
@@ -391,7 +434,7 @@ function dot(on: boolean): React.CSSProperties {
 
 const overlay: React.CSSProperties = {
   position: 'fixed', inset: 0, background: themeAlpha.shadow(0.62), display: 'grid', placeItems: 'center',
-  zIndex: 200, padding: 24, fontFamily: 'system-ui, -apple-system, sans-serif',
+  zIndex: 200, padding: 24, fontFamily: 'Geist, system-ui, -apple-system, sans-serif',
 };
 const panel: React.CSSProperties = {
   width: 'min(940px, 100%)', height: 'min(640px, 86vh)', display: 'flex', flexDirection: 'column',

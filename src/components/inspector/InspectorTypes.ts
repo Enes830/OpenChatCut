@@ -52,6 +52,9 @@ export interface InspectorPanelProps {
   onItemFadeChange: (fade: FadePatch) => void;
   onItemTransformChange: (patch: ClipTransform) => void;
   onItemFiltersChange: (patch: ClipFilters) => void;
+  backgroundFillAvailable?: boolean;
+  onItemBackgroundFillChange?: (enabled: boolean, strength?: number) => void;
+  onApplyBackgroundFillToAll?: (strength: number) => void;
   autoGrade?: AutoGradeControlProps;
   onItemZoomChange: (patch: Partial<ZoomEffect> | null) => void;
   onItemEffectsChange: (effects: ClipEffect[]) => void;

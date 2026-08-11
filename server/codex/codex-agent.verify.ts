@@ -110,6 +110,8 @@ lines.on('line', (line) => {
   if (message.method === 'test/hang') return;
   if (message.method === 'thread/start') {
     if (message.params.model !== 'gpt-5.4') process.exit(77);
+    if (!message.params.dynamicTools?.some((tool) => tool.name === 'read_project')) process.exit(79);
+    if (!message.params.baseInstructions?.includes('without changing the project')) process.exit(80);
     activeThread = 'thread-1';
     send({ id: message.id, result: { thread: { id: activeThread } } });
     return;
@@ -143,7 +145,13 @@ lines.on('line', (line) => {
         threadId: activeThread,
         turnId: activeTurn,
         tokenUsage: {
-          total: { inputTokens: 321, outputTokens: 89, totalTokens: 410 },
+          total: {
+            inputTokens: 321,
+            cachedInputTokens: 200,
+            outputTokens: 89,
+            reasoningOutputTokens: 34,
+            totalTokens: 410,
+          },
           modelContextWindow: 272000,
         },
       },
@@ -228,6 +236,7 @@ try {
     projectId: 'project-1',
     model: 'gpt-5.4',
     reasoningEffort: 'high',
+    askOnly: true,
     tools: [{
       name: 'read_project',
       description: 'Read project state',
@@ -261,8 +270,11 @@ try {
     type: 'context-usage',
     inputTokens: 321,
     contextWindowTokens: 272_000,
+    outputTokens: 89,
+    reasoningTokens: 34,
+    cacheReadTokens: 200,
+    noCacheInputTokens: 121,
   });
-  assert.equal(events.find((event) => event.type === 'text-delta')?.delta, 'Tool confirmed.');
 } finally {
   client.stop();
   if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;

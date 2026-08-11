@@ -78,6 +78,7 @@ OpenChatCut is built for creators and developers who want AI to participate in t
 - 📝 **Transcript-driven editing**: word-level transcription, text-based cuts, pause handling, speakers, and linked captions.
 - ✨ **Generation and media**: images, video, speech, music, sound effects, and online media search.
 - 🧩 **Motion Graphics and WebGL**: editable motion templates, custom shaders, visual effects, and transitions.
+- 👁️ **Visual geometry**: in-browser person segmentation and face-safe zones — captions avoid the speaker automatically, reframe follows the subject, and overlay graphics land in empty space.
 - 📦 **Production-ready exports**: MP4, audio, captions, FCPXML, and complete project data.
 - 🖥️ **Local-first**: projects and media stay on your machine by default, while API keys remain server-side.
 
@@ -261,6 +262,12 @@ http://localhost:5199
 ```
 
 Only add the model or media-service credentials you actually use to `.env.local`. Features without configured third-party credentials report the missing key explicitly; local timeline editing, built-in media, and other configured capabilities continue to work.
+
+Development launches are isolated per Git checkout/worktree by default. `npm run dev` and
+`npm run desktop:dev` keep that checkout's projects, imported media, generation jobs,
+credentials, settings, and local authorization state under its own profile in
+`~/.openchatcut/dev-profiles/`. Use `npm run dev:shared` only when you intentionally need
+the legacy shared development store.
 
 ### Built-in Agent authentication
 
