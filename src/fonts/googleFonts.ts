@@ -39,7 +39,7 @@ async function loadGoogleFace(family: string): Promise<FontLoadResult> {
     case 'Inter Tight': return (await import('@remotion/google-fonts/InterTight')).loadFont();
     case 'LXGW WenKai TC': return (await import('@remotion/google-fonts/LXGWWenKaiTC')).loadFont();
     case 'Libre Baskerville': return (await import('@remotion/google-fonts/LibreBaskerville')).loadFont();
-    case 'Montserrat': return (await import('@remotion/google-fonts/Montserrat')).loadFont();
+    case 'Montserrat': return (await import('@remotion/google-fonts/Montserrat')).loadFont(undefined, { ignoreTooManyRequestsWarning: true });
     case 'Mulish': return (await import('@remotion/google-fonts/Mulish')).loadFont();
     case 'Newsreader': return (await import('@remotion/google-fonts/Newsreader')).loadFont();
     case 'Noto Serif SC': return (await import('@remotion/google-fonts/NotoSerifSC')).loadFont();
