@@ -5,11 +5,11 @@ import { MINIMAX_LANGUAGE_BOOSTS } from '../../../shared/media-provider-params';
 export const GENERATE_TOOL_SCHEMAS: AgentToolSchema[] = [
   {
     name: 'submit_image',
-    description: 'Generate one or more AI images (gpt-image-2, nano-banana, MiniMax image-01, WaveSpeed, or BytePlus Seedream), save them to the project media pool, and optionally propose adding them to the active timeline. Call only when the user explicitly requested the generation.',
+    description: 'Generate one or more AI images (gpt-image-2, nano-banana, MiniMax image-01, WaveSpeed, BytePlus Seedream, or xAI Grok Imagine), save them to the project media pool, and optionally propose adding them to the active timeline. Call only when the user explicitly requested the generation.',
     input_schema: {
       type: 'object',
       properties: {
-        model: { type: 'string', enum: ['gpt-image-2', 'nano-banana', 'image-01', 'wavespeed', 'byteplus'], description: 'gpt-image-2 is the default; nano-banana is best for reference-heavy work; image-01 is MiniMax (at most 9 outputs; one subject reference when R2 is configured); wavespeed is WaveSpeed AI (fast generic image models, no references); byteplus is BytePlus ModelArk Seedream (no references yet).' },
+        model: { type: 'string', enum: ['gpt-image-2', 'nano-banana', 'image-01', 'wavespeed', 'byteplus', 'grok-imagine'], description: 'gpt-image-2 is the default; nano-banana is best for reference-heavy work; image-01 is MiniMax (at most 9 outputs; one subject reference when R2 is configured); wavespeed is WaveSpeed AI (fast generic image models, no references); byteplus is BytePlus ModelArk Seedream (no references yet); grok-imagine is xAI Grok Imagine (text-to-image only, no references, at most 4 outputs, 1K/2K).' },
         prompt: { type: 'string', description: 'Detailed description of the image to generate.' },
         name: { type: 'string', description: 'Short descriptive asset name shown in the media pool.' },
         addToTimeline: { type: 'boolean', description: 'Defaults to true. Set false when the user asks to keep the result in the media pool/library only or says not to modify the timeline.' },
@@ -92,35 +92,36 @@ export const GENERATE_TOOL_SCHEMAS: AgentToolSchema[] = [
   },
   {
     name: 'submit_sound',
-    description: 'Generate one original/custom sound effect with ElevenLabs and create an audio asset in the media pool. Does not place timeline items. For ordinary whooshes, clicks, impacts, dings, and similar editing sounds, use the existing library first.',
+    description: 'Generate one sound-effect audio asset in the media pool: ElevenLabs synthesizes synchronously from a text prompt; Sonilo submits an asynchronous SFX job from a project video asset (the rendered cut, up to 3 minutes) with no prompt. Sonilo returns a jobId for track_progress. Does not place timeline items. For ordinary whooshes, clicks, impacts, dings, and similar editing sounds, use the existing library first.',
     input_schema: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', minLength: 1, description: 'Detailed sound description.' },
-        durationSeconds: { type: 'number', minimum: 0.5, maximum: 30, description: 'Optional 0.5–30 seconds. Omit to let ElevenLabs choose the duration.' },
-        promptInfluence: { type: 'number', minimum: 0, maximum: 1, description: 'Prompt adherence; defaults to 0.3.' },
-        loop: { type: 'boolean', description: 'Create a seamless loop. Requires the configured eleven_text_to_sound_v2 model.' },
-        outputFormat: { type: 'string', description: 'Official ElevenLabs codec_sample-rate_bitrate enum, e.g. mp3_44100_128, opus_48000_128, pcm_44100.' },
+        provider: { type: 'string', enum: ['elevenlabs', 'sonilo'], description: 'Defaults to elevenlabs (text prompt). sonilo generates video-matched SFX from sourceAssetId instead of a prompt.' },
+        prompt: { type: 'string', description: 'Detailed sound description. Required for elevenlabs; not used by sonilo.' },
+        durationSeconds: { type: 'number', minimum: 0.5, maximum: 30, description: 'ElevenLabs only. Optional 0.5–30 seconds; omit to let ElevenLabs choose the duration.' },
+        promptInfluence: { type: 'number', minimum: 0, maximum: 1, description: 'ElevenLabs only. Prompt adherence; defaults to 0.3.' },
+        loop: { type: 'boolean', description: 'ElevenLabs only. Create a seamless loop; requires the configured eleven_text_to_sound_v2 model.' },
+        outputFormat: { type: 'string', description: 'ElevenLabs only. Official codec_sample-rate_bitrate enum, e.g. mp3_44100_128, opus_48000_128, pcm_44100.' },
+        sourceAssetId: { type: 'string', description: 'Sonilo only. Project video asset (the rendered cut, ≤3 minutes) the SFX are generated from.' },
         name: { type: 'string', description: 'Optional media-pool asset name.' },
       },
-      required: ['prompt'],
     },
   },
   {
     name: 'submit_music',
-    description: 'Submit a Mureka or MiniMax music job. Mureka supports instrumental, lyrics song, prompt song, soundtrack, and track/stem modes with up to 3 results. MiniMax supports text-to-music and cover. Results are saved to the media pool.',
+    description: 'Submit a Mureka, MiniMax, Atlas Cloud, or Sonilo music job. Mureka supports instrumental, lyrics song, prompt song, soundtrack, and track/stem modes with up to 3 results. MiniMax supports text-to-music and cover. Atlas Cloud supports text-to-music through its asynchronous audio API. Sonilo v2m generates music from a project video asset (the rendered cut, up to 6 minutes) — video-conditioned, with a single optional style prompt. Results are saved to the media pool.',
     input_schema: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', maxLength: 2000, description: 'Style/control prompt. Required for most modes; optional with Mureka provider IDs. Mureka max is 1024 or 2000 by mode; MiniMax cover requires 10–300.' },
-        provider: { type: 'string', enum: ['mureka', 'minimax'], description: 'Defaults to mureka.' },
-        mode: { type: 'string', enum: ['instrumental', 'song', 'prompt-song', 'soundtrack', 'track', 't2m', 'cover'], description: 'Mureka: instrumental/song/prompt-song/soundtrack/track. MiniMax: t2m/cover.' },
+        prompt: { type: 'string', maxLength: 2000, description: 'Style/control prompt. Required for most modes; optional with Mureka provider IDs and Sonilo v2m (≤500, works promptless). Mureka max is 1024 or 2000 by mode; MiniMax cover requires 10–300.' },
+        provider: { type: 'string', enum: ['mureka', 'minimax', 'atlas', 'sonilo'], description: 'Defaults to mureka.' },
+        mode: { type: 'string', enum: ['instrumental', 'song', 'prompt-song', 'soundtrack', 'track', 't2m', 'cover', 'v2m'], description: 'Mureka: instrumental/song/prompt-song/soundtrack/track. MiniMax: t2m/cover. Atlas Cloud: t2m. Sonilo: v2m (video-to-music).' },
         lyrics: { type: 'string', maxLength: 5000, description: 'Mureka song/track or MiniMax t2m/cover lyrics. Provider-specific limits are validated.' },
-        isInstrumental: { type: 'boolean', description: 'MiniMax t2m only. Force instrumental.' },
+        isInstrumental: { type: 'boolean', description: 'MiniMax or Atlas Cloud t2m only. Force instrumental.' },
         lyricsOptimizer: { type: 'boolean', description: 'MiniMax t2m only. Auto-generate lyrics from prompt.' },
-        sampleRate: { type: 'integer', description: 'MiniMax only. One of 16000/24000/32000/44100; default 44100.' },
-        bitrate: { type: 'integer', description: 'MiniMax only. One of 32000/64000/128000/256000; default 256000.' },
-        audioFormat: { type: 'string', enum: ['mp3', 'wav', 'pcm', 'flac'], description: 'MiniMax: mp3/wav/pcm. Mureka: mp3/wav/flac. Default mp3.' },
+        sampleRate: { type: 'integer', description: 'MiniMax or Atlas Cloud only. One of 16000/24000/32000/44100; default 44100.' },
+        bitrate: { type: 'integer', description: 'MiniMax or Atlas Cloud only. One of 32000/64000/128000/256000; default 256000.' },
+        audioFormat: { type: 'string', enum: ['mp3', 'wav', 'pcm', 'flac'], description: 'MiniMax/Atlas Cloud: mp3/wav/pcm. Mureka: mp3/wav/flac. Default mp3.' },
         referenceAssetId: { type: 'string', description: 'MiniMax cover only. Project audio asset id; mutually exclusive with coverFeatureId.' },
         coverFeatureId: { type: 'string', description: 'MiniMax cover only. Preprocessed feature ID; requires lyrics and excludes referenceAssetId.' },
         count: { type: 'integer', minimum: 1, maximum: 3, description: 'Mureka only. Result count; defaults to 1 (official API default is 2).' },
@@ -131,7 +132,7 @@ export const GENERATE_TOOL_SCHEMAS: AgentToolSchema[] = [
         instrumentalId: { type: 'string', description: 'Mureka instrumental file ID; use instead of prompt.' },
         vocalId: { type: 'string', description: 'Mureka cloned vocal ID.' },
         melodyId: { type: 'string', description: 'Mureka lyrics-song melody ID; cannot combine with other controls.' },
-        sourceAssetId: { type: 'string', description: 'Mureka soundtrack image/video asset or track-mode audio asset.' },
+        sourceAssetId: { type: 'string', description: 'Mureka soundtrack image/video asset, track-mode audio asset, or Sonilo v2m video asset (the rendered cut, ≤6 minutes).' },
         audioStartMs: { type: 'integer', minimum: 0, description: 'Mureka soundtrack segment start in ms.' },
         audioEndMs: { type: 'integer', minimum: 0, description: 'Mureka soundtrack segment end in ms; range must be at least 3000ms.' },
         songId: { type: 'string', description: 'Mureka track source song ID; excludes sourceAssetId.' },
@@ -145,27 +146,27 @@ export const GENERATE_TOOL_SCHEMAS: AgentToolSchema[] = [
   },
   {
     name: 'submit_video',
-    description: 'Submit a Seedance 2.0, Kling, MiniMax Hailuo, or BytePlus Seedance video generation job and create one video asset in the project media pool. Does not place the video on the timeline. Keep image, video, and audio references in their matching arrays.',
+    description: 'Submit a Seedance 2.0, Kling, MiniMax Hailuo, BytePlus Seedance, xAI Grok Imagine, or OFox video generation job and create one video asset in the project media pool. Does not place the video on the timeline. Keep image, video, and audio references in their matching arrays.',
     input_schema: {
       type: 'object',
       properties: {
-        model: { type: 'string', enum: ['seedance2', 'kling', 'hailuo', 'byteplus'], description: 'hailuo is MiniMax: 6 or 10s; firstFrame optional; lastFrame allowed with firstFrame; no multi-ref or multi-shot. 1080p is 6s only. byteplus is BytePlus ModelArk Seedance — same request shape/limits as seedance2.' }, // minimax: hailuo enum
+        model: { type: 'string', enum: ['seedance2', 'kling', 'hailuo', 'byteplus', 'grok-imagine-video', 'ofox'], description: 'hailuo is MiniMax: 6 or 10s; firstFrame optional; lastFrame allowed with firstFrame; no multi-ref or multi-shot. 1080p is 6s only. byteplus is BytePlus ModelArk Seedance — same request shape/limits as seedance2. grok-imagine-video is xAI Grok Imagine: text-to-video only, 1–15s, audio track included, no references/frames. ofox is the OFox multi-model gateway (Seedance/Wan and more behind one key): 2–30s with per-model limits enforced by the API; supports firstFrame (and optional lastFrame), or up to 9 refImages (frames and refImages are mutually exclusive); no refVideos/refAudios yet.' }, // minimax: hailuo enum
         prompt: { type: 'string', description: 'Required for normal generation and Kling intelligence; omit for Kling customize.' },
         name: { type: 'string' },
-        durationSeconds: { anyOf: [{ type: 'number' }, { type: 'string' }], description: 'Integer seconds, 2–15 for Seedance, 3–15 for Kling, exactly 6 or 10 for Hailuo (Hailuo 1080p → 6 only).' }, // minimax: hailuo durations
-        ratio: { type: 'string', description: 'Seedance: 16:9, 4:3, 1:1, 3:4, 9:16, 21:9, adaptive. Kling: 16:9, 9:16, 1:1. Do not send for hailuo.' },
-        resolution: { type: 'string', enum: ['480p', '512p', '720p', '1080p', '4k'], description: 'Seedance: 480p/720p(default)/1080p/4k. Hailuo: 512p (Hailuo-02), 720p→API 768P, 1080p (6s only). Kling: pair with mode std/pro.' },
+        durationSeconds: { anyOf: [{ type: 'number' }, { type: 'string' }], description: 'Integer seconds, 2–15 for Seedance, 3–15 for Kling, exactly 6 or 10 for Hailuo (Hailuo 1080p → 6 only), 1–15 for grok-imagine-video, 2–30 for ofox (per-model limits enforced by the API).' }, // minimax: hailuo durations
+        ratio: { type: 'string', description: 'Seedance: 16:9, 4:3, 1:1, 3:4, 9:16, 21:9, adaptive. Kling: 16:9, 9:16, 1:1. grok-imagine-video: 16:9, 9:16, 1:1, 4:3, 3:4, 3:2, 2:3. ofox: 16:9, 9:16, 1:1, 4:3, 3:4, 3:2, 2:3, 21:9, 9:21. Do not send for hailuo.' },
+        resolution: { type: 'string', enum: ['480p', '512p', '720p', '1080p', '4k'], description: 'Seedance: 480p/720p(default)/1080p/4k. Hailuo: 512p (Hailuo-02), 720p→API 768P, 1080p (6s only). Kling: pair with mode std/pro. grok-imagine-video: 480p(default)/720p/1080p. ofox: 480p/720p(default)/1080p, per-model support enforced by the API.' },
         mode: { type: 'string', enum: ['std', 'pro'], description: 'Kling only; std=720p, pro=1080p.' },
         firstFrame: { type: 'string', description: 'Project image asset ID, asset:// ID, short unique ID prefix, or same-project asset path.' },
-        lastFrame: { type: 'string', description: 'Project image asset reference; requires firstFrame. Supported on seedance2, kling, and hailuo (not with multi-ref on seedance2).' },
+        lastFrame: { type: 'string', description: 'Project image asset reference; requires firstFrame. Supported on seedance2, kling, hailuo, and ofox (not with multi-ref on seedance2/ofox).' },
         refImages: { type: 'array', items: { type: 'string' } },
         refVideos: { type: 'array', items: { type: 'string' } },
         refAudios: { type: 'array', items: { type: 'string' } },
         refVideoMode: { type: 'string', enum: ['feature', 'base'], description: 'Kling only with refVideos. feature (default)=motion/camera/style guide; base=edit that source clip (keep_original_sound).' },
         promptOptimizer: { type: 'boolean', description: 'Hailuo only. MiniMax prompt_optimizer; default true. Set false for more literal prompts.' },
         fastPretreatment: { type: 'boolean', description: 'Hailuo only. MiniMax fast_pretreatment when promptOptimizer is true; default false.' },
-        generateAudio: { type: 'boolean', description: 'Seedance/BytePlus only. Generate synchronized audio; official default true.' },
-        seed: { type: 'integer', description: 'Seedance/BytePlus only. Deterministic random seed.' },
+        generateAudio: { type: 'boolean', description: 'Seedance/BytePlus/OFox. Generate synchronized audio; default true for models that support audio.' },
+        seed: { type: 'integer', description: 'Seedance/BytePlus/OFox. Random seed; determinism depends on the model.' },
         cameraFixed: { type: 'boolean', description: 'Seedance/BytePlus only. Lock camera motion; default false.' },
         watermark: { type: 'boolean', description: 'Seedance/BytePlus only. Add provider watermark; default false.' },
         returnLastFrame: { type: 'boolean', description: 'Seedance/BytePlus only. Save the returned last frame as an additional image asset.' },
@@ -183,7 +184,7 @@ export const GENERATE_TOOL_SCHEMAS: AgentToolSchema[] = [
   },
   {
     name: 'track_progress',
-    description: 'Inspect or wait for asynchronous generation jobs returned by submit_music and submit_video. Successful results are added to the project media pool exactly once.',
+    description: 'Inspect or wait for asynchronous generation jobs returned by Sonilo submit_sound, submit_music, and submit_video. Successful results are added to the project media pool exactly once.',
     input_schema: {
       type: 'object',
       properties: {

@@ -12,6 +12,7 @@ import { MAX_SEMANTIC_QUERY_LENGTH, type SemanticMatch } from './types';
 import { useSemanticSearch } from './useSemanticSearch';
 import {
   DEFAULT_SAMPLING_CONFIG,
+  normalizeSamplingConfig,
   readSamplingConfig,
   writeSamplingConfig,
   type SemanticSamplingConfig,
@@ -142,7 +143,8 @@ function SemanticPanel(props: SemanticPanelProps & {
   return <section ref={props.panelRef} style={props.style} className="cc-semantic-panel" role="dialog" aria-label={t('本地语义搜索')}>
     <PanelHeader onClose={props.onClose} t={t} />
     {semantic.state.status === 'idle' || semantic.state.status === 'error'
-      ? <EnableView state={semantic.state} onEnable={() => void semantic.enable()} t={t} />
+      ? <EnableView state={semantic.state} onEnable={() => void semantic.enable()}
+          onInstall={() => void semantic.installAndEnable()} t={t} />
       : <ReadyView {...props} state={semantic.state} runSearch={runSearch} clearSearch={clearSearch}
           index={() => void semantic.index()} rebuild={() => void rebuild()} cancel={semantic.cancel} disable={disable} />}
   </section>;
@@ -160,14 +162,36 @@ interface ViewProps {
   t: Translate;
 }
 
-function EnableView({ state, onEnable, t }: ViewProps & { onEnable: () => void }) {
+function EnableView({ state, onEnable, onInstall, t }: ViewProps & {
+  onEnable: () => void;
+  onInstall: () => void;
+}) {
+  const packAbsent = state.pack === 'absent' || state.pack === 'error';
+  const packDownloading = state.pack === 'downloading';
   return <div className="cc-semantic-empty">
     <span className="cc-semantic-empty-icon"><Icon name="sparkles" size={18} /></span>
     <div><strong>{t('按画面内容搜索素材')}</strong>
-      <p>{t('首次启用会下载可选模型。索引和搜索都在本机完成，不影响未启用时的编辑器。')}</p>
+      <p>{t('索引和搜索都在本机完成，素材不会上传，不影响未启用时的编辑器。')}</p>
     </div>
-    {state.error && <span className="cc-semantic-error">{t('语义搜索暂不可用，请重试。')}</span>}
-    <button type="button" className="primary" onClick={onEnable}><Icon name="sparkles" size={13} />{t('启用本地模型')}</button>
+    {packAbsent && (
+      <div className="cc-semantic-pack-missing">
+        <p>{state.pack === 'error'
+          ? t('模型包下载失败，请到 设置 → 本地模型 重试。')
+          : t('首次使用需要下载可选模型包（约 178MB）。模型在本机运行，素材不会上传。')}</p>
+        <button type="button" className="primary" onClick={onInstall}>
+          <Icon name="download" size={13} />{t('下载并启用')}
+        </button>
+      </div>
+    )}
+    {packDownloading && (
+      <div className="cc-semantic-pack-missing">
+        <p>{t('正在下载画面语义轻量包… {n}%', { n: state.packProgress })}</p>
+      </div>
+    )}
+    {!packAbsent && !packDownloading && <>
+      {state.error && <span className="cc-semantic-error">{t('语义搜索暂不可用，请重试。')}</span>}
+      <button type="button" className="primary" onClick={onEnable}><Icon name="sparkles" size={13} />{t('启用本地模型')}</button>
+    </>}
   </div>;
 }
 
@@ -194,6 +218,7 @@ function ReadyView(props: ReadyViewProps) {
     <IndexStatus {...props} />
     <SamplingSettings t={t} />
     <SearchResults state={state} names={props.names} t={t} />
+    <TextResults state={state} names={props.names} t={t} />
     <DuplicateResults state={state} names={props.names} t={t} />
   </div>;
 }
@@ -235,6 +260,28 @@ function SearchResults({ state, names, t }: ViewProps & { names: Map<string, str
   </div>;
 }
 
+function describeTextHit(ref: string): string {
+  const separator = ref.lastIndexOf(':');
+  if (separator <= 0) return ref;
+  const prefix = ref.slice(0, separator);
+  const tail = ref.slice(separator + 1);
+  if (prefix.startsWith('chat:')) return `聊天第 ${Number(tail) + 1} 条`;
+  if (tail === 'captions') return '字幕';
+  if (tail === 'transcript') return '转写';
+  return ref;
+}
+
+function TextResults({ state, t }: ViewProps & { names: Map<string, string> }) {
+  if (state.textHits.length === 0) return null;
+  return <div className="cc-semantic-results">
+    <strong>{t('相关文本 {n} 处', { n: state.textHits.length })}</strong>
+    {state.textHits.slice(0, 5).map((hit) => <span key={`${hit.kind}:${hit.ref}`}>
+      <b>{describeTextHit(hit.ref)}</b>
+      <em>{hit.kind}</em>
+    </span>)}
+  </div>;
+}
+
 function DuplicateResults({ state, names, t }: ViewProps & { names: Map<string, string> }) {
   if (state.duplicates.length === 0) return null;
   return <div className="cc-semantic-results">
@@ -259,7 +306,7 @@ function SamplingSettings({ t }: { t: Translate }) {
     setDraft((current) => ({ ...current, [field]: Number(event.target.value) }));
   };
   const save = () => {
-    writeSamplingConfig(draft);
+    writeSamplingConfig(normalizeSamplingConfig(draft));
     showAppToast(t('采样设置已保存，重建索引后生效。'));
   };
   const reset = () => {
@@ -269,7 +316,7 @@ function SamplingSettings({ t }: { t: Translate }) {
   };
   return <details className="cc-semantic-sampling">
     <summary>{t('采样设置')}</summary>
-    <p className="cc-semantic-sampling-note">{t('索引帧采样密度，网页与桌面端通用。改动需重建索引生效。')}</p>
+    <p className="cc-semantic-sampling-note">{t('索引帧采样与搜索参数，网页与桌面端通用。改动索引相关项需重建索引生效。')}</p>
     <label>
       <span>{t('兜底间隔（秒）')}</span>
       <input type="number" min={1} max={300} value={draft.intervalSeconds}
@@ -284,6 +331,26 @@ function SamplingSettings({ t }: { t: Translate }) {
       <span>{t('场景模式上限')}</span>
       <input type="number" min={1} max={480} value={draft.maxSceneFrames}
         onChange={update('maxSceneFrames')} />
+    </label>
+    <label>
+      <span>{t('搜索结果条数')}</span>
+      <input type="number" min={1} max={100} value={draft.resultLimit}
+        onChange={update('resultLimit')} />
+    </label>
+    <label>
+      <span>{t('搜索结果相对下限')}</span>
+      <input type="number" min={0} max={1} step={0.01} value={draft.relativeFloor}
+        onChange={update('relativeFloor')} />
+    </label>
+    <label>
+      <span>{t('疑似重复阈值')}</span>
+      <input type="number" min={0} max={0.999} step={0.001} value={draft.duplicateThreshold}
+        onChange={update('duplicateThreshold')} />
+    </label>
+    <label>
+      <span>{t('长视频阈值（秒）')}</span>
+      <input type="number" min={10} max={600} value={draft.longVideoSeconds}
+        onChange={update('longVideoSeconds')} />
     </label>
     <div className="cc-semantic-sampling-actions">
       <button type="button" onClick={save}>{t('保存')}</button>

@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
 import type { ToolResultPart } from 'ai';
-import { loadChat, saveChat } from '../persist/projectStore';
+import {
+  loadChatResult,
+  saveChat,
+  type PersistedChat,
+} from '../persist/projectStore';
 import {
   clearProposal,
   loadProposalRecord,
@@ -19,16 +23,22 @@ import {
 } from '../persist/agentSessionGeneration';
 import { normalizeLlmMessages, prepareMessagesForProvider } from './messages';
 import { normalizeLlmProvider, PROVIDER } from './providerConfig';
-import { initialAgentMessages, type DisplayMessage } from './agent-session';
+import { ensureAgentRetryMetadata, initialAgentMessages, type DisplayMessage } from './agent-session';
 import { isProposalStale, type Proposal } from './proposal';
 import { parseAgentChangeLog } from './changeLog';
+import type { AgentContextUsage } from './context-compaction';
 import { projectToolResultForPersistence } from './runtime-artifact';
 import {
   currentAgentRunOwnerInstanceId,
-  resumeAgentRun,
   stopAgentRunLeases,
   type ProposalRuntimeStatus,
 } from './runtime-ledger';
+import { settleServerRun } from './serverRunSettleClient';
+import {
+  clearStoredServerRun,
+  readStoredServerRun,
+} from './serverRunSessionStorage';
+import { storedServerRunPreservesHydration } from './serverRunRecovery';
 import {
   loadAgentRuntimeSidecar,
   recoverInterruptedAgentRuns,
@@ -36,6 +46,7 @@ import {
 } from '../persist/agentRuntimeStore';
 import type { AgentHookState } from './useAgentState';
 import type { LLMMessage } from './runtime';
+import { showAppToast } from '../ui/appToast';
 
 export async function recordProposalOutcome(
   projectId: string,
@@ -47,12 +58,32 @@ export async function recordProposalOutcome(
   if (!proposal.agentRunId || !proposal.id) return;
   const sidecar = await loadAgentRuntimeSidecar(projectId);
   const run = sidecar.runs.find((candidate) => candidate.runId === proposal.agentRunId);
-  if (!run) throw new Error('Agent proposal run is missing.');
-  if (['completed', 'failed', 'aborted', 'interrupted'].includes(run.status)) return;
-  const recorder = await resumeAgentRun(projectId, proposal.agentRunId);
-  if (!recorder) throw new Error('Agent proposal is active in another editor or no longer resumable.');
-  await recorder.recordProposal(proposal.id, status);
-  await recorder.finalize(finalStatus, summary);
+  if (!run) {
+    // The run was pruned by retention or never persisted; the proposal is
+    // already settled by the caller, so this is a no-op cleanup, not an
+    // error that should block future hydration (it previously threw and
+    // permanently broke chat loading for the project).
+    clearStoredServerRun(projectId, proposal.agentRunId);
+    return;
+  }
+  if (['completed', 'failed', 'aborted', 'interrupted'].includes(run.status)) {
+    clearStoredServerRun(projectId, proposal.agentRunId);
+    return;
+  }
+  // The proposal is already settled by the caller; the ledger entry is
+  // best-effort and idempotent on the server (a missing or already
+  // terminal run is not an error). Leave transport failures to the next
+  // hydration recovery instead of failing the user-facing settlement.
+  await settleServerRun(projectId, proposal.agentRunId, {
+    status: finalStatus as 'completed' | 'failed' | 'aborted' | 'interrupted'
+      | 'waiting_approval',
+    proposalId: proposal.id,
+    proposalRuntimeStatus: status,
+    ...(summary ? { summary } : {}),
+  });
+  if (['completed', 'failed', 'aborted', 'interrupted'].includes(finalStatus)) {
+    clearStoredServerRun(projectId, proposal.agentRunId);
+  }
 }
 
 function externalProposalRunIds(external: StoredExternalProposal | null): Set<string> {
@@ -124,17 +155,17 @@ async function recoverDurableProposal(
 async function claimRecoveredProposalRun(
   projectId: string,
   record: StoredProposalRecord | null,
-) {
+): Promise<{ runId: string } | null> {
   const runId = record?.phase !== 'settled' ? record?.proposal.agentRunId : undefined;
   if (!runId) return null;
-  const recorder = await resumeAgentRun(projectId, runId);
-  if (recorder) return recorder;
-  const run = (await loadAgentRuntimeSidecar(projectId)).runs
-    .find((candidate) => candidate.runId === runId);
-  if (run && !['completed', 'failed', 'aborted', 'interrupted'].includes(run.status)) {
-    throw new Error('Agent proposal is active in another editor.');
+  // The server owns the run; hydration only checks the record still exists
+  // so the proposal can be re-exposed. No sidecar write happens here.
+  const sidecar = await loadAgentRuntimeSidecar(projectId);
+  const run = sidecar.runs.find((candidate) => candidate.runId === runId);
+  if (!run || ['completed', 'failed', 'aborted', 'interrupted'].includes(run.status)) {
+    return null;
   }
-  return null;
+  return { runId };
 }
 
 export async function loadRecoveredAgentSession(
@@ -145,42 +176,79 @@ export async function loadRecoveredAgentSession(
 ) {
   const generation = await currentAgentSessionGeneration(projectId);
   adoptAgentSessionWriteGeneration(projectId, generation);
-  const [record, external] = await Promise.all([
+  const [record, external, chatResult] = await Promise.all([
     loadProposalRecord(projectId),
     loadExternalProposal(projectId),
+    loadChatResult(projectId),
   ]);
+  const saved = chatResult.status === 'ok' ? chatResult.chat : null;
+  const chatUnreadable = chatResult.status === 'unreadable';
   if (!alive() || await currentAgentSessionGeneration(projectId) !== generation) return null;
   const externalRunIds = externalProposalRunIds(external);
-  await recover(
-    projectId,
-    Date.now(),
-    preservedProposalRunIds(record, external),
-    externalRunIds,
-    currentAgentRunOwnerInstanceId(),
-  );
+  const preservedRunIds = preservedProposalRunIds(record, external);
+  const storedServerRun = readStoredServerRun(projectId);
+  if (storedServerRunPreservesHydration(storedServerRun)) {
+    preservedRunIds.add(storedServerRun.runId);
+  }
+  // Fast path: only write (mutate) when there is an interrupted run that
+  // actually needs recovery. A plain reopen with no active runs must not
+  // bump the sidecar revision or serialize a write per navigation. Also
+  // covers recover()'s approval-cancellation branch: a stale external
+  // record whose run is preserved must still cancel its pending approvals.
+  const sidecarBefore = await loadAgentRuntimeSidecar(projectId);
+  const now = Date.now();
+  const needsRecovery = sidecarBefore.runs.some((run) => {
+    if (['completed', 'failed', 'aborted', 'interrupted'].includes(run.status)) return false;
+    if (preservedRunIds.has(run.runId)) {
+      return externalRunIds.has(run.runId)
+        && (!run.ownerInstanceId || !run.leaseExpiresAt || run.leaseExpiresAt <= now);
+    }
+    return !run.ownerInstanceId || !run.leaseExpiresAt || run.leaseExpiresAt <= now;
+  });
+  if (needsRecovery) {
+    await recover(
+      projectId,
+      Date.now(),
+      preservedRunIds,
+      externalRunIds,
+      currentAgentRunOwnerInstanceId(),
+    );
+  }
   if (!alive() || await currentAgentSessionGeneration(projectId) !== generation) return null;
   const proposalRecorder = await claimRecoveredProposalRun(projectId, record);
-  if (!alive() || await currentAgentSessionGeneration(projectId) !== generation) {
-    await proposalRecorder?.releaseLease().catch(() => undefined);
-    return null;
-  }
+  if (!alive() || await currentAgentSessionGeneration(projectId) !== generation) return null;
   const pending = currentDoc
     ? await recoverDurableProposal(projectId, record, currentDoc)
     : record?.phase === 'prepared' ? record.proposal : null;
   if (pending?.agentRunId) {
     if (!proposalRecorder) {
+      // The run behind this proposal is gone (terminal/collected); settle it
+      // stale and clear it so the durable record does not block future opens.
       await settleProposal(projectId, pending, 'stale');
       await clearProposal(projectId, pending.id);
-      throw new Error('Agent proposal run is no longer resumable.');
+      return null;
     }
-    await proposalRecorder.finalize('waiting_approval', 'proposal recovered awaiting approval');
+    await settleServerRun(projectId, pending.agentRunId, {
+      status: 'waiting_approval',
+      summary: 'proposal recovered awaiting approval',
+    });
   }
-  const saved = await loadChat(projectId);
-  if (!alive() || await currentAgentSessionGeneration(projectId) !== generation) {
-    await proposalRecorder?.releaseLease().catch(() => undefined);
-    return null;
-  }
-  return { saved, pending, generation };
+  if (!alive() || await currentAgentSessionGeneration(projectId) !== generation) return null;
+  return { saved, pending, generation, chatUnreadable };
+}
+
+function persistedContextUsage(value: unknown): AgentContextUsage | null {
+  if (!value || typeof value !== 'object') return null;
+  const usage = value as AgentContextUsage;
+  return Number.isSafeInteger(usage.inputTokens) && usage.inputTokens >= 0
+    && Number.isSafeInteger(usage.contextWindowTokens) && usage.contextWindowTokens > 0
+    && typeof usage.contextWindowEstimated === 'boolean'
+    && typeof usage.isEstimated === 'boolean'
+    && typeof usage.modelId === 'string'
+    && typeof usage.compacted === 'boolean'
+    && Number.isSafeInteger(usage.messageCount) && usage.messageCount >= 0
+    ? usage
+    : null;
 }
 
 export async function hydrateAgentSession(
@@ -195,8 +263,19 @@ export async function hydrateAgentSession(
     state.ctxRef.current.getDoc(),
   );
   if (!loaded || !alive()) return;
-  const { saved, pending } = loaded;
-  state.setMessages(saved ? (saved.messages as DisplayMessage[]) : []);
+  const { saved, pending, chatUnreadable } = loaded;
+  if (chatUnreadable) {
+    // A stored conversation exists but could not be read. Hydrating an empty
+    // session would let the next persist overwrite it, so stop here: leave
+    // hydratedRef/hydrated false (which gates both persistence and new runs)
+    // and surface the reason instead of silently showing an empty chat.
+    state.setMessages([{
+      role: 'error',
+      text: '聊天记录暂时无法读取，已停止加载以避免覆盖已保存的对话。请刷新页面重试。',
+    }]);
+    return;
+  }
+  state.setMessages(saved ? ensureAgentRetryMetadata(saved.messages as DisplayMessage[]) : []);
   state.setChangeLog(parseAgentChangeLog(saved?.changeLog));
   if (saved) {
     const source = normalizeLlmProvider(saved.llmProvider ?? 'anthropic');
@@ -205,7 +284,9 @@ export async function hydrateAgentSession(
     state.llmRef.current = initialAgentMessages();
   }
   state.toolFailuresRef.current.restore(saved?.toolFailures);
-  state.refreshEstimatedContextUsage();
+  const contextUsage = persistedContextUsage(saved?.contextUsage);
+  if (contextUsage) state.replaceContextUsage(contextUsage);
+  else state.refreshEstimatedContextUsage();
   state.llmProviderRef.current = PROVIDER;
   if (pending) state.setProposal(pending);
   state.hydratedRef.current = true;
@@ -218,15 +299,19 @@ export function cleanupAgentHydration(
   stopLeases: typeof stopAgentRunLeases = stopAgentRunLeases,
 ): void {
   const activeExecution = state.runningRef.current || state.abortRef.current !== null;
-  state.pendingGuardRef.current?.resolve('deny');
   state.abortRef.current?.abort();
   if (!activeExecution) void stopLeases(projectId);
 }
 
-export function useAgentHydration(state: AgentHookState, projectId: string): void {
+export function useAgentHydration(
+  state: AgentHookState,
+  projectId: string,
+  enabled = true,
+): void {
   const stateRef = useRef(state);
   stateRef.current = state;
   useEffect(() => {
+    if (!enabled) return undefined;
     let mounted = true;
     const current = stateRef.current;
     const hydrationEpoch = ++current.hydrationEpochRef.current;
@@ -237,12 +322,12 @@ export function useAgentHydration(state: AgentHookState, projectId: string): voi
     current.setChangeLog([]);
     current.setProposal(null);
     current.setProposalStale(false);
-    void hydrateAgentSession(current, projectId, alive).catch((error) => {
+    void hydrateAgentSession(current, projectId, alive).catch(() => {
+      // Recovery is best-effort: another editor may hold the run lease, or a
+      // transient CAS contest with the server writer may have exhausted
+      // retries. The proposal/run records stay persisted and are retried on
+      // the next open, so surfacing these as chat errors is noise, not help.
       if (!alive()) return;
-      current.setMessages((messages) => [...messages, {
-        role: 'error',
-        text: `Agent 恢复状态无法验证：${error instanceof Error ? error.message : String(error)}`,
-      }]);
       current.hydratedRef.current = true;
       current.setHydrated(true);
     });
@@ -250,7 +335,7 @@ export function useAgentHydration(state: AgentHookState, projectId: string): voi
       mounted = false;
       cleanupAgentHydration(current, projectId);
     };
-  }, [projectId, state.refreshEstimatedContextUsage]);
+  }, [enabled, projectId, state.refreshEstimatedContextUsage]);
 }
 
 function messagesForPersistence(messages: DisplayMessage[]): DisplayMessage[] {
@@ -365,24 +450,49 @@ export function projectLlmMessagesForPersistence(messages: readonly LLMMessage[]
     });
 }
 
-function persistAgentSession(state: AgentHookState, projectId: string): void {
-  void saveChat(projectId, {
+export function agentSessionSnapshot(
+  state: AgentHookState,
+  llm: readonly LLMMessage[] = state.llmRef.current,
+): PersistedChat {
+  return {
     messages: messagesForPersistence(state.messages),
-    llm: projectLlmMessagesForPersistence(state.llmRef.current),
+    llm: projectLlmMessagesForPersistence(llm),
     changeLog: state.changeLog,
+    contextUsage: state.contextUsageRef.current ?? undefined,
     llmFormat: 'ai-sdk-v1',
     llmProvider: state.llmProviderRef.current,
     toolFailures: state.toolFailuresRef.current.snapshot(),
-  });
-
+  };
 }
 
-export function useAgentPersistence(state: AgentHookState, projectId: string): void {
+// Surface chat-write failures once per failing streak, the same way project
+// saves do. Silently console.error'ing meant a user could talk for an hour,
+// refresh, and find the conversation gone with no prior warning.
+let chatSaveFailureShown = false;
+
+function persistAgentSession(state: AgentHookState, projectId: string): void {
+  void saveChat(projectId, agentSessionSnapshot(state)).then(
+    () => { chatSaveFailureShown = false; },
+    (error: unknown) => {
+      console.error('[agent] chat persistence failed:', error);
+      if (chatSaveFailureShown) return;
+      chatSaveFailureShown = true;
+      showAppToast('聊天记录保存失败，本次对话可能不会被保留。请检查存储后重试。', { error: true });
+    },
+  );
+}
+
+export function useAgentPersistence(
+  state: AgentHookState,
+  projectId: string,
+  enabled = true,
+): void {
   const stateRef = useRef(state);
   stateRef.current = state;
   useEffect(() => {
+    if (!enabled) return;
     const current = stateRef.current;
-    if (!current.hydratedRef.current || current.runningRef.current) return;
+    if (!current.hydratedRef.current || current.runningRef.current) return undefined;
     persistAgentSession(current, projectId);
-  }, [state.messages, state.changeLog, state.running, projectId]);
+  }, [enabled, state.messages, state.changeLog, state.running, projectId]);
 }

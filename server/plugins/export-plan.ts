@@ -19,6 +19,7 @@ export type ExportRequest = {
   state?: unknown;
   project?: unknown;
   timelineId?: unknown;
+  operationId?: unknown;
   format?: 'video' | 'audio';
   codec?: 'h264' | 'vp8' | 'prores' | 'mp3' | 'wav';
   name?: string;
@@ -189,6 +190,7 @@ export function planExport(body: ExportRequest | null): ExportPlan {
     frameRange,
     totalFrames: frames,
     filename: exportFilename(body?.name, media.ext),
+    // The fps filter drops or duplicates frames while preserving duration.
     durationSeconds: frames / fps,
     scale: exportScale(state, body?.resolution),
     retimeFps,

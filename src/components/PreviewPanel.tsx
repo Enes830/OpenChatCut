@@ -12,7 +12,8 @@ import {
   type TimelineState,
   type TrackId,
 } from '../editor/types';
-import { canvasRegionRef, emitSelectionRef, regionFromDrag, useSelectionRefMode } from '../agent/selection-refs';
+import { useSelectionRefMode } from '../agent/selection-refs';
+import { RegionPickOverlay } from './preview/RegionPickOverlay';
 import { CaptionPreviewEditor } from '../captions/CaptionPreviewEditor';
 import type { CaptionSelectionRef } from '../captions/captionSelection';
 import type { CaptionsData } from '../captions/types';
@@ -36,7 +37,7 @@ import { SlipTwoUpPreview } from './SlipTwoUpPreview';
 import { PREVIEW_SHARED_AUDIO_TAGS } from './previewAudioPool';
 import { SafeZoneOverlay } from './SafeZoneOverlay';
 import { PreviewTransformOverlay } from './preview/PreviewTransformOverlay';
-import { fitPreviewCanvasSize, type PreviewCanvasSize } from './preview/previewCanvasGeometry';
+import { fitPreviewCanvasSize, previewPaddedClientSize, previewStageContentSize, type PreviewCanvasSize } from './preview/previewCanvasGeometry';
 
 const MEDIA_LOADING_NOTICE_DELAY_MS = 160;
 
@@ -123,6 +124,18 @@ export const PreviewPanel = memo(function PreviewPanel({
   }), [project, state, timelineId]);
   const preview = usePreviewProjectDoc(renderProject, timelineId);
   const duration = preview.plan.durationInFrames;
+  const playerInputProps = useMemo(() => ({
+    state: preview.state,
+    project: preview.project,
+    timelineId,
+    selectedItemId: selectedItem?.id,
+    onSelectedPreviewStatus,
+  }), [preview.state, preview.project, timelineId, selectedItem?.id, onSelectedPreviewStatus]);
+  const thumbnailInputProps = useMemo(() => ({
+    state: preview.state,
+    project: preview.project,
+    timelineId,
+  }), [preview.state, preview.project, timelineId]);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoBoxRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -217,15 +230,26 @@ export const PreviewPanel = memo(function PreviewPanel({
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage || typeof ResizeObserver === 'undefined') return undefined;
-    const measure = () => {
-      const next = { width: stage.clientWidth, height: stage.clientHeight };
+    const apply = (next: PreviewCanvasSize) => {
       setStageSize((current) => (
         current.width === next.width && current.height === next.height ? current : next
       ));
     };
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) apply(previewStageContentSize(entry));
+    });
     observer.observe(stage);
-    measure();
+    const style = getComputedStyle(stage);
+    apply(previewPaddedClientSize(
+      { width: stage.clientWidth, height: stage.clientHeight },
+      {
+        left: Number.parseFloat(style.paddingLeft) || 0,
+        right: Number.parseFloat(style.paddingRight) || 0,
+        top: Number.parseFloat(style.paddingTop) || 0,
+        bottom: Number.parseFloat(style.paddingBottom) || 0,
+      },
+    ));
     return () => observer.disconnect();
   }, []);
   // Selection mode (canvas-region-marked): drag a marquee → region reference
@@ -339,7 +363,7 @@ export const PreviewPanel = memo(function PreviewPanel({
             <Player
               ref={playerRef}
               component={TimelineComposition}
-              inputProps={{ state: preview.state, project: preview.project, timelineId, selectedItemId: selectedItem?.id, onSelectedPreviewStatus }}
+              inputProps={playerInputProps}
               durationInFrames={duration}
               fps={state.fps}
               compositionWidth={state.width}
@@ -355,6 +379,7 @@ export const PreviewPanel = memo(function PreviewPanel({
               // double-toggle it to a no-op).
               clickToPlay={fullscreen}
               spaceKeyToPlayOrPause={false}
+              acknowledgeRemotionLicense
               // No loop: playback stops at the final frame (editor convention).
               // Restart by pressing play again.
             />
@@ -362,7 +387,7 @@ export const PreviewPanel = memo(function PreviewPanel({
               <div className="cc-preview-hover-frame" aria-label={t('时间线悬停预览')}>
                 <Thumbnail
                   component={TimelineComposition}
-                  inputProps={{ state: preview.state, project: preview.project, timelineId }}
+                  inputProps={thumbnailInputProps}
                   frameToDisplay={hoverPreviewFrame}
                   durationInFrames={duration}
                   fps={state.fps}
@@ -434,63 +459,3 @@ export const PreviewPanel = memo(function PreviewPanel({
     </section>
   );
 });
-
-
-// Selection-mode marquee over the video rect: drag a rectangle → canvas-region
-// reference in COMPOSITION coordinates, with the visual clips it covers at the
-// current frame (emits openchatcut:canvas-region-marked).
-function RegionPickOverlay({ state, playerRef }: { state: TimelineState; playerRef: RefObject<PlayerRef | null> }) {
-  const t = useT();
-  const boxRef = useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
-  const pos = (event: React.PointerEvent) => {
-    const rect = boxRef.current!.getBoundingClientRect();
-    return {
-      x: Math.min(Math.max(event.clientX - rect.left, 0), rect.width),
-      y: Math.min(Math.max(event.clientY - rect.top, 0), rect.height),
-    };
-  };
-  return (
-    <div
-      ref={boxRef}
-      title={t('拖拽框选画面区域作为引用')}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return; // left button only
-        event.currentTarget.setPointerCapture(event.pointerId);
-        const p = pos(event);
-        setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
-      }}
-      onPointerMove={(event) => {
-        if (!drag) return;
-        const p = pos(event);
-        setDrag((d) => (d ? { ...d, x1: p.x, y1: p.y } : d));
-      }}
-      onPointerUp={() => {
-        if (!drag || !boxRef.current) return;
-        const rect = boxRef.current.getBoundingClientRect();
-        const region = regionFromDrag(
-          { x: drag.x0, y: drag.y0 }, { x: drag.x1, y: drag.y1 },
-          rect.width, rect.height, state.width, state.height,
-        );
-        if (region) {
-          emitSelectionRef(canvasRegionRef(region, Math.round(playerRef.current?.getCurrentFrame() ?? 0), state));
-        }
-        setDrag(null);
-      }}
-      style={{ position: 'absolute', inset: 0, zIndex: 5, cursor: 'crosshair', touchAction: 'none' }}
-    >
-      {drag && (
-        <div style={{
-          position: 'absolute',
-          left: Math.min(drag.x0, drag.x1),
-          top: Math.min(drag.y0, drag.y1),
-          width: Math.abs(drag.x1 - drag.x0),
-          height: Math.abs(drag.y1 - drag.y0),
-          border: `0.5px solid ${theme.accent}`,
-          background: themeAlpha.accent(0.14), // theme.accent @ 14%
-          pointerEvents: 'none',
-        }} />
-      )}
-    </div>
-  );
-}

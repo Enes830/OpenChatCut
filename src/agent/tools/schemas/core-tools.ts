@@ -1,10 +1,12 @@
 import type { AgentToolSchema } from '../../tool-schema';
+import { jianyingExportToolSchema } from '../jianying-export-tool';
 
 /** Core schemas shared by the browser registry and the server-side data-only executor. */
 export const CORE_TOOL_SCHEMAS: AgentToolSchema[] = [
+  jianyingExportToolSchema,
   {
     name: 'read_timeline',
-    description: 'Read the current timeline: fps and every clip (id, track, name, startFrame, durationInFrames, props). Call this first to see current state before editing.',
+    description: 'Read the current timeline: fps and every clip, including canonical media linkage (sourceAssetId, resolvedSourceAssetId, linkStatus), exact source window (srcInFrame, sourceStartFrame, sourceDurationInFrames, sourceEndFrameExclusive), and editable state (keyframes, transform, filters, volume, fades). Call this first to see current state before editing.',
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -37,7 +39,7 @@ export const CORE_TOOL_SCHEMAS: AgentToolSchema[] = [
     input_schema: {
       type: 'object',
       properties: {
-        itemId: { type: 'string' },
+        itemId: { type: 'string', minLength: 1 },
         props: { type: 'object', description: 'Map of propKey → new value.' },
       },
       required: ['itemId', 'props'],
@@ -49,7 +51,7 @@ export const CORE_TOOL_SCHEMAS: AgentToolSchema[] = [
     input_schema: {
       type: 'object',
       properties: {
-        itemId: { type: 'string' },
+        itemId: { type: 'string', minLength: 1 },
         track: { type: 'string', description: 'Current compatible track alias or stable id.' },
         startFrame: { type: 'number' },
       },
@@ -62,7 +64,7 @@ export const CORE_TOOL_SCHEMAS: AgentToolSchema[] = [
     input_schema: {
       type: 'object',
       properties: {
-        itemId: { type: 'string' },
+        itemId: { type: 'string', minLength: 1 },
         startFrame: { type: 'number' },
         durationInFrames: { type: 'number' },
         fadeInSeconds: { type: 'number', description: 'Fade-in length in seconds (0 clears).' },
@@ -75,17 +77,17 @@ export const CORE_TOOL_SCHEMAS: AgentToolSchema[] = [
   {
     name: 'duplicate_item',
     description: 'Duplicate a clip (the copy is appended to the end of its track).',
-    input_schema: { type: 'object', properties: { itemId: { type: 'string' } }, required: ['itemId'] },
+    input_schema: { type: 'object', properties: { itemId: { type: 'string', minLength: 1 } }, required: ['itemId'] },
   },
   {
     name: 'remove_item',
     description: 'Delete a clip from the timeline. ripple:true also closes the gap — later clips on the same track shift left by the removed clip\'s length (a ripple delete); default leaves a gap.',
-    input_schema: { type: 'object', properties: { itemId: { type: 'string' }, ripple: { type: 'boolean' } }, required: ['itemId'] },
+    input_schema: { type: 'object', properties: { itemId: { type: 'string', minLength: 1 }, ripple: { type: 'boolean' } }, required: ['itemId'] },
   },
   {
     name: 'split_item',
     description: 'Split a clip into two at the given absolute frame.',
-    input_schema: { type: 'object', properties: { itemId: { type: 'string' }, atFrame: { type: 'number' } }, required: ['itemId', 'atFrame'] },
+    input_schema: { type: 'object', properties: { itemId: { type: 'string', minLength: 1 }, atFrame: { type: 'number' } }, required: ['itemId', 'atFrame'] },
   },
   {
     name: 'list_audio',
@@ -123,10 +125,10 @@ export const CORE_TOOL_SCHEMAS: AgentToolSchema[] = [
         prompt: { type: 'string', description: 'Brief of what the motion graphic should show/animate.' },
         description: { type: 'string', description: 'Alias of prompt (local).' },
         name: { type: 'string', description: 'Short media-pool display name.' },
-        durationSeconds: { type: 'number', description: 'Duration in seconds (default 3).' },
-        durationInFrames: { type: 'number', description: 'Duration in frames (overrides durationSeconds when set).' },
-        width: { type: 'number', description: 'Natural width px (default 1920).' },
-        height: { type: 'number', description: 'Natural height px (default 1080).' },
+        durationSeconds: { type: 'number', minimum: 0.5, maximum: 600, description: 'Duration in seconds (default 3).' },
+        durationInFrames: { type: 'number', minimum: 15, maximum: 36000, description: 'Duration in frames (overrides durationSeconds when set).' },
+        width: { type: 'number', minimum: 16, maximum: 8192, description: 'Natural width px (default 1920).' },
+        height: { type: 'number', minimum: 16, maximum: 8192, description: 'Natural height px (default 1080).' },
       },
       required: ['name'],
     },
@@ -141,10 +143,10 @@ export const CORE_TOOL_SCHEMAS: AgentToolSchema[] = [
         description: { type: 'string', description: 'What the motion graphic should show/animate.' },
         prompt: { type: 'string', description: 'Alias of description.' },
         name: { type: 'string', description: 'Short display name.' },
-        durationSeconds: { type: 'number', description: 'Duration in seconds (default 3).' },
-        durationInFrames: { type: 'number' },
-        width: { type: 'number' },
-        height: { type: 'number' },
+        durationSeconds: { type: 'number', minimum: 0.5, maximum: 600, description: 'Duration in seconds (default 3).' },
+        durationInFrames: { type: 'number', minimum: 15, maximum: 36000 },
+        width: { type: 'number', minimum: 16, maximum: 8192 },
+        height: { type: 'number', minimum: 16, maximum: 8192 },
       },
       required: ['name'],
     },

@@ -1,8 +1,7 @@
 import type { ModelMessage } from 'ai';
 import type { ProviderOptions } from '@ai-sdk/provider-utils';
 import type { AgentToolSchema } from './tool-schema';
-import { isExternalGlobalReadTool, isExternalReadTool } from './external-tool-policy';
-import { routedToolSelection } from './tool-routing';
+import { hasMutationRoutingIntent, routedToolSelection } from './tool-routing';
 import { activatedToolNamesForResult } from './skills/skill-tool-activation';
 
 const BOOT_TOOL_NAMES: Record<string, true> = {
@@ -15,21 +14,21 @@ const BOOT_TOOL_NAMES: Record<string, true> = {
   read_agent_artifact: true,
 };
 
-const READ_ONLY_TERMS = ['不要修改', '不要编辑', '只读', 'read only', 'read-only', 'do not edit', "don't edit", 'without editing'];
-const CAPABILITY_TERMS = ['tool', 'tools', 'capability', 'capabilities', 'ability', 'abilities', '工具', '能力'];
-const DISCOVERY_TERMS = ['what', 'which', 'available', 'list', 'find', 'show', 'discover', '哪些', '什么', '可用', '列出', '查看', '看看', '查一下', '找一下'];
+const READ_ONLY_TERMS = [
+  '不要修改', '不要编辑', '只读',
+  'read only', 'read-only', 'do not edit', "don't edit", 'without editing',
+];
 
-function isReadOnlyRequest(request: string): boolean {
-  return READ_ONLY_TERMS.some((term) => request.includes(term));
-}
-function isDomainToolDiscoveryRequest(request: string): boolean {
-  return CAPABILITY_TERMS.some((term) => request.includes(term))
-    && DISCOVERY_TERMS.some((term) => request.includes(term));
-}
-function isReadOnlyTool(name: string): boolean {
-  return BOOT_TOOL_NAMES[name] === true
-    || isExternalGlobalReadTool(name)
-    || isExternalReadTool(name);
+/** A natural-language hint may narrow initial routing, but never becomes tool authority. */
+function isReadOnlyRoutingHint(request: string): boolean {
+  let remainder = request.toLowerCase();
+  let matched = false;
+  for (const term of READ_ONLY_TERMS) {
+    if (!remainder.includes(term)) continue;
+    matched = true;
+    remainder = remainder.split(term).join('');
+  }
+  return matched && !hasMutationRoutingIntent(remainder);
 }
 
 
@@ -48,16 +47,8 @@ function latestUserText(messages: readonly ModelMessage[]): string {
   }
   return '';
 }
-function bootNames(
-  messages: readonly ModelMessage[],
-  routed: readonly string[],
-  routingOverflow: boolean,
-): string[] {
-  const retainSearch = routingOverflow || routed.length === 0
-    || isDomainToolDiscoveryRequest(latestUserText(messages));
-  return Object.keys(BOOT_TOOL_NAMES).filter((name) => (
-    name !== 'ToolSearch' || retainSearch
-  ));
+function bootNames(): string[] {
+  return Object.keys(BOOT_TOOL_NAMES);
 }
 
 function collectActivatedNames(value: unknown, names: string[]): void {
@@ -126,30 +117,13 @@ export function activatedToolNamesFromMessages(messages: readonly ModelMessage[]
   }
   return [...new Set(names)];
 }
-function toolSearchConsumed(messages: readonly ModelMessage[]): boolean {
-  for (const message of messages.slice(activationScanStart(messages))) {
-    if (isActivationCheckpoint(message)) {
-      return !activatedToolNamesFromMessages([message]).includes('ToolSearch');
-    }
-    if (message.role !== 'tool' || !Array.isArray(message.content)) continue;
-    for (const part of message.content) {
-      if (part.type !== 'tool-result'
-        || part.toolName !== 'ToolSearch'
-        || !('output' in part)) continue;
-      if (activatedToolNamesFromResult(part.output).length > 0) return true;
-    }
-  }
-  return false;
-}
-
-
 function routedNames(
   catalog: readonly AgentToolSchema[],
   messages: readonly ModelMessage[],
 ): { readonly names: string[]; readonly overflow: boolean } {
   const request = latestUserText(messages);
   if (!request) return { names: [], overflow: false };
-  const routed = routedToolSelection(request, isReadOnlyRequest(request));
+  const routed = routedToolSelection(request, isReadOnlyRoutingHint(request));
   return {
     names: catalog.filter((schema) => routed.names.has(schema.name)).map((schema) => schema.name),
     overflow: routed.overflow,
@@ -160,29 +134,23 @@ export class ToolActivation {
   private readonly activeNames: ReadonlySet<string>;
   private readonly byName: ReadonlyMap<string, AgentToolSchema>;
   private readonly catalog: readonly AgentToolSchema[];
-  private readonly readOnly: boolean;
 
   constructor(
     catalog: readonly AgentToolSchema[],
     messages: readonly ModelMessage[],
     activeNames: Iterable<string> = [],
     allowSearch = true,
-    readOnly = isReadOnlyRequest(latestUserText(messages)),
   ) {
     this.catalog = catalog;
     this.byName = new Map(catalog.map((schema) => [schema.name, schema]));
     const routed = routedNames(catalog, messages);
-    const searchAllowed = allowSearch && !toolSearchConsumed(messages);
-    this.readOnly = readOnly;
+    const searchAllowed = allowSearch;
     const requested = [
-      ...bootNames(messages, routed.names, routed.overflow),
+      ...bootNames(),
       ...activatedToolNamesFromMessages(messages),
       ...routed.names,
       ...activeNames,
-    ].filter((name) => (
-      (searchAllowed || name !== 'ToolSearch')
-      && (!this.readOnly || isReadOnlyTool(name))
-    ));
+    ].filter((name) => searchAllowed || name !== 'ToolSearch');
     this.activeNames = new Set(requested.filter((name) => this.byName.has(name)));
   }
 
@@ -190,18 +158,14 @@ export class ToolActivation {
     readonly activation: ToolActivation;
     readonly result: unknown;
   } {
-    const activatedTools = activatedToolNamesForResult(toolName, result, this.catalog)
-      .filter((name) => !this.readOnly || isReadOnlyTool(name));
-    const retainSearch = toolName === 'ToolSearch'
-      ? activatedTools.length === 0
-      : this.activeNames.has('ToolSearch');
+    const activatedTools = activatedToolNamesForResult(toolName, result, this.catalog);
+    const retainSearch = toolName === 'ToolSearch' || this.activeNames.has('ToolSearch');
     return {
       activation: new ToolActivation(
         this.catalog,
         [],
         [...this.activeNames, ...activatedTools],
         retainSearch,
-        this.readOnly,
       ),
       result: result && typeof result === 'object' && !Array.isArray(result)
         ? { ...result, activatedTools }
@@ -226,5 +190,17 @@ export class ToolActivation {
 
   names(): readonly string[] {
     return this.schemas().map((schema) => schema.name);
+  }
+
+  /** Canonical-but-inactive call (model remembered a tool from history): activation
+   * is a token optimization, not a security boundary, so admit and continue. */
+  admit(name: string): ToolActivation {
+    if (this.activeNames.has(name) || !this.byName.has(name)) return this;
+    return new ToolActivation(
+      this.catalog,
+      [],
+      [...this.activeNames, name],
+      this.activeNames.has('ToolSearch'),
+    );
   }
 }

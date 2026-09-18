@@ -2,31 +2,23 @@
 // edit-item-tools.ts so unit checks avoid its GL .frag dependency.
 // Committers delegate to EditorCommands, preserving atomic-batch semantics.
 import type {
-  ClipFilters, ClipTransform, ItemKeyframes, Keyframe, KeyframeProp,
-  MediaAsset, MediaAssetRelinkPatch, TimelineItem, TimelineState,
+  ItemKeyframes, Keyframe, KeyframeProp, MediaAsset, TimelineItem, TimelineState,
 } from '../../editor/types';
-import { defaultTrackId, resolveTrackId } from '../../editor/types';
+import { defaultTrackId, resolveTrackId, selectedIdsOf } from '../../editor/types';
 import { isValidEasing } from '../../editor/keyframes';
 import { validateBackgroundFillUpdate } from './edit-item-background-fill';
 import { getKeyframePropertyDefinition, KEYFRAME_PROPS, supportsKeyframeProperty } from '../../editor/keyframeRegistry';
-import { planSlip, type SlipFailure, type SlipResult } from '../../editor/slip';
+import { planSlip } from '../../editor/slip';
 import { rejectUnknownFields } from './edit-item-fields';
+import { flexCropMergePatch } from '../../editor/flexCrop';
 import { clampNum, parseFiltersArg, parseTransformArg } from './edit-item-visual';
 import { validateMediaSourceUpdate } from './edit-item-media-ops';
-import { validateSourceWindow } from './edit-item-source-window';
+import { validateSourceFrameUpdate, validateSourceWindow } from './edit-item-source-window';
+import { validatePoolAssetReplacement } from './edit-item-pool-replacement';
+import { slipFailureToOpResult, type OpResult } from './edit-item-generic-result';
 export { didYouMean, rejectUnknownFields } from './edit-item-fields';
 export { validateMediaSourceUpdate } from './edit-item-media-ops';
-
-type OpResult = Record<string, unknown>;
-
-function slipFailureToOpResult(failure: SlipFailure): OpResult {
-  return {
-    ok: false,
-    code: failure.code,
-    itemId: failure.itemId,
-    error: failure.error,
-  };
-}
+export { applyGeneric, type GenericCommands } from './edit-item-generic-actions';
 
 export const GENERIC_ITEM_KINDS: ReadonlySet<string> = new Set([
   'video', 'image', 'audio', 'gif', 'svg', 'motion-graphic', 'text', 'solid',
@@ -43,6 +35,16 @@ export const AUTHORED_ADD_KINDS: ReadonlySet<string> = new Set(['text', 'solid']
 
 const finiteNum = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+
+const CSS_EASING_ALIASES: Record<string, Keyframe['easing']> = {
+  'ease-in': 'easeIn',
+  'ease-out': 'easeOut',
+  'ease-in-out': 'easeInOut',
+};
+
+function normalizeEasing(easing: unknown): unknown {
+  return typeof easing === 'string' ? CSS_EASING_ALIASES[easing] ?? easing : easing;
+}
 
 function findItem(items: TimelineItem[], id: unknown): TimelineItem | null {
   const q = String(id ?? '');
@@ -61,6 +63,9 @@ const GENERIC_UPDATE_KEYS: Record<string, true> = {
   fromFrame: true,
   durationInFrames: true,
   srcInFrame: true,
+  sourceStartFrame: true,
+  sourceDurationInFrames: true,
+  assetId: true,
   props: true,
   volume: true,
   fadeInSeconds: true,
@@ -83,6 +88,8 @@ const GENERIC_ADD_KEYS: Record<string, true> = {
   startFrame: true,
   fromFrame: true,
   durationInFrames: true,
+  sourceStartFrame: true,
+  sourceDurationInFrames: true,
   sourceStartSeconds: true,
   sourceEndSeconds: true,
   sourceStartMs: true,
@@ -113,26 +120,6 @@ const SLIP_UPDATE_KEYS: Record<string, true> = {
   deltaInFrames: true,
 };
 
-/** Editor command subset the generic committer needs (satisfied by EditorCommands). */
-export interface GenericCommands {
-  moveItem: (id: string, to: { track?: string; startFrame?: number }) => void;
-  setItemTiming: (id: string, timing: { startFrame?: number; durationInFrames?: number; srcInFrame?: number }) => void;
-  slipItem: (id: string, deltaInFrames: number) => SlipResult;
-  updateItemProps: (id: string, patch: Record<string, unknown>) => void;
-  setItemVolume: (id: string, volume: number) => void;
-  setItemFade: (id: string, fade: { fadeInFrames?: number; fadeOutFrames?: number }) => void;
-  setItemKeyframe: (id: string, prop: KeyframeProp, frame: number, value: number, easing?: Keyframe['easing']) => void;
-  setItemFilters: (id: string, patch: ClipFilters) => void;
-  setItemTransform: (id: string, patch: ClipTransform) => void;
-  setItemBackgroundFill: (id: string, enabled: boolean, strength?: number) => void;
-  setItemSpeed: (id: string, rate: number) => void;
-  clearItemKeyframes: (id: string, prop?: KeyframeProp) => void;
-  replaceItemMedia: (id: string, src: string) => void;
-  relinkTimelineItem: (id: string, next: MediaAssetRelinkPatch) => void;
-  removeItem: (id: string) => void;
-  rippleDeleteItem: (id: string) => void;
-}
-
 // keyframes arg: {x|y|scale|rotation|opacity|volume: [{frame,value,easing?}…]} — boundary
 // validation for LLM output (prop whitelist, finite frame ≥0, value in range, easing shape).
 function parseKeyframesArg(raw: unknown): { keyframes?: ItemKeyframes; error?: string } {
@@ -157,10 +144,11 @@ function parseKeyframesArg(raw: unknown): { keyframes?: ItemKeyframes; error?: s
         const unitNote = prop === 'x' || prop === 'y' ? ' (x/y are % of canvas, NOT px; 100 = one full canvas width/height)' : '';
         return { error: `keyframes.${prop}: value must be a finite number in ${lo}..${hi}${unitNote}` };
       }
-      if (k.easing !== undefined && !isValidEasing(k.easing)) {
+      const easing = normalizeEasing(k.easing);
+      if (easing !== undefined && !isValidEasing(easing)) {
         return { error: `keyframes.${prop}: easing must be linear/easeIn/easeOut/easeInOut or [x1,y1,x2,y2]` };
       }
-      kfs.push({ frame: Math.round(frame), value, ...(k.easing !== undefined ? { easing: k.easing as Keyframe['easing'] } : {}) });
+      kfs.push({ frame: Math.round(frame), value, ...(easing !== undefined ? { easing } : {}) });
     }
     if (kfs.length) out[prop as KeyframeProp] = kfs;
   }
@@ -168,15 +156,38 @@ function parseKeyframesArg(raw: unknown): { keyframes?: ItemKeyframes; error?: s
   return { keyframes: out };
 }
 
+function resolveUpdateItemId(state: TimelineState, entry: Record<string, unknown>): string | null {
+  const raw = entry.itemId ?? entry.id;
+  const token = raw === undefined || raw === null ? '' : String(raw).trim();
+  const wantsSelected = token === ''
+    || /^(selected|selection|selectedclip|selected_clip)$/i.test(token);
+  if (wantsSelected) {
+    const ids = selectedIdsOf(state);
+    return ids[ids.length - 1] ?? state.selectedId ?? null;
+  }
+  return token;
+}
+
 // Move (track/startFrame|fromFrame), trim (duration/srcIn), props, volume, fades (seconds→frames).
-// assetId is immutable on update; media replacement uses delete + add in one batch.
-export function validateGenericUpdate(state: TimelineState, entry: Record<string, unknown>): OpResult {
-  const unknown = rejectUnknownFields(entry, GENERIC_UPDATE_KEYS, { banAssetId: true });
+// A pool assetId update is an atomic replacement; other fields update the live clip.
+export function validateGenericUpdate(
+  state: TimelineState,
+  entry: Record<string, unknown>,
+  assets: readonly MediaAsset[] = state.assets ?? [],
+): OpResult {
+  if (entry.assetId !== undefined) return validatePoolAssetReplacement(state, assets, entry);
+  const unknown = rejectUnknownFields(entry, GENERIC_UPDATE_KEYS);
   if (unknown) return { error: unknown };
 
-  const itemRef = entry.itemId ?? entry.id;
+  const itemRef = resolveUpdateItemId(state, entry);
   const it = findItem(state.items, itemRef);
-  if (!it) return { error: `item not found: ${String(itemRef ?? '')}` };
+  if (!it) {
+    return {
+      error: itemRef
+        ? `item not found: ${itemRef}`
+        : 'no clip selected — pass itemId from read_project.timeline.selectedId',
+    };
+  }
   const plan: OpResult = { ok: true, kind: it.kind, plan: 'genericUpdate', itemId: it.id };
 
   const trackRaw = entry.track ?? entry.trackId;
@@ -189,8 +200,9 @@ export function validateGenericUpdate(state: TimelineState, entry: Record<string
   // fromFrame is canonical; startFrame remains an alias for local and legacy tools.
   const start = finiteNum(entry.startFrame) ?? finiteNum(entry.fromFrame);
   if (start !== undefined) plan.startFrame = Math.max(0, Math.round(start));
-  if (finiteNum(entry.durationInFrames) !== undefined) plan.durationInFrames = Math.max(1, Math.round(finiteNum(entry.durationInFrames)!));
-  if (finiteNum(entry.srcInFrame) !== undefined) plan.srcInFrame = Math.max(0, Math.round(finiteNum(entry.srcInFrame)!));
+  const sourceTiming = validateSourceFrameUpdate(it, entry);
+  if (sourceTiming.error) return sourceTiming;
+  Object.assign(plan, sourceTiming);
   if (entry.props && typeof entry.props === 'object') plan.props = entry.props;
   if (finiteNum(entry.volume) !== undefined) plan.volume = Math.max(0, Math.min(2, finiteNum(entry.volume)!));
   const fps = state.fps || 30;
@@ -221,9 +233,15 @@ export function validateGenericUpdate(state: TimelineState, entry: Record<string
   }
   if (entry.transform !== undefined) {
     if (it.kind === 'audio') return { error: 'transform is not supported on audio clips' };
-    const parsed = parseTransformArg(entry.transform);
+    const parsed = parseTransformArg(entry.transform, { width: state.width, height: state.height });
     if (parsed.error) return { error: parsed.error };
-    plan.transform = parsed.transform;
+    const patch = { ...parsed.transform };
+    if (parsed.cropClear) {
+      patch.crop = undefined;
+    } else if (patch.crop) {
+      patch.crop = flexCropMergePatch(it.transform?.crop, patch.crop).crop;
+    }
+    plan.transform = patch;
   }
   const backgroundFill = validateBackgroundFillUpdate(
     state,
@@ -263,7 +281,7 @@ export function validateGenericUpdate(state: TimelineState, entry: Record<string
   ];
   if (!FIELDS.some((k) => k in plan)) {
     return {
-      error: 'update needs at least one of: track/trackId, startFrame/fromFrame, durationInFrames, srcInFrame, props, volume, fadeInSeconds, fadeOutSeconds, keyframes, clearKeyframes, filters, transform, backgroundFill, backgroundFillStrength, speed',
+      error: 'update needs at least one of: track/trackId, startFrame/fromFrame, durationInFrames/sourceDurationInFrames, srcInFrame/sourceStartFrame, assetId, props, volume, fadeInSeconds, fadeOutSeconds, keyframes, clearKeyframes, filters, transform, backgroundFill, backgroundFillStrength, speed',
     };
   }
   return plan;
@@ -441,84 +459,4 @@ export function validateGenericAdd(
     ...(startFrame !== undefined ? { startFrame: Math.max(0, Math.round(startFrame)) } : {}),
     ...(durationInFrames !== undefined && durationInFrames > 0 ? { durationInFrames: Math.round(durationInFrames) } : {}),
   };
-}
-
-/** Commit a generic plan. Returns the op result; unknown plans return null so the caller
- *  can fall through to its own switch. move and trim are separate commands so startFrame
- *  isn't double-applied; each is a no-op when its fields are absent. */
-export function applyGeneric(plan: OpResult, commands: GenericCommands): OpResult | null {
-  const id = String(plan.itemId);
-  if (plan.plan === 'genericUpdate') {
-    if (plan.track !== undefined || plan.startFrame !== undefined) {
-      commands.moveItem(id, { track: plan.track as string | undefined, startFrame: plan.startFrame as number | undefined });
-    }
-    if (plan.durationInFrames !== undefined || plan.srcInFrame !== undefined) {
-      commands.setItemTiming(id, { durationInFrames: plan.durationInFrames as number | undefined, srcInFrame: plan.srcInFrame as number | undefined });
-    }
-    if (plan.props !== undefined) commands.updateItemProps(id, plan.props as Record<string, unknown>);
-    if (plan.volume !== undefined) commands.setItemVolume(id, plan.volume as number);
-    if (plan.fadeInFrames !== undefined || plan.fadeOutFrames !== undefined) {
-      commands.setItemFade(id, { fadeInFrames: plan.fadeInFrames as number | undefined, fadeOutFrames: plan.fadeOutFrames as number | undefined });
-    }
-    if (plan.keyframes !== undefined) {
-      // batch: one setKeyframe per point (same-frame overwrites in the reducer)
-      for (const [prop, kfs] of Object.entries(plan.keyframes as ItemKeyframes)) {
-        for (const k of kfs ?? []) commands.setItemKeyframe(id, prop as KeyframeProp, k.frame, k.value, k.easing);
-      }
-    }
-    if (plan.filters !== undefined) commands.setItemFilters(id, plan.filters as ClipFilters);
-    if (plan.transform !== undefined) commands.setItemTransform(id, plan.transform as ClipTransform);
-    if (plan.backgroundFill !== undefined) {
-      commands.setItemBackgroundFill(
-        id,
-        plan.backgroundFill as boolean,
-        plan.backgroundFillStrength as number | undefined,
-      );
-    }
-    if (plan.speed !== undefined) commands.setItemSpeed(id, plan.speed as number);
-    if (plan.clearKeyframes === true) commands.clearItemKeyframes(id);
-    else if (typeof plan.clearKeyframes === 'string') {
-      commands.clearItemKeyframes(id, plan.clearKeyframes as KeyframeProp);
-    }
-    return { ok: true, kind: plan.kind, plan: 'genericUpdate', itemId: id };
-  }
-  if (plan.plan === 'slip') {
-    const committed = commands.slipItem(id, Number(plan.appliedDeltaInFrames));
-    if (!committed.ok) return slipFailureToOpResult(committed);
-    return {
-      ...plan,
-      srcInFrame: committed.srcInFrame,
-      sourceWindow: committed.sourceWindow,
-      status: plan.clamped ? 'clamped' : 'applied',
-    };
-  }
-  if (plan.plan === 'replaceMedia') {
-    commands.replaceItemMedia(id, String(plan.src));
-    return { ok: true, kind: 'video', plan: 'replaceMedia', itemId: id, src: plan.src };
-  }
-  if (plan.plan === 'relinkMedia') {
-    commands.relinkTimelineItem(id, {
-      src: String(plan.src),
-      sourceContentHash: undefined,
-      name: plan.name as string | undefined,
-      durationInFrames: plan.durationInFrames as number | undefined,
-      width: plan.width as number | undefined,
-      height: plan.height as number | undefined,
-      sourceFilename: plan.sourceFilename as string | undefined,
-    });
-    return {
-      ok: true,
-      kind: plan.kind,
-      plan: 'relinkMedia',
-      itemId: id,
-      src: plan.src,
-      note: plan.note,
-    };
-  }
-  if (plan.plan === 'genericDelete') {
-    if (plan.ripple === true) commands.rippleDeleteItem(id);
-    else commands.removeItem(id);
-    return { ok: true, kind: plan.kind, plan: 'genericDelete', itemId: id, ripple: plan.ripple === true };
-  }
-  return null;
 }

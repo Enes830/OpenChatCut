@@ -1,95 +1,31 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import {
-  chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync,
-} from 'node:fs';
-import { join } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import { runtimeProfile, type RuntimeProfile } from './runtime-profile.ts';
+import { isLoopbackAddress } from './loopback-address.ts';
 
-export const PROJECT_STORE_LAUNCH_TOKEN_HEADER = 'x-openchatcut-editor-launch-token';
-export const PROJECT_STORE_SESSION_HEADER = 'x-openchatcut-project-store-session';
-const TOKEN_ENV = 'OPENCHATCUT_EDITOR_LAUNCH_TOKEN';
-const MIN_TOKEN_LENGTH = 32;
-const generatedLaunchToken = randomBytes(32).toString('base64url');
-
-interface ProjectStoreSession {
-  readonly token: string;
-  readonly host: string;
-  readonly remoteAddress: string;
-}
-
-let activeSession: ProjectStoreSession | null = null;
+/**
+ * Local-device trust model (no shared secrets).
+ *
+ * The editor and project store are served from loopback bindings only, so the
+ * listening port itself is a weak secret. Requests are authorized by what a
+ * browser cannot spoof:
+ *
+ *   - the socket must arrive on a loopback address,
+ *   - the Host header must name a loopback host (defeats DNS rebinding),
+ *   - state-changing requests must carry an Origin matching Host (browsers
+ *     attach Origin to every fetch POST/PUT/DELETE; a cross-site page cannot
+ *     fabricate it),
+ *   - Sec-Fetch-Site is browser-enforced and marks cross-site form posts,
+ *     navigation and subresource loads; direct local tooling (curl) sends
+ *     `none`.
+ *
+ * There is no launch token, no session handshake and no process-local
+ * session state: any loopback editor tab is fully trusted, exactly like
+ * Vite/webpack-dev-server local tooling. Reads additionally allow direct
+ * local navigation without an Origin header.
+ */
 
 export function projectStoreAuthDir(profile: RuntimeProfile = runtimeProfile()): string {
   return profile.authDir;
-}
-
-function ensureAuthDir(): string {
-  const directory = projectStoreAuthDir();
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  try { chmodSync(directory, 0o700); } catch { /* best-effort on non-POSIX filesystems */ }
-  return directory;
-}
-
-function validToken(value: string): boolean {
-  return value.trim().length >= MIN_TOKEN_LENGTH;
-}
-
-function readTokenFile(path: string): string | null {
-  try {
-    const value = readFileSync(path, 'utf8').trim();
-    return validToken(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function atomicWritePrivate(path: string, value: string): void {
-  const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-  try {
-    writeFileSync(temporary, value, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-    try {
-      renameSync(temporary, path);
-    } catch {
-      // Windows cannot atomically replace an existing destination with rename.
-      rmSync(path, { force: true });
-      renameSync(temporary, path);
-    }
-    try { chmodSync(path, 0o600); } catch { /* best-effort on non-POSIX filesystems */ }
-  } finally {
-    rmSync(temporary, { force: true });
-  }
-}
-
-function persistentLaunchToken(): string {
-  const path = join(ensureAuthDir(), 'launch-token');
-  const existing = readTokenFile(path);
-  if (existing) return existing;
-  try {
-    writeFileSync(path, generatedLaunchToken, {
-      encoding: 'utf8', flag: 'wx', mode: 0o600,
-    });
-  } catch (error) {
-    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
-    if (code !== 'EEXIST') throw error;
-  }
-  const winner = readTokenFile(path);
-  if (winner) return winner;
-  atomicWritePrivate(path, generatedLaunchToken);
-  return generatedLaunchToken;
-}
-
-function configuredLaunchToken(): string {
-  const token = process.env[TOKEN_ENV]?.trim() ?? '';
-  return validToken(token) ? token : persistentLaunchToken();
-}
-
-export function projectStoreLaunchToken(): string {
-  return configuredLaunchToken();
-}
-
-function loopbackAddress(value: string | undefined): value is string {
-  return value === '127.0.0.1' || value === '::1' || value === '::ffff:127.0.0.1';
 }
 
 function loopbackHost(value: string | undefined): value is string {
@@ -101,23 +37,14 @@ function loopbackHost(value: string | undefined): value is string {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
-function equalSecret(actual: string, expected: string): boolean {
-  const left = Buffer.from(actual);
-  const right = Buffer.from(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
 function header(req: IncomingMessage, name: string): string | null {
   const raw = req.headers[name];
   const value = Array.isArray(raw) ? raw[0] : raw;
   return typeof value === 'string' ? value : null;
 }
 
-function trustedLoopback(req: IncomingMessage): req is IncomingMessage & {
-  socket: IncomingMessage['socket'] & { remoteAddress: string };
-  headers: IncomingMessage['headers'] & { host: string };
-} {
-  return loopbackAddress(req.socket.remoteAddress) && loopbackHost(req.headers.host);
+function trustedLoopback(req: IncomingMessage): boolean {
+  return isLoopbackAddress(req.socket.remoteAddress) && loopbackHost(req.headers.host);
 }
 
 function sameOrigin(req: IncomingMessage): boolean {
@@ -132,56 +59,22 @@ function sameOrigin(req: IncomingMessage): boolean {
   }
 }
 
-
-/** Origin is a loopback host (localhost / 127.0.0.1 / ::1) on ANY port. */
-
-/**
- * Read-only authorization without a session: same-origin pages (or direct
- * local navigation, e.g. curl) served from a loopback host may read the
- * active runtime profile's project library. Sec-Fetch-Site is browser-enforced
- * and cannot be spoofed by cross-origin pages; writes still require a real
- * session. Isolated development ports resolve to distinct profile stores.
- */
-export function projectStoreReadAuthorized(req: IncomingMessage): boolean {
+function browserEnforcedRequest(req: IncomingMessage): boolean {
   const site = header(req, 'sec-fetch-site');
-  if (site !== 'same-origin' && site !== 'none') return false;
-  return trustedLoopback(req);
+  return site === 'same-origin' || site === 'none';
 }
 
-export function exchangeProjectStoreLaunchToken(
-  req: IncomingMessage,
-): { sessionToken: string } | null {
-  if (!trustedLoopback(req) || !sameOrigin(req)) return null;
-  const actualLaunch = header(req, PROJECT_STORE_LAUNCH_TOKEN_HEADER);
-  if (!actualLaunch || !equalSecret(actualLaunch, configuredLaunchToken())) return null;
-
-  const current = activeSession;
-  if (current?.host === req.headers.host.toLowerCase()
-    && current.remoteAddress === req.socket.remoteAddress) {
-    return { sessionToken: current.token };
-  }
-  const session: ProjectStoreSession = {
-    token: randomBytes(32).toString('base64url'),
-    host: req.headers.host.toLowerCase(),
-    remoteAddress: req.socket.remoteAddress,
-  };
-  activeSession = session;
-  return { sessionToken: session.token };
+/** Read-only access: loopback requests from same-origin pages (or direct
+ *  local navigation) may read the active runtime profile's project library. */
+export function projectStoreReadAuthorized(req: IncomingMessage): boolean {
+  return trustedLoopback(req) && browserEnforcedRequest(req);
 }
 
+/** Write access: loopback, same-origin, browser-enforced requests only. */
 export function projectStoreHttpAuthorized(req: IncomingMessage): boolean {
-  if (!trustedLoopback(req)) return false;
-  const session = activeSession;
-  if (!session || session.host !== req.headers.host.toLowerCase()
-    || session.remoteAddress !== req.socket.remoteAddress) return false;
-  const actual = header(req, PROJECT_STORE_SESSION_HEADER);
-  return actual !== null && equalSecret(actual, session.token);
-}
-
-export function resetProjectStoreHttpAuthMemoryForTests(): void {
-  activeSession = null;
+  return trustedLoopback(req) && browserEnforcedRequest(req) && sameOrigin(req);
 }
 
 export function resetProjectStoreHttpAuthForTests(): void {
-  resetProjectStoreHttpAuthMemoryForTests();
+  // There is no process-local auth state anymore; kept as a stable test seam.
 }

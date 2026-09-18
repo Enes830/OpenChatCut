@@ -54,10 +54,13 @@ async function loadModel(request: Extract<LocalAsrWorkerRequest, { type: 'load' 
     env.remoteHost = localAsrModelHosts(workerScope.location.origin)[0];
     try {
       // transformers.js forwards this revision to model, tokenizer, and processor loaders.
+      // WebGPU needs per-module mixed dtypes (encoder fp32 + decoder fp16); the plain
+      // q8 contract is used for wasm (int8 models are unsupported on WebGPU).
+      const dtype = request.device === 'webgpu' ? ASR_INFERENCE_CONTRACT.webgpuDtype : ASR_INFERENCE_CONTRACT.dtype;
       const attemptPromise = (pipeline('automatic-speech-recognition', request.modelId, {
         revision: request.revision,
         device: request.device,
-        dtype: ASR_INFERENCE_CONTRACT.dtype,
+        dtype,
         progress_callback: progress,
       }) as Promise<unknown>);
       const next = await Promise.race([
@@ -68,6 +71,12 @@ async function loadModel(request: Extract<LocalAsrWorkerRequest, { type: 'load' 
           )), LOAD_ATTEMPT_TIMEOUT_MS);
         }),
       ]);
+      // Word timestamps need the decoder prefix skipped before DTW and the
+      // sequence trimmed to match. transformers.js did neither through 3.8.1,
+      // so this used to monkey-patch _extract_token_timestamps. 4.x does both
+      // natively — it takes a num_input_ids argument and passes init_tokens.length
+      // at every call site — and no longer exports the dynamic_time_warping the
+      // patch was built on. The library owns this now.
       asr = next as AutomaticSpeechRecognitionPipeline;
     } catch (error) {
       throw localAsrLoadError(error);

@@ -10,7 +10,7 @@ import {
   type ExternalToolSchema,
 } from './broker-types.ts';
 
-const ONLINE_MS = 35_000;
+const ONLINE_MS = 45_000;
 
 function capabilityMatches(actual: string, candidate: string | null | undefined): boolean {
   if (typeof candidate !== 'string' || candidate.length !== actual.length) return false;
@@ -105,9 +105,14 @@ export class EditorConnectionRegistry {
     if (!trustedInternalCall && registrationCapability && !validRenewal) {
       throw new ExternalEditorCallError('stale', 'Editor registration capability is stale.');
     }
-    if (!trustedInternalCall && previous && !validRenewal && this.isConnected(projectId)) {
-      throw new ExternalEditorCallError('rejected', 'Project already has an active editor registration.');
-    }
+    // A different browser window may take over the active connection for the
+    // same project. Single-window desktop users never open one project in two
+    // windows, but a reloaded/fresh window (a new random editor id) must be able
+    // to (re)connect without a persistent "already has an active editor"
+    // rejection. The old entry is replaced below by this.editors.set, and the
+    // persisted ownership claim (validated at validateOwnershipClaim) still
+    // fences stale takeovers. Offline/multi-writer safety comes from the
+    // serialized project-store mutations and the ownership epoch checks.
     validateOwnershipClaim(ownership, { projectId, editorInstanceId, baseRevision });
     const ownershipEpoch = ownership?.epoch;
     if (previous && bindingChanged(previous, editorInstanceId, baseRevision, ownershipEpoch)) {
@@ -168,12 +173,18 @@ export class EditorConnectionRegistry {
       }
       editor.ownership = renewed.claim;
       editor.ownershipEpoch = renewed.claim.epoch;
-    }
-    if (baseRevision && editor.baseRevision !== baseRevision) {
+      // The store is the authority for the committed revision: a tool result may
+      // settle before autosave lands, so the browser-reported doc revision can
+      // run ahead of the store. Adopting the renewed claim's store revision keeps
+      // the registry consistent with what a follow-up MCP session will bind to.
+      editor.baseRevision = renewed.claim.baseRevision;
+    } else if (baseRevision && editor.baseRevision !== baseRevision) {
       const previous = bindingOf(editor);
       editor.baseRevision = baseRevision;
       this.hooks.revisionChanged(previous);
     }
+    // A successful touch IS the keep-alive: refresh lastSeen so the online
+    // lease (isConnected) reflects this poll even when no call arrives.
     editor.lastSeen = Date.now();
     return true;
   }

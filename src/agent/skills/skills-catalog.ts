@@ -12,6 +12,21 @@ interface CreativeSkillMetadata {
 
 export const CREATIVE_SKILL_METADATA: CreativeSkillMetadata[] = [
   {
+    id: '11111111-1240-4000-8000-000000000015',
+    slug: 'livestream-to-clips',
+    name: 'Livestream to Clips',
+    nameZh: '直播智能切片',
+    summary: '把带货、游戏、访谈、教学、娱乐、体育、音乐或混合直播录屏剪成有证据、可发布的高光切片。',
+    scenarios: [
+      'livestream-to-clips',
+      'live-highlights',
+      'stream-clips',
+      'gaming-highlights',
+      'commerce-clips',
+      '直播切片'
+    ]
+  },
+  {
     id: '11111111-1240-4000-8000-000000000004',
     slug: 'long-video-to-shorts',
     name: 'Long Video to Shorts',
@@ -129,6 +144,21 @@ export const CREATIVE_SKILL_METADATA: CreativeSkillMetadata[] = [
       'shorts-cover',
       'thumbnail',
       'video-cover'
+    ]
+  },
+  {
+    id: '11111111-1240-4000-8000-000000000014',
+    slug: 'news-rough-cut',
+    name: 'News Rough Cut',
+    nameZh: '新闻智能粗剪',
+    summary: '把新闻素材粗剪为一条内容完整、逻辑清晰、节奏紧凑的新闻短视频，不加任何外部声音。',
+    scenarios: [
+      'news-rough-cut',
+      'news-cut',
+      '新闻剪辑',
+      '粗剪新闻',
+      'news footage',
+      'rough-cut-news'
     ]
   },
   {

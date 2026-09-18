@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildSubmitImageArgs, buildSubmitMusicArgs, buildSubmitVideoArgs, buildSubmitVoiceArgs, shouldAddImageToTimeline } from './generate-tool-input';
+import { buildSubmitImageArgs, buildSubmitMusicArgs, buildSubmitSoundArgs, buildSubmitVideoArgs, buildSubmitVoiceArgs, shouldAddImageToTimeline } from './generate-tool-input';
 
 assert.equal(shouldAddImageToTimeline({}), true);
 assert.equal(shouldAddImageToTimeline({ addToTimeline: false }), false);
@@ -99,6 +99,18 @@ assert.equal(byteplusVideo.refImages, undefined, 'blank reference defaults are r
 assert.equal(byteplusVideo.promptOptimizer, undefined, 'BytePlus must not receive MiniMax controls');
 assert.equal(byteplusVideo.mode, undefined, 'BytePlus must not receive Kling mode');
 
+const ofoxVideo = buildSubmitVideoArgs({
+  model: 'ofox', prompt: 'paper airplane', durationSeconds: 20, ratio: '9:16',
+  refImages: ['asset-a'], generateAudio: false, seed: 7,
+});
+assert.equal(ofoxVideo.model, 'ofox', 'OFox must never fall back to a different paid provider');
+assert.equal(ofoxVideo.durationSeconds, 20);
+assert.equal(ofoxVideo.ratio, '9:16');
+assert.deepEqual(ofoxVideo.refImages, ['asset-a']);
+assert.equal(ofoxVideo.generateAudio, false);
+assert.equal(ofoxVideo.seed, 7);
+assert.equal(buildSubmitVideoArgs({ prompt: 'legacy default' }).model, 'seedance2');
+
 const minimaxMusic = buildSubmitMusicArgs({
   provider: 'minimax', mode: 't2m', prompt: 'ambient', isInstrumental: true,
   count: 2, stream: false, styles: ['ambient'], referenceAssetId: '', coverFeatureId: '',
@@ -106,6 +118,17 @@ const minimaxMusic = buildSubmitMusicArgs({
 assert.equal(minimaxMusic.count, undefined, 'MiniMax must not receive Mureka count');
 assert.equal(minimaxMusic.stream, undefined, 'MiniMax must not receive Mureka streaming');
 assert.equal(minimaxMusic.referenceAssetId, undefined, 't2m must not receive cover references');
+
+const atlasMusic = buildSubmitMusicArgs({
+  provider: 'atlas', mode: 'cover', prompt: 'ambient', lyrics: 'soft lights', isInstrumental: false,
+  lyricsOptimizer: true, count: 3, stream: true, referenceAssetId: 'audio-1', sampleRate: 32_000,
+});
+assert.equal(atlasMusic.provider, 'atlas');
+assert.equal(atlasMusic.mode, 't2m', 'Atlas exposes only its schema-backed t2m mode');
+assert.equal(atlasMusic.sampleRate, 32_000);
+assert.equal(atlasMusic.lyricsOptimizer, undefined, 'Atlas must not receive MiniMax lyrics optimizer');
+assert.equal(atlasMusic.count, undefined, 'Atlas must not receive Mureka count');
+assert.equal(atlasMusic.referenceAssetId, undefined, 'Atlas must not receive MiniMax cover references');
 
 const soundtrack = buildSubmitMusicArgs({
   provider: 'mureka', mode: 'soundtrack', prompt: 'tense', sourceAssetId: 'image-1',
@@ -116,6 +139,40 @@ assert.equal(soundtrack.sourceAssetId, 'image-1');
 assert.equal(soundtrack.styles, undefined, 'soundtrack must not receive prompt-song controls');
 assert.equal(soundtrack.vocalId, undefined, 'soundtrack must not receive song controls');
 assert.equal(soundtrack.lyricsOptimizer, undefined, 'Mureka must not receive MiniMax controls');
+
+const soniloMusic = buildSubmitMusicArgs({
+  provider: 'sonilo', mode: 'soundtrack', prompt: 'warm indie folk', sourceAssetId: 'cut-1',
+  lyrics: 'hello', styles: ['pop'], count: 2, stream: true, bitrate: 128000, audioFormat: 'mp3',
+});
+assert.equal(soniloMusic.provider, 'sonilo');
+assert.equal(soniloMusic.mode, 'v2m', 'sonilo always submits v2m');
+assert.equal(soniloMusic.sourceAssetId, 'cut-1');
+assert.equal(soniloMusic.prompt, 'warm indie folk');
+assert.equal(soniloMusic.lyrics, undefined, 'sonilo must not receive lyrics');
+assert.equal(soniloMusic.styles, undefined, 'sonilo must not receive Mureka styles');
+assert.equal(soniloMusic.count, undefined, 'sonilo must not receive Mureka count');
+assert.equal(soniloMusic.stream, undefined, 'sonilo must not receive Mureka streaming');
+assert.equal(soniloMusic.bitrate, undefined, 'sonilo must not receive MiniMax audio settings');
+assert.equal(soniloMusic.audioFormat, undefined, 'sonilo output format is fixed');
+
+const elevenSound = buildSubmitSoundArgs({
+  prompt: 'thunder', durationSeconds: 4, promptInfluence: 0.5, loop: true, sourceAssetId: 'cut-1',
+});
+assert.equal(elevenSound.provider, 'elevenlabs', 'sound provider defaults to elevenlabs');
+assert.equal(elevenSound.prompt, 'thunder');
+assert.equal(elevenSound.sourceAssetId, undefined, 'ElevenLabs must not receive a sonilo video source');
+
+const soniloSound = buildSubmitSoundArgs({
+  provider: 'sonilo', sourceAssetId: 'cut-1', prompt: 'whoosh', durationSeconds: 4,
+  promptInfluence: 0.5, loop: true, outputFormat: 'mp3_44100_128', name: 'cut sfx',
+});
+assert.equal(soniloSound.provider, 'sonilo');
+assert.equal(soniloSound.sourceAssetId, 'cut-1');
+assert.equal(soniloSound.name, 'cut sfx');
+assert.equal(soniloSound.prompt, undefined, 'sonilo SFX are generated from the video, not a prompt');
+assert.equal(soniloSound.durationSeconds, undefined, 'sonilo must not receive ElevenLabs duration');
+assert.equal(soniloSound.loop, undefined, 'sonilo must not receive ElevenLabs loop');
+assert.equal(soniloSound.outputFormat, undefined, 'sonilo must not receive ElevenLabs output format');
 
 const eleven = buildSubmitVoiceArgs({
   provider: 'elevenlabs', text: 'Hello', voiceId: 'peter', outputFormat: 'mp3_44100_128',

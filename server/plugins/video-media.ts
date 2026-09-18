@@ -9,6 +9,7 @@ import { extname, join } from 'node:path';
 
 import { ffmpegBin } from '../media-binaries.ts';
 import { resolveHwDecodeArgs } from '../media-acceleration.ts';
+import { ffmpegThreadArgs, spawnMediaProcess } from '../media-process.ts';
 import { isSafeUploadName, mimeFor, resolveUploadFile, uploadDir } from '../media-dir.ts';
 import type { VideoRequest } from './video-validation.ts';
 import { presignGetUpload, putUploadFile } from '../r2.ts';
@@ -71,7 +72,7 @@ const derivativeJobs = new Map<string, Promise<string>>();
 
 function runSliceFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(ffmpegBin(), args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawnMediaProcess(ffmpegBin(), [...ffmpegThreadArgs(), ...args], { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
     const timer = setTimeout(() => child.kill('SIGKILL'), 5 * 60_000);
     child.stderr.on('data', (chunk) => { stderr = (stderr + String(chunk)).slice(-4_000); });
@@ -161,7 +162,7 @@ async function timelineSlicePath(reference: ServerGenerationReference): Promise<
       await runSliceFfmpeg([
         ...common,
         '-an', '-vf', `setpts=PTS/${playbackRate}`,
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p',
+        '-c:v', 'libx264', ...ffmpegThreadArgs(), '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p',
         '-movflags', '+faststart',
         output,
       ]);
@@ -281,8 +282,8 @@ async function streamResponseToFile(response: Response, file: string, emptyMessa
   if ((await stat(file)).size === 0) throw new Error(emptyMessage);
 }
 
-export async function saveVideo(url: string): Promise<{ path: string; durationSeconds: number; width?: number; height?: number }> {
-  const response = await fetchGeneratedResult(url, 'video');
+export async function saveVideo(url: string, fetchImpl?: NonNullable<Parameters<typeof fetchGeneratedResult>[2]>['fetchImpl']): Promise<{ path: string; durationSeconds: number; width?: number; height?: number }> {
+  const response = await fetchGeneratedResult(url, 'video', { fetchImpl });
   const dir = uploadDir();
   await mkdir(dir, { recursive: true });
   const filename = `${randomUUID()}.mp4`;
@@ -299,8 +300,8 @@ export async function saveVideo(url: string): Promise<{ path: string; durationSe
   }
 }
 
-export async function saveImageUrl(url: string): Promise<string> {
-  const response = await fetchGeneratedResult(url, 'image');
+export async function saveImageUrl(url: string, fetchImpl?: NonNullable<Parameters<typeof fetchGeneratedResult>[2]>['fetchImpl']): Promise<string> {
+  const response = await fetchGeneratedResult(url, 'image', { fetchImpl });
   const contentType = response.headers.get('content-type') ?? '';
   const urlExt = extname(new URL(url).pathname).slice(1).toLowerCase();
   const ext = contentType.includes('webp') || urlExt === 'webp' ? 'webp'

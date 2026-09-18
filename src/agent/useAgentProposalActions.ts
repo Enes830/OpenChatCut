@@ -15,7 +15,10 @@ import { appendRejectedProposal } from './agent-session';
 import { recordProposalOutcome } from './useAgentPersistence';
 import type { AgentSend } from './useAgentRun';
 import type { AgentHookState } from './useAgentState';
-import { resumeAgentRun, type AgentRunRecorder } from './runtime-ledger';
+import {
+  clearStoredServerRun,
+} from './serverRunSessionStorage';
+import { settleServerRun } from './serverRunSettleClient';
 
 export interface ProposalPersistence {
   readonly saveVersion: typeof saveAutomaticVersion;
@@ -40,7 +43,7 @@ const OUTCOME_STATUS: Record<ProposalSettlementOutcome, {
 }> = {
   applied: { runtime: 'applied', final: 'completed', summary: 'proposal applied' },
   rejected: { runtime: 'rejected', final: 'aborted', summary: 'proposal rejected' },
-  stale: { runtime: 'stale', final: 'waiting_approval', summary: 'proposal became stale' },
+  stale: { runtime: 'stale', final: 'aborted', summary: 'proposal became stale' },
   reproposed: { runtime: 'reproposed', final: 'aborted', summary: 'proposal replaced' },
 };
 
@@ -60,19 +63,17 @@ async function settleAndRecord(
 }
 
 async function claimProposalRun(
-  projectId: string,
   proposal: Proposal,
-): Promise<AgentRunRecorder | null> {
-  if (!proposal.agentRunId || !proposal.id) return null;
-  const recorder = await resumeAgentRun(projectId, proposal.agentRunId);
-  if (!recorder) throw new Error('proposal run ownership is unavailable');
-  return recorder;
+): Promise<boolean> {
+  // The server owns the run ledger; applying a proposal only needs the
+  // proposal record to still reference a live run (the settle endpoint is
+  // idempotent for terminal/missing runs, so no ownership handshake is
+  // required in the browser).
+  return Boolean(proposal.agentRunId && proposal.id);
 }
 
-async function confirmOwnershipBeforeApply(
-  recorder: AgentRunRecorder | null,
-): Promise<void> {
-  if (recorder) await recorder.confirmOwnership();
+async function confirmOwnershipBeforeApply(_available: boolean): Promise<void> {
+  // Ownership authority lives on the server; nothing to prove client-side.
 }
 
 async function restoreConcurrentProject(
@@ -113,16 +114,20 @@ function commitAppliedUi(
 }
 
 async function cleanupAppliedProposal(
-  recorder: AgentRunRecorder | null,
   proposal: Proposal,
   operationCount: number,
   projectId: string,
   persistence: ProposalPersistence,
 ): Promise<string | null> {
   try {
-    if (recorder && proposal.id) {
-      await recorder.recordProposal(proposal.id, 'applied');
-      await recorder.finalize('completed', `applied ${operationCount} operations`);
+    if (proposal.agentRunId && proposal.id) {
+      await settleServerRun(projectId, proposal.agentRunId, {
+        status: 'completed',
+        proposalId: proposal.id,
+        proposalRuntimeStatus: 'applied',
+        summary: `applied ${operationCount} operations`,
+      });
+      clearStoredServerRun(projectId, proposal.agentRunId);
     }
   } catch {
     return '提案已应用，但运行记录尚未完成；重新打开工程时会继续恢复。';
@@ -143,7 +148,6 @@ async function persistSelectedProposal(
   currentDoc: ProjectDoc,
   result: ProjectDoc,
   operationCount: number,
-  recorder: AgentRunRecorder | null,
   persistence: ProposalPersistence,
 ): Promise<boolean> {
   await persistence.saveVersion(projectId, 'Agent 修改前', currentDoc);
@@ -152,7 +156,7 @@ async function persistSelectedProposal(
     state.setProposalStale(true);
     return false;
   }
-  await confirmOwnershipBeforeApply(recorder);
+  await confirmOwnershipBeforeApply(true);
   await persistence.markApplying(projectId, proposal, result, operationCount);
   const saved = await persistence.saveDoc(projectId, result);
   if (!saved.saved) throw new Error('project save failed');
@@ -179,17 +183,27 @@ export async function applySelectedProposal(
   state.applyingProposalRef.current = true;
   const currentDoc = state.ctxRef.current.getDoc();
   const chosen = proposal.options[0].operations.filter((_, index) => selected.has(index));
-  const result = replayActions(currentDoc, chosen.flatMap((operation) => operation.actions));
-  let recorder: AgentRunRecorder | null = null;
+  let result: ProjectDoc;
   try {
-    recorder = await claimProposalRun(projectId, proposal);
+    // Inside the try: replaying a SUBSET (the user unchecked a prerequisite
+    // operation) is the one step that can throw before any await, and doing it
+    // outside left applyingProposalRef stuck true — every later apply in the
+    // session would then silently no-op.
+    result = replayActions(currentDoc, chosen.flatMap((operation) => operation.actions));
+  } catch {
+    state.applyingProposalRef.current = false;
+    showProposalError(state, '所选操作无法应用（可能取消勾选了前置步骤），提案未改动工程。');
+    return;
+  }
+  try {
+    await claimProposalRun(proposal);
     const persisted = await persistSelectedProposal(
-      state, projectId, proposal, currentDoc, result, chosen.length, recorder, persistence,
+      state, projectId, proposal, currentDoc, result, chosen.length, persistence,
     );
     if (!persisted) return;
     commitAppliedUi(state, proposal, chosen, currentDoc, result);
     const warning = await cleanupAppliedProposal(
-      recorder, proposal, chosen.length, projectId, persistence,
+      proposal, chosen.length, projectId, persistence,
     );
     if (warning) showProposalError(state, warning);
   } catch (error) {
@@ -200,7 +214,6 @@ export async function applySelectedProposal(
       showProposalError(state, '无法取得提案运行权限、保存工程或创建修改前版本，提案未应用。请重试。');
     }
   } finally {
-    recorder?.stopLease();
     state.applyingProposalRef.current = false;
   }
 }

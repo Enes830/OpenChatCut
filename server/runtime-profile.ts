@@ -1,7 +1,9 @@
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import { readDataDirPointer } from './data-dir.ts';
 
 export const DEV_PROFILE_ID_ENV = 'OPENCHATCUT_DEV_PROFILE_ID';
+export const DATA_DIR_ENV = 'OPENCHATCUT_DATA_DIR';
 const DEV_PROFILE_ENV_PREFIX = 'OPENCHATCUT_DEV_PROFILE_';
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -12,7 +14,6 @@ export interface ProjectStoreProfilePaths {
   readonly indexPath: string;
   readonly quarantineDir: string;
   readonly readyPath: string;
-  readonly leasePath: string;
   readonly tombstonePath: string;
 }
 
@@ -54,7 +55,6 @@ function projectStorePaths(rootDir: string): ProjectStoreProfilePaths {
     indexPath: join(directory, 'projects.json'),
     quarantineDir: join(directory, '.quarantine'),
     readyPath: join(directory, '.ready'),
-    leasePath: join(rootDir, 'project-store-v1.lock'),
     tombstonePath: join(rootDir, 'deleted-projects-v1.json'),
   });
 }
@@ -93,6 +93,33 @@ function configuredProfileId(env: RuntimeProfileEnv): string | null {
   return value;
 }
 
+/** User-chosen storage root (games-style save folder): data survives app removal.
+ *
+ *  Resolution order, and why:
+ *  1. The environment variable, so a launch script can pin a location. It is
+ *     explicit per process, so it is also the only form an isolated dev profile
+ *     accepts.
+ *  2. The pointer file written by the settings UI, for the ordinary profile ONLY.
+ *     An isolated dev profile must never be redirected by the developer's own
+ *     machine-wide setting: that would break the isolation guarantee and let a
+ *     checkout write into the real storage root.
+ *
+ *  Accepts ~/ expansion, requires an absolute path, and rejects anything else
+ *  loudly so a typo never silently falls back to the hidden default location. */
+function configuredDataDir(
+  env: RuntimeProfileEnv,
+  home: string,
+  isolated: boolean,
+): string | null {
+  const raw = env[DATA_DIR_ENV]?.trim();
+  if (!raw) return isolated ? null : readDataDirPointer(home);
+  const expanded = raw === '~' ? home : raw.replace(/^~(?=\/)/, home);
+  if (!isAbsolute(expanded)) {
+    throw new Error(`${DATA_DIR_ENV} must be an absolute path (got: ${raw})`);
+  }
+  return resolve(expanded);
+}
+
 export function resolveRuntimeProfile(
   env: RuntimeProfileEnv = process.env,
   locations: RuntimeProfileLocations = {},
@@ -100,8 +127,12 @@ export function resolveRuntimeProfile(
   const home = locations.homeDir ?? homedir();
   const cwd = locations.cwd ?? process.cwd();
   const profileId = configuredProfileId(env);
+  const dataDir = configuredDataDir(env, home, profileId !== null);
   if (profileId) {
-    const rootDir = join(home, '.openchatcut', 'dev-profiles', profileId);
+    // Only an explicit OPENCHATCUT_DATA_DIR reaches here (the pointer file is
+    // ignored for isolated profiles), so redirecting this checkout's root is a
+    // deliberate per-run choice, never a leak from the machine-wide setting.
+    const rootDir = dataDir ?? join(home, '.openchatcut', 'dev-profiles', profileId);
     const base = profileBase(
       rootDir,
       join(rootDir, 'media', 'uploads'),
@@ -110,12 +141,14 @@ export function resolveRuntimeProfile(
     );
     return Object.freeze({ mode: 'isolated-dev', id: profileId, ...base });
   }
-  const rootDir = join(home, '.openchatcut');
+  const rootDir = dataDir ?? join(home, '.openchatcut');
   const authOverride = env.OPENCHATCUT_PROJECT_STORE_AUTH_DIR?.trim();
   const generationOverride = env.OPENCHATCUT_GENERATION_JOB_STORE;
   const base = profileBase(
     rootDir,
-    join(cwd, 'public', 'media', 'uploads'),
+    // With a user-chosen data dir, media belongs next to the projects it
+    // backs; the checkout-relative default only applies to the hidden root.
+    dataDir ? join(dataDir, 'media', 'uploads') : join(cwd, 'public', 'media', 'uploads'),
     generationOverride ?? join(rootDir, 'generation-operations-v1.json'),
     resolve(cwd, '.env.local'),
   );
@@ -137,4 +170,15 @@ export function isIsolatedDevProfile(
   profile: RuntimeProfile = activeProfile,
 ): profile is IsolatedDevRuntimeProfile {
   return profile.mode === 'isolated-dev';
+}
+
+/** Storage root the app would use with no data directory configured. Lets the
+ *  settings UI say where clearing the field actually leads. */
+export function defaultRootDir(
+  profile: RuntimeProfile = activeProfile,
+  home: string = homedir(),
+): string {
+  return isIsolatedDevProfile(profile)
+    ? join(home, '.openchatcut', 'dev-profiles', profile.id)
+    : join(home, '.openchatcut');
 }

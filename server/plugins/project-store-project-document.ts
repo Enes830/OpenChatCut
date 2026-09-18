@@ -13,12 +13,12 @@ import {
 } from '../external-agent/project-edit-ownership-codec.ts';
 import type { LockedProjectStore, StoredEntryValue } from './project-store.ts';
 
-type ProjectDocumentCasRequest = Extract<
+type ProjectDocumentWriteRequest = Extract<
   ProjectStoreRequest,
-  { operation: 'project-document-cas' }
+  { operation: 'project-document-write' }
 >;
 type ProjectDocumentUpdateRequest = Extract<
-  ProjectDocumentCasRequest,
+  ProjectDocumentWriteRequest,
   { expectedRevision: string }
 >;
 type WithStoreLock = <T>(
@@ -54,7 +54,7 @@ async function restoreEntry(
 
 async function createProjectDocument(
   store: LockedProjectStore,
-  request: ProjectDocumentCasRequest,
+  request: ProjectDocumentWriteRequest,
   project: ProjectDoc,
 ): Promise<ProjectDocumentMutationResponse> {
   const projectId = request.key.slice('project:'.length);
@@ -104,23 +104,23 @@ async function updateProjectDocument(
 }
 
 export function createProjectDocumentStoreOperation(withStoreLock: WithStoreLock) {
-  return async (request: ProjectDocumentCasRequest): Promise<ProjectDocumentMutationResponse> => (
+  return async (request: ProjectDocumentWriteRequest): Promise<ProjectDocumentMutationResponse> => (
     withStoreLock(async (store) => {
       const current = await store.readEntry(request.key);
       const currentDoc = current.found ? normalizedProject(current.value) : null;
       if (current.found && !currentDoc) {
         throw new Error('stored project document is corrupt or unsupported');
       }
-      const currentRevision = currentDoc ? revisionOf(currentDoc) : null;
-      if (currentRevision !== request.expectedRevision) {
-        return mutationResponse(current, false, currentRevision ?? undefined);
-      }
+      // CAS removed: writes are serialized by the store lock (single local
+      // instance); the revision still increments for audit/ordering but is
+      // no longer compared against the request's expected revision, so a
+      // concurrent save can no longer fail with a revision mismatch.
       const project = normalizedProject(request.value);
       if (!project) throw new Error('project document CAS value is invalid or unsupported');
       const projectId = request.key.slice('project:'.length);
-      return request.expectedRevision === null
-        ? createProjectDocument(store, request, project)
-        : updateProjectDocument(store, request, current, project, projectId);
+      return current.found
+        ? updateProjectDocument(store, request as ProjectDocumentUpdateRequest, current, project, projectId)
+        : createProjectDocument(store, request, project);
     })
   );
 }

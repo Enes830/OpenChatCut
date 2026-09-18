@@ -4,15 +4,27 @@ import { keyStatus, setKeys } from '../keystore.ts';
 import { runProbe } from '../key-probes.ts';
 import {
   checkMediaDir,
+  DEFAULT_UPLOAD_DIR,
   expandMediaDir,
   syncUploadDirectories,
   uploadDir,
 } from '../media-dir.ts';
 import {
+  DATA_DIR_ENV,
+  defaultRootDir,
   isIsolatedDevProfile,
   runtimeProfile,
   type RuntimeProfile,
 } from '../runtime-profile.ts';
+import {
+  checkDataDir,
+  expandDataDir,
+  readDataDirPointer,
+  relocateDataDir,
+  relocatedMediaDestination,
+  writeDataDirPointer,
+} from '../data-dir.ts';
+import { sqliteStoreEnabled } from '../storage/sqlite-store.ts';
 
 const ISOLATED_R2_SETTINGS = [
   'R2_ACCOUNT_ID',
@@ -70,8 +82,64 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 /** keyStatus + absolute path to the current asset directory. FCPXML export goes to /media/uploads/<name>
  * Convert to real disk path, otherwise every asset in NLE will be offline; the directory changes with MEDIA_DIR,
  * Only the server knows, so it is returned to the front-end along with the settings (non-key, can be disclosed). */
-function settingsBody() {
-  return { ...keyStatus(), mediaDir: uploadDir() };
+function settingsBody(restartRequired = false) {
+  const profile = runtimeProfile();
+  const status = keyStatus();
+  const configured = readDataDirPointer() ?? '';
+  return {
+    ...status,
+    // The storage root is configuration, not a credential: echo it raw so the
+    // settings field shows where projects actually live. It is not a keystore
+    // key (the keystore lives inside the root), hence the explicit merge.
+    models: { ...status.models, [DATA_DIR_ENV]: configured },
+    mediaDir: uploadDir(),
+    dataDir: profile.rootDir,
+    ...(restartRequired ? { restartRequired: true } : {}),
+  };
+}
+
+/** Apply a storage-root change: validate, copy the existing data, record the
+ *  pointer. The active profile resolved at startup, so the move only takes
+ *  effect on the next launch; the caller reports that to the user.
+ *
+ *  Media is copied separately from the RESOLVED upload directory, not from
+ *  `<root>/media`: in the default profile uploads live outside the root (the
+ *  checkout's `public/media/uploads`, or `userData/...` when packaged), so
+ *  copying the root's own `media` folder would move an empty directory and
+ *  take every `/media/uploads/...` reference offline after the restart. */
+async function applyDataDirChange(
+  raw: string,
+  profile: RuntimeProfile,
+  log: (msg: string) => void,
+): Promise<void> {
+  if (process.env[DATA_DIR_ENV]?.trim()) {
+    throw new Error(`storage directory is pinned by ${DATA_DIR_ENV} and cannot be changed from settings`);
+  }
+  if (isIsolatedDevProfile(profile)) {
+    throw new Error('storage directory cannot be changed while an isolated development profile is active');
+  }
+  const checked = await checkDataDir(raw, defaultRootDir(profile));
+  if (!checked.ok) throw new Error(checked.error ?? 'invalid storage directory');
+  const target = expandDataDir(raw);
+  // Clearing the field is a relocation too: it sends the next launch back to the
+  // default root, which is empty or stale for anyone who has been running
+  // elsewhere. Treating it as "no move" would skip both the SQLite refusal and
+  // the copy, and lose the projects exactly like the case this guards against.
+  const destination = target ?? defaultRootDir(profile);
+  if (destination !== profile.rootDir) {
+    const outcome = await relocateDataDir(profile.rootDir, destination, log, sqliteStoreEnabled());
+    if (outcome.refused === 'sqlite-store-active') {
+      throw new Error(
+        'the project store has been migrated to SQLite and cannot be relocated yet: '
+        + 'moving a live database needs a quiesced snapshot, which this setting does not do',
+      );
+    }
+    // Uploads are addressed by name through uploadReadDirs(), so the copy must
+    // land where the relocated profile will resolve its writable upload dir.
+    const mediaDestination = relocatedMediaDestination(target, destination, DEFAULT_UPLOAD_DIR);
+    await syncUploadDirectories(uploadDir(profile), mediaDestination, log);
+  }
+  await writeDataDirPointer(target);
 }
 
 export function settingsPlugin(): Plugin {
@@ -96,6 +164,18 @@ export function settingsPlugin(): Plugin {
             const profile = runtimeProfile();
             const patch = await readBody(req);
             assertProfileSensitiveSettingsPatch(patch, profile);
+            // The storage root is not a keystore key (the keystore lives inside
+            // it): handle and strip it before setKeys sees the patch.
+            let dataDirChanged = false;
+            if (Object.hasOwn(patch, DATA_DIR_ENV)) {
+              await applyDataDirChange(
+                String(patch[DATA_DIR_ENV] ?? ''),
+                profile,
+                (msg) => server.config.logger.info(msg),
+              );
+              delete patch[DATA_DIR_ENV];
+              dataDirChanged = true;
+            }
             const previousMediaDir = uploadDir(profile);
             if ('MEDIA_DIR' in patch) {
               const rawMediaDir = String(patch.MEDIA_DIR ?? '');
@@ -109,7 +189,7 @@ export function settingsPlugin(): Plugin {
               );
             }
             await setKeys(patch);
-            sendJson(res, 200, settingsBody());
+            sendJson(res, 200, settingsBody(dataDirChanged));
             return;
           }
           sendJson(res, 405, { error: 'method not allowed — use GET or POST' });

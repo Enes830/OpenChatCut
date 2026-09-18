@@ -4,21 +4,9 @@ import type {
 } from '../../shared/project-store-transport';
 
 const API_PATH = '/api/project-store';
-const LAUNCH_TOKEN_HEADER = 'X-OpenChatCut-Editor-Launch-Token';
-const SESSION_HEADER = 'X-OpenChatCut-Project-Store-Session';
-const TOKEN_FRAGMENT_KEY = 'openchatcut-editor-token';
-const SESSION_STORAGE_KEY = 'openchatcut.projectStoreSession';
-const LAUNCH_STORAGE_KEY = 'openchatcut.projectStoreLaunchToken';
-let launchToken: string | null = null;
-let sessionToken: string | null | undefined;
-let sessionPromise: Promise<string> | null = null;
 const browserOwnerships = new Map<string, BrowserProjectOwnership>();
 const PROJECT_OWNERSHIP_READY_TIMEOUT_MS = 15_000;
 const browserOwnershipWaiters = new Map<string, Set<BrowserProjectOwnershipWaiter>>();
-
-interface StoredSession {
-  token: string;
-}
 
 interface DesktopProjectStoreTransport {
   projectStore(request: ProjectStoreRequest): Promise<ProjectStoreResponse>;
@@ -105,183 +93,17 @@ function desktopTransport(): DesktopProjectStoreTransport | undefined {
   return desktopWindow.openChatCutDesktop;
 }
 
-function removeLaunchFragment(params: URLSearchParams): void {
-  if (!params.has(TOKEN_FRAGMENT_KEY)) return;
-  params.delete(TOKEN_FRAGMENT_KEY);
-  const suffix = params.toString();
-  try {
-    history.replaceState(history.state, '', `${location.pathname}${location.search}${suffix ? `#${suffix}` : ''}`);
-  } catch {
-    // The in-memory token remains usable if history is unavailable.
-  }
-}
-
-function rememberLaunchToken(token: string): void {
-  launchToken = token;
-  try {
-    sessionStorage.setItem(LAUNCH_STORAGE_KEY, token);
-  } catch {
-    // The in-memory launch credential remains usable for this page lifetime.
-  }
-}
-
-function captureLaunchFragment(): void {
-  if (typeof location === 'undefined') return;
-  const params = new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : '');
-  if (!params.has(TOKEN_FRAGMENT_KEY)) return;
-  const candidate = params.get(TOKEN_FRAGMENT_KEY)?.trim() ?? '';
-  removeLaunchFragment(params);
-  if (candidate.length >= 32) rememberLaunchToken(candidate);
-}
-
-function clearStoredLaunchToken(expected: string): void {
-  if (launchToken === expected) launchToken = null;
-  try {
-    if (sessionStorage.getItem(LAUNCH_STORAGE_KEY) === expected) {
-      sessionStorage.removeItem(LAUNCH_STORAGE_KEY);
-    }
-  } catch {
-    // The matching in-memory credential is still cleared when storage is unavailable.
-  }
-}
-
-function consumeLaunchToken(): string | null {
-  captureLaunchFragment();
-  if (launchToken) return launchToken;
-  try {
-    const stored = sessionStorage.getItem(LAUNCH_STORAGE_KEY)?.trim() ?? '';
-    if (stored.length >= 32) launchToken = stored;
-  } catch {
-    // Privacy-restricted environments may not expose storage.
-  }
-  return launchToken;
-}
-
-consumeLaunchToken();
-
-function loadStoredSession(): string | null {
-  if (sessionToken !== undefined) return sessionToken;
-  sessionToken = null;
-  if (typeof sessionStorage === 'undefined') return null;
-  try {
-    const parsed: unknown = JSON.parse(sessionStorage.getItem(SESSION_STORAGE_KEY) ?? 'null');
-    if (parsed && typeof parsed === 'object') {
-      const value = parsed as Partial<StoredSession>;
-      if (typeof value.token === 'string' && value.token.length >= 32) {
-        sessionToken = value.token;
-      } else {
-        sessionStorage.removeItem(SESSION_STORAGE_KEY);
-      }
-    }
-  } catch {
-    sessionStorage.removeItem(SESSION_STORAGE_KEY);
-  }
-  return sessionToken;
-}
-
-function clearStoredSession(expected?: string): void {
-  if (expected && loadStoredSession() !== expected) return;
-  sessionToken = null;
-  try {
-    sessionStorage.removeItem(SESSION_STORAGE_KEY);
-  } catch {
-    // The in-memory session is still cleared.
-  }
-}
-
-async function exchangeLaunchToken(): Promise<string> {
-  const token = consumeLaunchToken();
-  if (!token) throw new Error('project store HTTP transport is unavailable');
-  const response = await fetch(`${API_PATH}/session`, {
-    method: 'POST',
-    cache: 'no-store',
-    headers: { [LAUNCH_TOKEN_HEADER]: token },
-  });
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) clearStoredLaunchToken(token);
-    throw new Error(`project store session exchange failed: ${response.status}`);
-  }
-  const value: unknown = await response.json();
-  if (!value || typeof value !== 'object') throw new Error('invalid project store session response');
-  const session = value as Partial<{ sessionToken: string }>;
-  if (typeof session.sessionToken !== 'string' || session.sessionToken.length < 32) {
-    throw new Error('invalid project store session response');
-  }
-  sessionToken = session.sessionToken;
-  try {
-    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
-      token: session.sessionToken,
-    } satisfies StoredSession));
-  } catch {
-    // The in-memory session remains valid for this page lifetime.
-  }
-  return session.sessionToken;
-}
-
-async function refreshHttpSession(staleSession: string): Promise<string> {
-  const current = loadStoredSession();
-  if (current && current !== staleSession) return current;
-  clearStoredSession(staleSession);
-  sessionPromise ??= exchangeLaunchToken().finally(() => { sessionPromise = null; });
-  return sessionPromise;
-}
-
-async function ensureHttpSession(): Promise<string> {
-  const existing = loadStoredSession();
-  if (existing) return existing;
-  sessionPromise ??= exchangeLaunchToken().finally(() => { sessionPromise = null; });
-  return sessionPromise;
-}
-
-function withSessionHeader(init: RequestInit | undefined, session: string): RequestInit {
-  const headers = new Headers(init?.headers);
-  headers.set(SESSION_HEADER, session);
-  return { ...init, headers };
-}
-
-async function fetchWithSession(
-  input: RequestInfo | URL,
-  init: RequestInit | undefined,
-  required: boolean,
-): Promise<Response> {
-  let session: string | null = null;
-  try {
-    session = await ensureHttpSession();
-  } catch (error) {
-    if (required) throw error;
-  }
-  let response = await fetch(input, session ? withSessionHeader(init, session) : init);
-  if (!session || (response.status !== 401 && response.status !== 403)
-    || consumeLaunchToken() === null) return response;
-  try {
-    session = await refreshHttpSession(session);
-    response = await fetch(input, withSessionHeader(init, session));
-  } catch {
-    // Preserve the original authorization response when renewal is unavailable.
-  }
-  return response;
-}
-
-export function fetchWithEditorSession(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-): Promise<Response> {
-  return fetchWithSession(input, init, true);
-}
-
 function httpAvailable(): boolean {
-  // Any loopback http(s) page may READ the shared library (server allows
-  // sessionless loopback-origin reads). Writes still need a session.
+  // Any loopback http(s) page may use the shared library: the server
+  // authorizes loopback requests by Origin/Sec-Fetch-Site alone.
   return typeof location !== 'undefined'
     && (location.protocol === 'http:' || location.protocol === 'https:');
 }
 
-/** Whether this origin holds a WRITE credential for the shared library. */
+/** Whether this origin may WRITE to the shared library (loopback editor tab
+ *  or the desktop shell). The server enforces the request shape itself. */
 export function projectStoreWriteCredential(): boolean {
-  return !!desktopTransport()
-    || (typeof location !== 'undefined'
-      && (location.protocol === 'http:' || location.protocol === 'https:')
-      && (loadStoredSession() !== null || consumeLaunchToken() !== null));
+  return !!desktopTransport() || httpAvailable();
 }
 
 export function projectStoreRemoteAvailable(): boolean {
@@ -311,20 +133,24 @@ async function requestHttp(request: ProjectStoreRequest): Promise<ProjectStoreRe
       path = '/merge';
       init = postJson(init, headers, { entries: request.entries });
       break;
-    case 'agent-runtime-cas':
-      path = '/agent-runtime/cas';
+    case 'agent-runtime-write':
+      path = '/agent-runtime/write';
       init = postJson(init, headers, request);
       break;
     case 'agent-session-rotate':
       path = '/agent-session/rotate';
       init = postJson(init, headers, request);
       break;
-    case 'project-document-cas':
-      path = '/project-document/cas';
+    case 'project-document-write':
+      path = '/project-document/write';
       init = postJson(init, headers, request);
       break;
     case 'agent-run-lease':
       path = '/agent-runtime/lease';
+      init = postJson(init, headers, request);
+      break;
+    case 'export-recovery-lease':
+      path = '/export-recovery/lease';
       init = postJson(init, headers, request);
       break;
     case 'set':
@@ -340,10 +166,40 @@ async function requestHttp(request: ProjectStoreRequest): Promise<ProjectStoreRe
       path = '/project/purge';
       init = postJson(init, headers, request);
       break;
+    case 'semantic-vectors-upsert':
+      path = '/semantic-vectors/upsert';
+      init = postJson(init, headers, request);
+      break;
+    case 'semantic-vectors-search':
+      path = '/semantic-vectors/search';
+      init = postJson(init, headers, request);
+      break;
+    case 'semantic-vectors-prune':
+      path = '/semantic-vectors/prune';
+      init = postJson(init, headers, request);
+      break;
+    case 'semantic-vectors-clear':
+      path = '/semantic-vectors/clear';
+      init = postJson(init, headers, request);
+      break;
   }
-  const response = await fetchWithSession(`${API_PATH}${path}`, init, false);
+  const response = await fetch(`${API_PATH}${path}`, init);
   if (!response.ok) {
-    throw Object.assign(new Error(`project store request failed: ${response.status}`), { status: response.status });
+    let details: { error?: string; code?: string; run?: unknown } = {};
+    try {
+      const value: unknown = await response.json();
+      if (value && typeof value === 'object') details = value as typeof details;
+    } catch {
+      // Non-JSON responses retain the status-only fallback below.
+    }
+    const message = typeof details.error === 'string'
+      ? details.error
+      : `project store request failed: ${response.status}`;
+    throw Object.assign(new Error(message), {
+      status: response.status,
+      code: details.code,
+      run: details.run,
+    });
   }
   return response.json() as Promise<ProjectStoreResponse>;
 }
@@ -355,19 +211,19 @@ export async function requestProjectStore(
   return desktop ? desktop.projectStore(request) : requestHttp(request);
 }
 
+/** Fetch helper for editor-side HTTP endpoints (bootstrap, storage
+ *  migration). The server authorizes by loopback request shape; no session
+ *  header is attached. */
+export function fetchWithEditorSession(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  return fetch(input, { ...init, cache: 'no-store' });
+}
 
 export function resetProjectStoreTransport(): void {
-  launchToken = null;
-  sessionToken = undefined;
-  sessionPromise = null;
   browserOwnerships.clear();
   for (const projectId of browserOwnershipWaiters.keys()) {
     resolveBrowserProjectOwnershipWaiters(projectId, undefined);
-  }
-  try {
-    sessionStorage.removeItem(SESSION_STORAGE_KEY);
-    sessionStorage.removeItem(LAUNCH_STORAGE_KEY);
-  } catch {
-    // Test or privacy-restricted environments may not expose storage.
   }
 }

@@ -13,134 +13,40 @@ import type {
   ProjectStoreRequest,
 } from '../../shared/project-store-transport';
 import { projectIdFromProjectStoreKey } from '../../shared/project-store-validation';
-type AgentRuntimeCasRequest = Extract<ProjectStoreRequest, { operation: 'agent-runtime-cas' }>;
+import {
+  configureLocalKvBackend, freshCache, hasIdb, injectedBackend,
+  localDel, localGet, localKeys, localSet, resetLocalKvMemory,
+  type SharedKvBackend,
+} from './sharedKvLocal';
+import {
+  acknowledgePendingKeys, clearPendingKey, isProjectDocumentKey,
+  loadPendingKeys, localEntries, locallyPendingKeys, markPendingKey,
+  MIGRATION_KEY, PENDING_KEYS_KEY,
+} from './sharedKvPending';
+import { recoverUnmergedProjects } from './sharedKvRecovery';
+import {
+  requestEntry, requestMerge, requestMutation, requestProjectDocumentMutation,
+  requestSnapshot, validMutationResponse, type EntryResponse,
+} from './sharedKvRequests';
+export type { SharedKvBackend } from './sharedKvLocal';
+type AgentRuntimeWriteRequest = Extract<ProjectStoreRequest, { operation: 'agent-runtime-write' }>;
 type AgentRunLeaseRequest = Extract<ProjectStoreRequest, { operation: 'agent-run-lease' }>;
-type ProjectDocumentCasRequest = Extract<ProjectStoreRequest, { operation: 'project-document-cas' }>;
-export interface SharedKvBackend {
-  get<T>(key: string): Promise<T | undefined>;
-  set(key: string, value: unknown): Promise<void>;
-  delete(key: string): Promise<void>;
-  keys(): Promise<string[]>;
-  compareAndSwapAgentRuntime(input: AgentRuntimeCasRequest): Promise<ProjectStoreMutationResponse>;
-  updateAgentRunLease(input: AgentRunLeaseRequest): Promise<ProjectStoreMutationResponse>;
-}
-const DB_NAME = 'openchatcut';
-const STORE = 'kv';
-const MIGRATION_KEY = '__openchatcut_shared_store_v1__';
-const memoryStore = new Map<string, unknown>();
-let injectedBackend: SharedKvBackend | undefined;
-interface StoreSnapshot {
-  version: 1;
-  entries: Record<string, unknown>;
-}
-interface EntryResponse {
-  found: boolean;
-  value?: unknown;
-}
+type ProjectDocumentWriteRequest = Extract<ProjectStoreRequest, { operation: 'project-document-write' }>;
 let remoteCache: Record<string, unknown> | null = null;
+// Keys whose last write could not reach the server (offline/read-only):
+// remote reads must never purge their local copy, or the only data copy
+// is silently deleted on the next load.
 const remoteKnown = new Set<string>();
 let readyPromise: Promise<void> | undefined;
 let projectMigrationPending = false;
-const hasIdb = (): boolean => typeof indexedDB !== 'undefined';
 const canSync = (): boolean => !injectedBackend && projectStoreRemoteAvailable();
-const isProjectDocumentKey = (key: string): boolean => /^project:[a-zA-Z0-9_-]{1,160}$/.test(key);
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  !!value && typeof value === 'object' && !Array.isArray(value);
 export function configureSharedKvBackend(backend: SharedKvBackend | undefined): void {
-  injectedBackend = backend;
+  configureLocalKvBackend(backend);
   remoteCache = null;
   remoteKnown.clear();
+  locallyPendingKeys.clear();
   projectMigrationPending = false;
   readyPromise = undefined;
-}
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-async function localGet<T>(key: string): Promise<T | undefined> {
-  if (injectedBackend) return injectedBackend.get<T>(key);
-  if (!hasIdb()) return memoryStore.get(key) as T | undefined;
-  const db = await openDb();
-  return new Promise<T | undefined>((resolve, reject) => {
-    const request = db.transaction(STORE, 'readonly').objectStore(STORE).get(key);
-    request.onsuccess = () => resolve(request.result as T | undefined);
-    request.onerror = () => reject(request.error);
-  });
-}
-async function localSet(key: string, value: unknown): Promise<void> {
-  if (injectedBackend) {
-    await injectedBackend.set(key, value);
-    return;
-  }
-  if (!hasIdb()) {
-    memoryStore.set(key, value);
-    return;
-  }
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const transaction = db.transaction(STORE, 'readwrite');
-    transaction.objectStore(STORE).put(value, key);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
-}
-async function localDel(key: string): Promise<void> {
-  if (injectedBackend) {
-    await injectedBackend.delete(key);
-    return;
-  }
-  if (!hasIdb()) {
-    memoryStore.delete(key);
-    return;
-  }
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const transaction = db.transaction(STORE, 'readwrite');
-    transaction.objectStore(STORE).delete(key);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
-}
-async function localKeys(): Promise<string[]> {
-  if (injectedBackend) return injectedBackend.keys();
-  if (!hasIdb()) return [...memoryStore.keys()];
-  const db = await openDb();
-  return new Promise<string[]>((resolve, reject) => {
-    const request = db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys();
-    request.onsuccess = () => resolve(request.result.filter((key): key is string => typeof key === 'string'));
-    request.onerror = () => reject(request.error);
-  });
-}
-async function localEntries(): Promise<Record<string, unknown>> {
-  const entries: Record<string, unknown> = {};
-  for (const key of await localKeys()) {
-    if (key !== MIGRATION_KEY) entries[key] = await localGet(key);
-  }
-  return entries;
-}
-function validSnapshot(value: unknown): value is StoreSnapshot {
-  return isRecord(value) && value.version === 1 && isRecord(value.entries);
-}
-async function requestSnapshot(): Promise<StoreSnapshot> {
-  const value = await requestProjectStore({ operation: 'snapshot' });
-  if (!validSnapshot(value)) throw new Error('invalid project store response');
-  return value;
-}
-async function requestMerge(entries: Record<string, unknown>): Promise<StoreSnapshot> {
-  const value = await requestProjectStore({ operation: 'merge', entries });
-  if (!validSnapshot(value)) throw new Error('invalid project store response');
-  return value;
-}
-async function requestEntry(key: string): Promise<EntryResponse> {
-  const value = await requestProjectStore({ operation: 'entry', key });
-  if (!('found' in value) || typeof value.found !== 'boolean') {
-    throw new Error('invalid project index response');
-  }
-  return value;
 }
 function cacheEntry(key: string, entry: EntryResponse): void {
   remoteKnown.add(key);
@@ -150,74 +56,44 @@ function cacheEntry(key: string, entry: EntryResponse): void {
 }
 async function fetchRemoteEntry(key: string): Promise<void> {
   const entry = await requestEntry(key);
-  cacheEntry(key, entry);
-  if (key === 'projects' && projectMigrationPending) return;
-  if (entry.found) await localSet(key, entry.value);
-  else await localDel(key);
-}
-function validMutationResponse(value: unknown): value is ProjectStoreMutationResponse {
-  return isRecord(value)
-    && typeof value.accepted === 'boolean'
-    && typeof value.found === 'boolean'
-    && (!value.found || Object.hasOwn(value, 'value'));
-}
-function validProjectDocumentMutation(
-  value: unknown,
-): value is ProjectDocumentMutationResponse {
-  if (!isRecord(value) || !validMutationResponse(value)) return false;
-  const currentRevision = value.currentRevision;
-  const ownershipEpoch = value.ownershipEpoch;
-  return (currentRevision === undefined || typeof currentRevision === 'string')
-    && (ownershipEpoch === undefined
-      || (typeof ownershipEpoch === 'number'
-        && Number.isSafeInteger(ownershipEpoch)
-        && ownershipEpoch >= 1));
-}
-async function requestProjectDocumentMutation(
-  request: ProjectDocumentCasRequest,
-): Promise<ProjectDocumentMutationResponse> {
-  const value = await requestProjectStore(request);
-  if (!validProjectDocumentMutation(value)) {
-    throw new Error('invalid project document mutation response');
+  if (locallyPendingKeys.has(key) || (key === 'projects' && projectMigrationPending)) {
+    const local = await localGet(key);
+    remoteKnown.add(key);
+    if (local === undefined) delete remoteCache?.[key];
+    else if (remoteCache) remoteCache = { ...remoteCache, [key]: local };
+    return;
   }
-  return value;
-}
-async function requestMutation(
-  request: AgentRuntimeCasRequest | AgentRunLeaseRequest,
-): Promise<ProjectStoreMutationResponse> {
-  const value = await requestProjectStore(request);
-  if (!validMutationResponse(value)) throw new Error('invalid project store mutation response');
-  return value;
+  cacheEntry(key, entry);
+  if (entry.found) {
+    await localSet(key, entry.value);
+  } else {
+    await localDel(key);
+  }
 }
 async function cacheMutation(key: string, result: ProjectStoreMutationResponse): Promise<void> {
   cacheEntry(key, result);
   if (result.found) await localSet(key, result.value);
   else await localDel(key);
 }
-export async function kvCompareAndSwapAgentRuntime(
-  request: AgentRuntimeCasRequest,
+export async function kvWriteAgentRuntime(
+  request: AgentRuntimeWriteRequest,
 ): Promise<ProjectStoreMutationResponse> {
   await ready();
   const remote = !injectedBackend && canSync();
   const result = injectedBackend
-    ? await injectedBackend.compareAndSwapAgentRuntime(request)
+    ? await injectedBackend.writeAgentRuntime(request)
     : remote
       ? await requestMutation(request)
-      : await localAgentRuntimeCas(request);
+      : await localAgentRuntimeWrite(request);
   if (!validMutationResponse(result)) throw new Error('invalid agent runtime CAS response');
   if (remote) await cacheMutation(request.key, result);
   return result;
 }
-async function localAgentRuntimeCas(
-  request: AgentRuntimeCasRequest,
+async function localAgentRuntimeWrite(
+  request: AgentRuntimeWriteRequest,
 ): Promise<ProjectStoreMutationResponse> {
-  const current = await localGet<unknown>(request.key);
-  const revision = isRecord(current) && Number.isInteger(current.revision)
-    ? Number(current.revision)
-    : null;
-  if (revision !== request.expectedRevision) {
-    return { accepted: false, found: current !== undefined, ...(current === undefined ? {} : { value: current }) };
-  }
+  // CAS removed: local writes are serialized by the caller's enqueue/lock;
+  // the expected revision is no longer compared.
   await localSet(request.key, request.value);
   return { accepted: true, found: true, value: request.value };
 }
@@ -237,33 +113,53 @@ export async function kvUpdateAgentRunLease(
 
 async function bootstrap(): Promise<void> {
   if (!canSync()) return;
+  let projects: EntryResponse;
   try {
+    await loadPendingKeys();
     const migrated = await localGet<boolean>(MIGRATION_KEY);
-    let projects = await requestEntry('projects');
+    projects = await requestEntry('projects');
     const canWrite = projectStoreWriteCredential();
-    projectMigrationPending = !canWrite
-      && (!projects.found || (Array.isArray(projects.value) && projects.value.length === 0));
-    if ((!migrated || !projects.found) && canWrite) {
-      const local = await localEntries();
-      const snapshot = await requestMerge(local);
-      projects = 'projects' in snapshot.entries
-        ? { found: true, value: snapshot.entries.projects }
-        : { found: false };
+    let mergeFailed = false;
+    if ((!migrated || !projects.found || locallyPendingKeys.size > 0) && canWrite) {
+      try {
+        const local = await localEntries();
+        const result = await recoverUnmergedProjects(
+          local, await requestMerge(local, [...locallyPendingKeys].filter(isProjectDocumentKey)),
+          locallyPendingKeys,
+          (entries) => requestMerge(entries, Object.keys(entries).filter(isProjectDocumentKey)),
+          requestEntry,
+        );
+        const { snapshot } = result;
+        projects = 'projects' in snapshot.entries
+          ? { found: true, value: snapshot.entries.projects }
+          : { found: false };
+        await acknowledgePendingKeys(local, snapshot.entries, result.recovered);
+      } catch {
+        // Merge failure (lease contention, transient 5xx, timeout): keep the
+        // remote cache usable for reads and retry the merge on a later load.
+        // When a local 'projects' entry exists it must stay authoritative —
+        // a failed merge is never allowed to fall through to the sync-down
+        // branch below, which would overwrite it (or, with an empty remote
+        // library, delete the only copy of the local project index).
+        mergeFailed = (await localGet<unknown>('projects')) !== undefined;
+      }
     }
-    remoteCache = {};
-    remoteKnown.clear();
-    cacheEntry('projects', projects);
-    if (projectMigrationPending) {
-      await localDel(MIGRATION_KEY);
-      return;
-    }
-    if (projects.found) await localSet('projects', projects.value);
-    else await localDel('projects');
-    await localSet(MIGRATION_KEY, true);
+    projectMigrationPending = locallyPendingKeys.has('projects') || mergeFailed || (!canWrite
+      && (!projects.found || (Array.isArray(projects.value) && projects.value.length === 0)));
   } catch {
-    remoteCache = null;
-    remoteKnown.clear();
+    await disableRemote();
+    return;
   }
+  remoteCache = {};
+  remoteKnown.clear();
+  cacheEntry('projects', projects);
+  if (projectMigrationPending) {
+    await localDel(MIGRATION_KEY);
+    return;
+  }
+  if (projects.found) await localSet('projects', projects.value);
+  else await localDel('projects');
+  await localSet(MIGRATION_KEY, true);
 }
 
 async function ready(): Promise<void> {
@@ -281,13 +177,56 @@ async function disableRemote(): Promise<void> {
   }
 }
 
+// Fresh reads hit the network, but a short TTL cache absorbs repeated reads
+// within one hydration (currentAgentSessionGeneration is consulted by
+// loadChat, the runtime sidecar and the recovery chain).
+const FRESH_CACHE_TTL_MS = 2_000;
+// kvGet serves known keys from the in-memory remote cache; re-verify them
+// against the server on a short TTL so a second port/instance that wrote
+// newer data is not hidden forever (read-modify-write flows would then
+// overwrite the newer remote value).
+const KV_REMOTE_VERIFY_TTL_MS = 5_000;
+const remoteVerifiedAt = new Map<string, number>();
+
 export async function kvGetFresh<T>(key: string): Promise<T | undefined> {
   await ready();
-  if (!injectedBackend && projectStoreRemoteAvailable()) {
-    await fetchRemoteEntry(key);
-    return remoteCache?.[key] as T | undefined;
+  // Session generation is the cross-port cutover fence. It must observe an
+  // external clear before a new run writes, so never serve it from the TTL
+  // cache. Other fresh reads retain the hydration round-trip optimization.
+  const cacheGeneration = !key.startsWith('agent-session-generation:');
+  const cached = cacheGeneration ? freshCache.get(key) : undefined;
+  if (cached && Date.now() - cached.at < FRESH_CACHE_TTL_MS) {
+    return cached.value as T | undefined;
   }
-  return localGet<T>(key);
+  if (!injectedBackend && projectStoreRemoteAvailable()) {
+    try {
+      await fetchRemoteEntry(key);
+    } catch {
+      // Remote momentarily unreachable (bootstrap may have failed the same
+      // way): serve the local copy instead of failing hydration.
+      await disableRemote();
+    }
+    if (remoteCache) {
+      const value = remoteCache[key] as T | undefined;
+      if (cacheGeneration) freshCache.set(key, { value, at: Date.now() });
+      return value;
+    }
+  }
+  const value = await localGet<T>(key);
+  if (cacheGeneration) freshCache.set(key, { value, at: Date.now() });
+  return value;
+}
+/** Local-first read for per-machine session data (chat history, agent
+ *  runtime sidecar): return the local copy immediately and refresh the
+ *  remote cache in the background. Cross-port consistency for these keys is
+ *  best-effort — they are regenerated by the editor, not shared documents. */
+export async function kvGetLocalFirst<T>(key: string): Promise<T | undefined> {
+  await ready();
+  const local = await localGet<T>(key);
+  if (!injectedBackend && remoteCache && !remoteKnown.has(key)) {
+    void fetchRemoteEntry(key).catch(() => undefined);
+  }
+  return local ?? (remoteCache?.[key] as T | undefined);
 }
 
 export async function kvAdoptAuthoritativeValue(key: string, value: unknown): Promise<void> {
@@ -303,16 +242,27 @@ export function kvForgetCachedAgentSessionEntries(projectId: string): void {
   for (const key of remoteKnown) {
     if (isSessionEntry(key)) remoteKnown.delete(key);
   }
-  remoteCache = Object.fromEntries(
-    Object.entries(remoteCache ?? {}).filter(([key]) => !isSessionEntry(key)),
-  );
+  // Never turn a null remoteCache into an empty object: {} is truthy and
+  // makes later kvSet/kvGet take the remote branch (and fail) in
+  // environments that never bootstrapped a remote store.
+  remoteCache = remoteCache === null
+    ? null
+    : Object.fromEntries(Object.entries(remoteCache).filter(([key]) => !isSessionEntry(key)));
+  for (const key of [...freshCache.keys()]) {
+    if (isSessionEntry(key)) freshCache.delete(key);
+  }
 }
 
 export async function kvGet<T>(key: string): Promise<T | undefined> {
   await ready();
   if (remoteCache) {
     try {
-      if (key === 'projects' || !remoteKnown.has(key)) await fetchRemoteEntry(key);
+      const lastVerified = remoteVerifiedAt.get(key) ?? 0;
+      if (key === 'projects' || !remoteKnown.has(key)
+        || Date.now() - lastVerified > KV_REMOTE_VERIFY_TTL_MS) {
+        await fetchRemoteEntry(key);
+        remoteVerifiedAt.set(key, Date.now());
+      }
     } catch {
       await disableRemote();
     }
@@ -324,9 +274,18 @@ export async function kvGet<T>(key: string): Promise<T | undefined> {
 async function setProjectDocument(key: string, value: unknown): Promise<void> {
   if (injectedBackend || !canSync()) {
     await localSet(key, value);
+    if (!injectedBackend) await markPendingKey(key);
     return;
   }
-  if (!remoteCache) throw new Error('共享工程数据库暂时不可用，工程未保存');
+  if (!remoteCache) {
+    // The remote bootstrap failed (desktop IPC / server briefly unreachable).
+    // Fall back to a local write marked as pending so a later successful
+    // bootstrap merge carries it into the shared store — the same offline
+    // semantics as kvGet's local read fallback. Never hard-fail the editor.
+    await localSet(key, value);
+    await markPendingKey(key);
+    return;
+  }
   const projectId = key.slice('project:'.length);
   let ownership = browserProjectOwnership(projectId);
   const local = await localGet<unknown>(key);
@@ -334,16 +293,16 @@ async function setProjectDocument(key: string, value: unknown): Promise<void> {
     ownership = await waitForBrowserProjectOwnership(projectId);
     if (!ownership) throw new Error('工程编辑权尚未注册，工程未保存');
   }
-  const request: ProjectDocumentCasRequest = ownership
+  const request: ProjectDocumentWriteRequest = ownership
     ? {
-      operation: 'project-document-cas',
+      operation: 'project-document-write',
       key,
       expectedRevision: ownership.baseRevision,
       ownerId: ownership.ownerId,
       ownershipEpoch: ownership.epoch,
       value,
     }
-    : { operation: 'project-document-cas', key, expectedRevision: null, value };
+    : { operation: 'project-document-write', key, expectedRevision: null, value };
   let result: ProjectDocumentMutationResponse;
   try {
     result = await requestProjectDocumentMutation(request);
@@ -353,8 +312,7 @@ async function setProjectDocument(key: string, value: unknown): Promise<void> {
   }
   if (!result.accepted) {
     await cacheMutation(key, result);
-    if (typeof window !== 'undefined') window.location.reload();
-    throw new Error('工程已被其他编辑器更新，请重新加载');
+    throw new Error('工程已被其他编辑器更新，请手动刷新页面后重试');
   }
   if (!result.found || typeof result.currentRevision !== 'string') {
     throw new Error('invalid successful project document CAS response');
@@ -366,6 +324,7 @@ async function setProjectDocument(key: string, value: unknown): Promise<void> {
     advanceBrowserProjectOwnership(ownership, result.currentRevision);
   }
   await cacheMutation(key, result);
+  await clearPendingKey(key);
 }
 
 export async function kvSet(key: string, value: unknown): Promise<void> {
@@ -376,6 +335,7 @@ export async function kvSet(key: string, value: unknown): Promise<void> {
   }
   if (!remoteCache) {
     await localSet(key, value);
+    if (!injectedBackend) await markPendingKey(key);
     return;
   }
   if (!projectStoreWriteCredential()) {
@@ -389,9 +349,11 @@ export async function kvSet(key: string, value: unknown): Promise<void> {
     }
     await disableRemote();
     await localSet(key, value);
+    await markPendingKey(key);
     return;
   }
   await localSet(key, value);
+  await clearPendingKey(key);
   remoteKnown.add(key);
   remoteCache = { ...remoteCache, [key]: value };
 }
@@ -479,24 +441,26 @@ export async function kvKeys(): Promise<string[]> {
   if (remoteCache) {
     try {
       const snapshot = await requestSnapshot();
-      remoteCache = snapshot.entries;
+      const pending: Record<string, unknown> = {};
+      for (const key of locallyPendingKeys) pending[key] = await localGet(key);
+      remoteCache = { ...snapshot.entries, ...pending };
       remoteKnown.clear();
-      for (const key of Object.keys(snapshot.entries)) remoteKnown.add(key);
-      return Object.keys(snapshot.entries);
+      for (const key of Object.keys(remoteCache)) remoteKnown.add(key);
+      return Object.keys(remoteCache);
     } catch {
       await disableRemote();
     }
   }
-  return (await localKeys()).filter((key) => key !== MIGRATION_KEY);
+  return (await localKeys()).filter((key) => key !== MIGRATION_KEY && key !== PENDING_KEYS_KEY);
 }
 
 /** Test helper: reset the Node fallback shared by all persistence modules. */
 export function resetSharedKvMemory(): void {
-  memoryStore.clear();
+  resetLocalKvMemory();
   remoteCache = null;
   remoteKnown.clear();
+  locallyPendingKeys.clear();
   readyPromise = undefined;
   projectMigrationPending = false;
-  injectedBackend = undefined;
   resetProjectStoreTransport();
 }

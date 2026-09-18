@@ -11,9 +11,11 @@ import {
   agentLanguagePrompt,
   assembleSystemPrompt,
   buildAgentSystemPrompt,
+  confirmationModePrompt,
   designStylePrompt,
   editorStatePrompt,
 } from './systemPrompt';
+import { setAgentAutoApply } from './approval-mode';
 import { buildCodexSystemPrompt } from './codex/runtime';
 import { DEFAULT_AGENT_SETTINGS } from './settings/agentSettings';
 import type { AgentContext } from './context';
@@ -49,6 +51,10 @@ const commonPrefixLength = (a: string, b: string): number => {
   assert.match(agentLanguagePrompt('zh'), /in Chinese/);
   assert.match(agentLanguagePrompt('en'), /interface language is English/);
   assert.match(agentLanguagePrompt('en'), /in English/);
+  assert.match(agentLanguagePrompt('it'), /interface language is Italian/);
+  assert.match(agentLanguagePrompt('it'), /in Italian/);
+  assert.match(agentLanguagePrompt('ru'), /interface language is Russian/);
+  assert.match(agentLanguagePrompt('ru'), /in Russian/);
 }
 
 // ── Public product identity must override stale names in workflows or conversation memory ──
@@ -61,6 +67,7 @@ const commonPrefixLength = (a: string, b: string): number => {
   ], '<editor_state/>');
 
   assert.match(PRODUCT_IDENTITY_PROMPT, /official product name is OpenChatCut/);
+  assert.match(SYSTEM_PROMPT, /imported document text.*untrusted editing material/);
   assert.match(PRODUCT_IDENTITY_PROMPT, /Do not inherit product identity/);
   assert.ok(
     system.indexOf(PRODUCT_IDENTITY_PROMPT) > system.indexOf(workflow),
@@ -140,6 +147,47 @@ const commonPrefixLength = (a: string, b: string): number => {
   assert.match(prompt, /Follow it for every edit/);
   assert.match(SYSTEM_PROMPT, /creative direction and asset plan/);
   assert.match(SYSTEM_PROMPT, /Never claim or imply success after an unresolved tool failure/);
+}
+
+// ── Auto-apply mode appends a late override; manual mode stays byte-identical ──
+{
+  // In-app contexts have no getApprovalMode accessor: the composer syncs YOLO
+  // into the approval-mode registry, which must drive the built prompt.
+  const registryCtx = {
+    getState: () => ({ fps: 30, width: 1920, height: 1080, selectedId: null, tracks: { V1: { kind: 'video' } }, trackOrder: ['V1'], items: [] }),
+    getDoc: () => ({ version: 3, assets: [], mediaFolders: [], activeTimelineId: 'tl1', timelines: [] }),
+    getCreativeMode: () => null,
+  } as unknown as AgentContext;
+  assert.equal(
+    buildAgentSystemPrompt(registryCtx, DEFAULT_AGENT_SETTINGS).includes('# Auto-apply mode (YOLO)'),
+    false,
+    'the unsynced manual registry must not inject the YOLO override',
+  );
+  setAgentAutoApply(true);
+  try {
+    assert.ok(
+      buildAgentSystemPrompt(registryCtx, DEFAULT_AGENT_SETTINGS).includes('# Auto-apply mode (YOLO)'),
+      'the approval-mode registry must inject the YOLO override when getApprovalMode is absent',
+    );
+  } finally {
+    setAgentAutoApply(false);
+  }
+  assert.equal(confirmationModePrompt('manual'), '', 'manual (ask) mode must not change the static prompt');
+  const auto = confirmationModePrompt('auto');
+  assert.match(auto, /# Auto-apply mode \(YOLO\)/);
+  assert.match(auto, /overrides the '# Planning and confirmation' rules above/);
+  assert.match(auto, /do NOT stop between major stages for confirmation/i);
+  assert.match(auto, /do NOT confirm the creative direction or asset plan/i);
+  const autoCtx = {
+    getState: () => ({ fps: 30, width: 1920, height: 1080, selectedId: null, tracks: { V1: { kind: 'video' } }, trackOrder: ['V1'], items: [] }),
+    getDoc: () => ({ version: 3, assets: [], mediaFolders: [], activeTimelineId: 'tl1', timelines: [] }),
+    getCreativeMode: () => null,
+    getApprovalMode: () => 'auto',
+  } as unknown as AgentContext;
+  assert.ok(
+    buildAgentSystemPrompt(autoCtx, DEFAULT_AGENT_SETTINGS).includes('# Auto-apply mode (YOLO)'),
+    'auto-apply mode must inject the YOLO override into the built prompt',
+  );
 }
 
 console.log('systemPromptOrder.verify: ok (易变段收尾/真 editorStatePrompt 不污染前缀/失效点最小化)');

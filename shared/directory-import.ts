@@ -1,5 +1,5 @@
 export type DirectoryImportMediaKind = 'video' | 'image' | 'audio' | 'gif' | 'svg';
-export type DirectoryImportDisposition = 'accepted' | 'duplicate' | 'rejected';
+export type DirectoryImportDisposition = 'reserved' | 'accepted' | 'duplicate' | 'rejected';
 
 export interface DirectoryImportedFile {
   readonly importId: string;
@@ -18,6 +18,31 @@ export interface DirectoryImportedFile {
   readonly proxyKind?: 'alpha-webm';
 }
 
+/** Agent-initiated path import (issue #84): files or directories the agent
+ * asks to import. knownHashes dedupes against the pool's existing content. */
+export interface AgentPathImportRequest {
+  readonly paths: readonly string[];
+  readonly projectId: string;
+  readonly knownHashes: readonly string[];
+}
+
+export type AgentPathImportErrorCode =
+  | 'IMPORT_ROOTS_NOT_CONFIGURED'
+  | 'PATH_OUTSIDE_IMPORT_ROOTS';
+
+export interface AgentPathImportError {
+  readonly path: string;
+  readonly error: string;
+  readonly code?: AgentPathImportErrorCode;
+}
+
+export interface AgentPathImportResult {
+  readonly imported: ReadonlyArray<Omit<DirectoryImportedFile, 'importId'>>;
+  readonly errors: readonly AgentPathImportError[];
+  readonly unsupportedFiles: readonly string[];
+  readonly duplicateCount: number;
+}
+
 export interface DirectoryWatchStartResult {
   readonly watchId: string;
   readonly projectId: string;
@@ -30,6 +55,8 @@ export interface DirectoryImportEvent {
   readonly projectId: string;
   readonly file: DirectoryImportedFile;
 }
+
+export const AGENT_PATH_IMPORT_CHANNEL = 'openchatcut:agent-path-import';
 
 export const DIRECTORY_IMPORT_CHANNELS = {
   start: 'openchatcut:directory-import-start',
@@ -51,7 +78,8 @@ const MEDIA_KINDS: Record<DirectoryImportMediaKind, true> = {
 
 
 export function isDirectoryImportDisposition(value: unknown): value is DirectoryImportDisposition {
-  return value === 'accepted' || value === 'duplicate' || value === 'rejected';
+  return value === 'reserved' || value === 'accepted'
+    || value === 'duplicate' || value === 'rejected';
 }
 
 export function isDirectoryImportOpaqueId(value: unknown): value is string {

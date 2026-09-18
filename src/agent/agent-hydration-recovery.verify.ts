@@ -13,7 +13,7 @@ import {
   agentSessionWriteGeneration,
   rotateAgentSessionGeneration,
 } from '../persist/agentSessionGeneration';
-import { docFromTimeline } from '../persist/projectStore';
+import { docFromTimeline, saveChat } from '../persist/projectStore';
 import {
   loadProposalRecord,
   markProposalApplying,
@@ -26,12 +26,79 @@ import {
   type AgentRunRecorder,
 } from './runtime-ledger';
 import { buildOperation, buildProposal } from './proposal';
-import { cleanupAgentHydration, loadRecoveredAgentSession } from './useAgentPersistence';
+import {
+  agentSessionSnapshot,
+  cleanupAgentHydration,
+  hydrateAgentSession,
+  loadRecoveredAgentSession,
+} from './useAgentPersistence';
+import type { AgentContextUsage } from './context-compaction';
 import type { AgentHookState } from './useAgentState';
-import { requestRuntimeGuard } from './useAgentRun';
+// The settle endpoint is server-side; emulate its effect locally (patch the
+// sidecar) so verifies exercise the full settlement path without a server.
+const originalFetch = globalThis.fetch;
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = String(input);
+  if (url.includes('/settle') && init?.method === 'POST') {
+    const body = JSON.parse(String(init.body)) as {
+      projectId: string; status: string;
+      proposalId?: string; summary?: string;
+    };
+    const settleRunId = String(url).split('/').filter(Boolean).at(-2) ?? '';
+    await patchAgentRun(body.projectId, settleRunId, {
+      status: body.status as 'completed' | 'failed' | 'aborted' | 'interrupted'
+        | 'waiting_approval' | 'awaiting_user',
+      ...(body.summary ? { finalSummary: body.summary } : {}),
+    });
+    return new Response(JSON.stringify({ ok: true, already: false, gone: false }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  return originalFetch(input, init);
+}) as typeof fetch;
 
 const projectId = `hydrate-recovery-${crypto.randomUUID()}`;
 resetAgentRuntimeStoreMemory();
+const contextProjectId = `hydrate-context-${crypto.randomUUID()}`;
+const persistedContextUsage: AgentContextUsage = {
+  inputTokens: 8_642,
+  contextWindowTokens: 1_000_000,
+  contextWindowEstimated: false,
+  isEstimated: false,
+  modelId: 'deepseek:deepseek-v4-pro',
+  compacted: false,
+  messageCount: 2,
+};
+const snapshot = agentSessionSnapshot({
+  messages: [],
+  llmRef: { current: [{ role: 'user', content: 'persist context' }] },
+  changeLog: [],
+  llmProviderRef: { current: 'deepseek' },
+  toolFailuresRef: { current: { snapshot: () => [] } },
+  contextUsageRef: { current: persistedContextUsage },
+} as unknown as AgentHookState);
+assert.deepEqual(snapshot.contextUsage, persistedContextUsage,
+  'agent session snapshots retain the latest measured context usage');
+await saveChat(contextProjectId, snapshot);
+let restoredContextUsage: AgentContextUsage | null = null;
+let estimatedContextRefreshes = 0;
+await hydrateAgentSession({
+  ctxRef: { current: { getDoc: () => docFromTimeline({ ...INITIAL, items: [] }) } },
+  setMessages: () => undefined,
+  setChangeLog: () => undefined,
+  llmRef: { current: [] },
+  toolFailuresRef: { current: { restore: () => undefined } },
+  replaceContextUsage: (usage: AgentContextUsage | null) => { restoredContextUsage = usage; },
+  refreshEstimatedContextUsage: () => { estimatedContextRefreshes += 1; },
+  llmProviderRef: { current: 'deepseek' },
+  setProposal: () => undefined,
+  hydratedRef: { current: false },
+  setHydrated: () => undefined,
+} as unknown as AgentHookState, contextProjectId, () => true);
+assert.deepEqual(restoredContextUsage, persistedContextUsage,
+  'reopening a project restores its measured context usage');
+assert.equal(estimatedContextRefreshes, 0,
+  'restored measured usage is not replaced by a lower history-only estimate');
 const capProjectId = `approval-cap-${crypto.randomUUID()}`;
 for (let index = 0; index < MAX_APPROVALS; index += 1) {
   await upsertAgentApproval({
@@ -147,6 +214,17 @@ assert.equal(
 );
 
 
+const activeRecoverableRun = await startAgentRun({
+  projectId,
+  userInput: 'unmount-probe',
+  askOnly: false,
+});
+await patchAgentRun(projectId, activeRecoverableRun.runId, {
+  status: 'running',
+  ownerInstanceId: undefined,
+  leaseExpiresAt: undefined,
+});
+activeRecoverableRun.stopLease();
 let alive = true;
 const cancelled = loadRecoveredAgentSession(projectId, () => alive, async () => {
   alive = false;
@@ -171,6 +249,17 @@ assert.equal(
   'generation rotation invalidates an in-flight hydration before it can restore old context',
 );
 const authoritativeGeneration = await rotateAgentSessionGeneration(projectId);
+const currentGenRun = await startAgentRun({
+  projectId,
+  userInput: 'adopt-probe',
+  askOnly: false,
+});
+await patchAgentRun(projectId, currentGenRun.runId, {
+  status: 'running',
+  ownerInstanceId: undefined,
+  leaseExpiresAt: undefined,
+});
+currentGenRun.stopLease();
 adoptAgentSessionWriteGeneration(projectId, 'stale-tab-generation');
 let recoveryWriteGeneration = '';
 await loadRecoveredAgentSession(projectId, () => true, async () => {
@@ -189,43 +278,48 @@ activeAbort.signal.addEventListener('abort', () => cleanupEvents.push('abort'));
 const activeCleanupState = {
   runningRef: { current: true },
   abortRef: { current: activeAbort },
-  pendingGuardRef: { current: { resolve: (decision: string) => cleanupEvents.push(decision) } },
 } as unknown as AgentHookState;
 let stoppedActiveLeases = 0;
 cleanupAgentHydration(activeCleanupState, projectId, async () => { stoppedActiveLeases += 1; });
-assert.deepEqual(cleanupEvents, ['deny', 'abort'],
-  'unmount synchronously denies approval before aborting the active turn');
+assert.deepEqual(cleanupEvents, ['abort'],
+  'unmount synchronously aborts the active turn');
 assert.equal(stoppedActiveLeases, 0,
   'the active execution lease remains owned until runtime finally/finalize');
 
 const idleCleanupState = {
   runningRef: { current: false },
   abortRef: { current: null },
-  pendingGuardRef: { current: null },
 } as unknown as AgentHookState;
 let stoppedIdleLeases = 0;
 cleanupAgentHydration(idleCleanupState, projectId, async () => { stoppedIdleLeases += 1; });
 assert.equal(stoppedIdleLeases, 1, 'idle/hydration recorders release immediately on cleanup');
 
-const immediateGuardRef = { current: null };
-let renderedGuard: unknown = null;
-const immediateGuardState = {
-  runningRef: { current: false },
-  abortRef: { current: null },
-  pendingGuardRef: immediateGuardRef,
-  setPendingGuard: (guard: unknown) => { renderedGuard = guard; },
-} as unknown as AgentHookState;
-const immediateDecision = requestRuntimeGuard(immediateGuardState, projectId, {
-  skill: 'high-cost-operation',
-  permissionKind: 'persistent_local',
-  approval: 'once',
-  tool: 'install_skill',
+// A proposal whose run is still leased by another editor must hydrate
+// silently (no throw): the proposal is settled stale and cleared so the
+// next open starts clean instead of surfacing a recovery error.
+const contestedProject = `hydrate-contested-${crypto.randomUUID()}`;
+const contestedRecorder = await startAgentRun({ projectId: contestedProject, userInput: 'other-editor', askOnly: false });
+contestedRecorder.stopLease();
+await patchAgentRun(contestedProject, contestedRecorder.runId, {
+  status: 'waiting_approval',
+  ownerInstanceId: 'another-editor-instance',
+  leaseExpiresAt: Date.now() + 60_000,
 });
-assert.equal(immediateGuardRef.current, renderedGuard,
-  'pending guard ref is assigned synchronously before React renders');
-cleanupAgentHydration(immediateGuardState, projectId, async () => undefined);
-assert.equal(await immediateDecision, 'deny',
-  'unmount before the pending-guard render still denies the waiting tool');
-assert.equal(immediateGuardRef.current, null, 'resolving the guard synchronously clears its ref');
+const contestedProposal = buildProposal(
+  [operation],
+  'contested proposal',
+  base,
+  proposalDraft.getState(),
+  contestedRecorder.runId,
+);
+await saveProposal(contestedProject, contestedProposal);
+const contestedHydration = await loadRecoveredAgentSession(contestedProject, () => true);
+assert.equal(contestedHydration?.pending?.id, contestedProposal.id,
+  'a proposal whose run is owned elsewhere still hydrates (server-side settle is idempotent)');
+assert.equal(
+  (await loadAgentRuntimeSidecar(contestedProject)).runs
+    .find((run) => run.runId === contestedRecorder.runId)?.status,
+  'waiting_approval',
+  'the contested run stays waiting_approval after hydration (no ownership handshake in the browser)');
 await stopAgentRunLeases(projectId);
 resetAgentRuntimeStoreMemory();

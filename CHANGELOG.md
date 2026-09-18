@@ -6,14 +6,368 @@ OpenChatCut 的重要变更记录在此。
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use [Semantic Versioning](https://semver.org/).  
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.2.14] - 2026-09-04
+
+### Added / 新增
+
+- **OrcaRouter is now a named LLM provider preset** — configure its Base URL and API key under Settings → Agent model like any other provider and select it as the chat model (contributed in #130).
+  **OrcaRouter 现在是具名 LLM 厂商预设**——在 设置 → Agent 模型 里像其他厂商一样配置 Base URL 与 API Key，并可作为聊天模型选择（#130 贡献）。
+
+- **The server now knows the interface language** — the language switch is mirrored into the non-secret `UI_LOCALE` setting, and server-authored text the user reads directly (starting with the remedy on a failed media import) follows it instead of being fixed Chinese.  
+  **服务端现在知道界面语言**——语言切换会同步到非敏感设置 `UI_LOCALE`，服务端直接给用户看的文案（先从素材导入失败的补救提示开始）跟随界面语言，不再固定为中文。
+
+### Changed / 变更
+
+- **The desktop app now ships as an asar archive** — startup maps one archive instead of tens of thousands of small files. ffmpeg, ffprobe, the ONNX runtime and the sqlite-vec extension stay unpacked as real files (they are spawned or dlopen'ed by path), and the Remotion compositor is mirrored into the user-data folder on first launch on every platform, as Windows already did, so exports keep working.  
+  **桌面端现在以 asar 归档发布**——启动时只需映射一个归档，而不是成千上万个小文件。ffmpeg、ffprobe、ONNX 运行时和 sqlite-vec 扩展保持解包的真实文件（它们要按路径被拉起或动态加载）；Remotion 合成器在首次启动时镜像到用户数据目录（之前只有 Windows 这样做），导出照常工作。
+
+- **A completed agent run tells you which tool calls failed** — a quiet line under the reply and an entry in the run inspector list the failed calls, replacing the failure banner that used to override the model's answer.  
+  **Agent 运行完成后会列出失败的工具调用**——回复下方一行灰色提示和运行检查器里的一条记录列出失败的调用，取代之前覆盖模型回复的失败横幅。
+
+- **Downloads are probed at import time** — `download_media` / `push_asset` rows now carry duration, dimensions, fps, audio/video tracks, codecs and quality risks measured by the bundled ffprobe, so the agent no longer spends a `probe_media` call (and, for a URL, a second download) on a file it just imported. An HTML page or truncated file saved under a media extension fails as `not_media` and never enters the pool.  
+  **下载即探测**——`download_media` / `push_asset` 的结果行现在自带应用内 ffprobe 测得的时长、宽高、fps、音视频轨、编码和质量风险，Agent 不必再对刚导入的文件调一次 `probe_media`（远程地址还省掉一次重复下载）。以媒体扩展名保存下来的 HTML 页面或截断文件会以 `not_media` 失败，不会入池。
+
+- **Media pool: remove every offline asset in one click, and one notice instead of a per-card "models not installed" badge** — the missing-media banner gains "Remove all offline media" (with the usual confirmation), and when the local music-analysis packs are not installed the pool shows a single line pointing at Settings → Local AI rather than repeating the same badge under every audio and video card.  
+  **素材池：一键移除全部失效素材，「模型未安装」只提示一次**——丢失素材横幅新增「移除全部失效素材」（沿用原有确认框）；本地音乐分析模型包未安装时，素材池只显示一行指向 设置 → 本地 AI 的提示，不再在每张音视频卡片下重复同一个角标。
+
+- **In auto-apply mode, timeline edits now land as each tool call finishes** — the tracks change while the agent works instead of all at once when the run ends, the agent continues from the live project (including anything you changed meanwhile), and the run's edits share one change-log row for rollback. Manual approval mode still collects edits into a proposal.  
+  **自动应用模式下，时间线编辑现在随每个工具调用实时落地**——轨道在 Agent 工作时就在变化，而不是整轮结束后一次性出现；Agent 从真实工程继续（包括你中途做的改动）；整轮编辑共用一条修改记录，可一键回滚。人工审批模式仍然汇总成提案。
+
+- **Downloaded media now appears in the media pool as soon as each download finishes** — pool imports land after every tool call instead of when the whole run ends, and a user edit made while the agent was downloading is neither blocked nor overwritten; one change-log row per run collects all of them for rollback.  
+  **素材下载完立即出现在媒体池**——每个工具调用结束就入池，不再等整轮 Agent 结束；你在它下载期间做的手动编辑既不会被拦住也不会被覆盖；一轮的所有入池记在同一条修改记录里，可一键回滚。
+
+- **The desktop now ships at the density that used to be the "110%" setting** — Settings → Interface → UI scale reads 100% for it. A scale you had saved is converted once at startup so your window keeps its size after updating (110% → 100%, 100% → 90%).  
+  **桌面端默认密度改为原来的「110%」**——设置 → 界面 → 界面缩放 里它现在显示为 100%。你之前保存过的缩放会在启动时换算一次（110% → 100%、100% → 90%），更新后窗口内容大小不变。
+
+### Fixed / 修复
+
+- **Bundled product files now resolve inside the packaged app** — probe, sandbox and export looked for `/voice-samples/...`-style paths under the working directory, which is the user-data folder once packaged; the embedded server registers `resources/dist` as a product-asset root, so those paths resolve exactly as in the dev server.  
+  **打包版现在能找到内置资源文件**——探测、沙箱和导出之前按启动目录去找 `/voice-samples/...` 这类路径，而打包后启动目录是用户数据目录；内嵌服务现在把 `resources/dist` 注册为内置资源根目录，解析结果与开发服务一致。
+
+- **`probe_media` now runs the ffprobe bundled with the app instead of the e2b cloud sandbox** — on a machine without an E2B key the tool used to fail with "e2b sandbox is not configured" even though import, previews and export QA were already probing locally. Uploads and bundled assets are read in place; a public URL is fetched through the SSRF-safe transport into a temp file first.  
+  **`probe_media` 改用应用自带的 ffprobe，不再依赖 e2b 云沙箱**——没有配置 E2B key 的机器上，这个工具之前会报「e2b sandbox is not configured」，而导入、预览、导出质检其实早就在本地跑 ffprobe 了。上传文件和内置素材直接就地读取；公开 URL 先经过防 SSRF 的抓取落到临时文件再探测。
+
+- **A server-side agent run no longer ends with "I couldn't complete the requested operation" under the model's own reply** — when a tool failed and the model then answered, the run was still marked failed and an English template was appended beneath a Chinese answer. The reply is the outcome; the failed call stays visible on its tool card, matching the in-browser runtime. This also lets the documented fallbacks (probe fails → finalize with ingest defaults) complete.  
+  **服务端 Agent 运行不再在模型回复下方追加「I couldn't complete the requested operation」**——工具失败后模型已经作答，整轮却仍被判为失败，并在中文回复下面贴一段英文模板。现在以模型的回复为准，失败的调用仍在其工具卡片上可见，与浏览器端运行时一致；也让文档约定的降级路径（探测失败 → 用导入默认值 finalize）能正常完成。
+
+- **Media-pool ratio badges snap to the ratio people actually name** — a 427×240 trailer read "427:240" because the badge reduced the exact pixel fraction; encoders round to codec-friendly sizes, so a frame within 2% of 16:9, 4:3, 1:1, 3:2, 5:4 or 21:9 (and their portrait forms) now shows that name, a small exact fraction such as 7:5 stays, and anything else shows a proportion like 2.40:1. Canvas sizes are exact and unchanged.  
+  **素材池比例角标按人们常说的比例显示**——427×240 的预告片之前显示「427:240」，因为角标直接约分了像素分数；编码器会把尺寸凑成编码友好的数值，所以现在与 16:9、4:3、1:1、3:2、5:4、21:9（及其竖版）偏差在 2% 内的都显示该名称，7:5 这类小分数保留，其余显示为 2.40:1 这样的比例。画布尺寸精确，不受影响。
+
+- **A blocked or blackholed media host no longer freezes `download_media`, with or without a proxy** — remote imports are bounded at the connect phase (10s, covering a proxy tunnel and the TLS handshake) and until response headers arrive (30s), then fail as `upstream_unreachable` with a remedy that matches whether a proxy is configured; a batch stops starting new URLs after 75s so it stays inside the run's stream watchdog instead of dying with "Chunk timeout exceeded". Retry now rewinds the failed turn out of both the chat and the model history and re-sends it, rather than stacking a second copy of the message under the error.  
+  **被墙或黑洞的素材主机不再让 `download_media` 挂死，有无代理都一样**——远程导入在连接阶段（10s，覆盖代理隧道与 TLS 握手）和收到响应头之前（30s）都有上限，超时以 `upstream_unreachable` 失败并按是否配置了代理给出对应提示；批量下载 75s 后不再开始新地址，避免撞上运行流看门狗而整轮以「Chunk timeout exceeded」失败。「重试」现在会把失败那轮从聊天与模型历史中回卷后原样重发，而不是在错误下面再叠一条同样的消息。
+
+- **Context-window overflows now recover silently instead of failing the turn (#131)** — the server retries an overflowing turn by compacting the history, then shrinks the output reservation, before surfacing anything. The output reservation is request-aware from the start: a huge-output model (e.g. a 500k-output Grok) no longer starves the input budget on short requests, and stale large tool results are mechanically replaced with one-line stubs only when the conversation is actually under pressure — healthy sessions keep their full history. Oversized tool-call inputs in the recent tail are rescued by replacing their input instead of dead-ending in a retry loop, and when every stage still fails, the overflow guidance now follows the UI language instead of always rendering Chinese.
+  **上下文窗口溢出现在静默自愈，不再直接失败本轮（#131）**——服务端先压缩历史重试，再缩小输出预留，都不行才向用户报错。输出预留从一开始就按请求量计算：超大输出模型（如 500k 输出的 Grok）不会再在短请求上挤占输入预算；陈旧的大型工具结果只在会话真正吃紧时才机械替换为一行 stub——健康会话的历史保持原样。近期窗口里超大的工具调用参数会替换其 input 而不是陷入重试死循环；全部手段用尽后的溢出引导也跟随界面语言，不再永远显示中文。
+
+- **Music analysis failures now carry an actionable next step (#134)** — when the required model packs are missing, the tool result names the missing packs and the settings route, and the failed tool row in chat shows an install button that opens the model-pack page directly; the music skill guides the `detect_beats` fallback (BPM + beat frames only) while the packs stay uninstalled.
+  **音乐分析失败现在自带可操作的下一步（#134）**——所需模型包缺失时，工具结果会列出缺失包与设置路径，聊天里的失败工具行会出现「去设置安装」按钮，直接打开模型包页面；技能指引在模型包未安装时引导 `detect_beats` 降级方案（仅 BPM 与节拍帧）。
+
+- **Schema validation errors now name the offending field** — a rejected `edit_item` call used to say only "/ must NOT have additional properties" with no hint about which field was extra, so the agent retried the same shape and the edit never landed (#135). The error now reads `/ must NOT have additional properties: "itemId"`, letting the model self-correct on the next attempt.
+  **Schema 校验错误现在点名违规字段**——被拒的 `edit_item` 调用过去只说「/ must NOT have additional properties」而不提示多出来的是哪个字段，模型只能原样重试，编辑永远落不了轨（#135）。现在错误会显示 `/ must NOT have additional properties: "itemId"`，模型下一次尝试即可自我修正。
+
+- **Large v3 native transcription resolves its models from the shared catalog (#133)** — desktop native ASR for the large-v3 tier now loads through the same catalog path as the other tiers instead of a hardcoded resolution.
+  **Large v3 本地转写从共享模型目录解析模型（#133）**——桌面端 large-v3 档位的本地 ASR 现在与其他档位一样走共享目录解析，不再使用硬编码路径。
+
+- `load_skill` no longer rejects a recoverable call with "Pass either file or files, not both." before the skill is ever read. Models routinely emit both selectors at once — a blank `file` beside a real `files` array, `files: []` beside a real `file`, or paging numbers with no `file` — and every such call died in argument validation, stalling bundled and custom skills alike. The arguments are now normalized before the shared invocation boundary validates them against the tool schema — the schema's `files.minItems`, `file: string` and `offset: integer` rules would otherwise reject `files: []`, `file: null` or `offset: "0"` before any tool code ran. Blank and null selectors are dropped, empty or all-blank `files` arrays fall back to the initial load, a bare string on `files` becomes a one-file batch, integer-looking strings become integers, and paging numbers are discarded when no `file` remains. When both selectors survive, only a non-zero `offset` keeps the paged file (a continuation worth preserving); `offset: 0` on SKILL.md repeats what the initial load already returned, so the batch wins. The prompts that taught the merged shape are fixed with it — the tool description, the skill-library index, and the result notes now state one selector per call instead of naming both paths in a single sentence — and each remaining rejection carries a concrete corrected call, so the same arguments are never the obvious thing to re-send.
+  `load_skill` 不再在读取技能之前就以「Pass either file or files, not both.」拒绝一个本可恢复的调用。模型经常同时给出两个选择器——空字符串 `file` 与真实 `files` 数组并存、`files: []` 与真实 `file` 并存，或只有分页参数而没有 `file`——这些调用全部死在参数校验里，内置技能和自定义技能一样中招。现在参数会在共享调用边界按工具 schema 校验**之前**先归一化——否则 schema 的 `files.minItems`、`file: string`、`offset: integer` 会在任何工具代码运行前就拒掉 `files: []`、`file: null` 或 `offset: "0"`。空值与 null 选择器被删除，空数组或全空字符串的 `files` 回退为初次加载，`files` 上的裸字符串视为单文件批量，形如整数的字符串转为整数，没有 `file` 时分页参数被丢弃。两个选择器同时存活时，只有非零 `offset` 才保留分页文件（那是值得保留的续读）；`offset: 0` 打在 SKILL.md 上只是重复首轮加载，所以批量胜出。诱发该形状的提示词一并修正——工具描述、技能库索引与返回 note 改为「每次调用只用一个选择器」，不再把两条路径写进同一句话——并且每个仍然失败的请求都会带上明确的修正调用，避免原样重发同一组错误参数。
+
+- Agent failures no longer hide behind "No output generated. Check the stream for errors." The server turn read the model stream but dropped its `error` chunks, so the provider's real `APICallError` — status code, response body, and the proxy's actionable message ("认证失败，请检查 API Key" / "额度不足" / "接口或模型不存在") — was discarded, and the turn died on the AI SDK's generic fallback instead. Retrying could only reproduce it. The real error now reaches the chat. Two failures it was masking are fixed with it: failure classification compared with `instanceof` against a class from a second copy of `@ai-sdk/provider`, so every provider error fell through to UNKNOWN and was never retried; and a genuinely empty model stream is now classified `EMPTY_RESPONSE` and retried instead of surfacing that same opaque sentence.
+  Agent 报错不再被「No output generated. Check the stream for errors.」挡住。服务端读取模型流时丢弃了其中的 `error` 分片，厂商真正的 `APICallError`——状态码、响应体，以及代理生成的可操作提示（「认证失败，请检查 API Key」/「额度不足」/「接口或模型不存在」）——被一并扔掉，这一轮改为死在 AI SDK 的兜底文案上，重试只能复现同样一句。现在真实报错会直接显示在对话里。同时修掉它掩盖的两个问题：失败分类用 `instanceof` 比对了来自第二份 `@ai-sdk/provider` 的类，导致所有厂商错误落入 UNKNOWN 且从不重试；模型确实返回空流时现在归类为 `EMPTY_RESPONSE` 并自动重试，而不是抛出同一句看不懂的话。
+
+## [0.2.13] - 2026-08-31
+
+### Fixed / 修复
+
+- Closing any window on Windows no longer pops "A JavaScript error occurred in the main process — Object has been destroyed": the renderer-recovery disposer ran inside the window's own `closed` handler and touched the already-destroyed `webContents`. macOS was unaffected only because the recovery is Windows-gated, which is exactly why it escaped testing. The same uncaught exception's modal dialog is what deadlocked the release smoke's teardown.
+  Windows 关闭任意窗口不再弹出「A JavaScript error occurred in the main process — Object has been destroyed」：渲染器恢复的卸载器在窗口自身的 `closed` 事件里访问了已销毁的 `webContents`。macOS 因恢复逻辑按平台门禁短路而不受影响——这也正是它逃过验证的原因。同一未捕获异常的模态弹窗正是发版冒烟收尾死锁的真身。
+
+## [0.2.12] - 2026-08-31
+
+### Added / 新增
+
+- Inspector **Crop Left / Right / Top / Bottom** under Clip properties → Basic → Transform (below Corner). Values are composition pixels; cropped pixels are fully transparent. Agents call this **flex crop** / **flexcrop** via `edit_item` `transform.crop` or `transform.flexCrop: { left, right, top, bottom }` in pixels (`null` clears). Not a timeline trim. Contributed by @J160KU.
+  检查器「裁左 / 裁右 / 裁上 / 裁下」位于片段属性 → 基础 → 变换（圆角下方）。数值为画布像素，裁掉的区域完全透明。Agent 术语为 **flex crop** / **flexcrop**：`edit_item` 的 `transform.crop` 或 `transform.flexCrop: { left, right, top, bottom }`（像素；`null` 清除）。不是时间线裁剪。由 @J160KU 贡献。
+- Local transcription gains a **Whisper Large v3 Turbo** tier (#127): near large-v2 quality at a fraction of the decode cost. Desktop runs the 574MB GGML build natively; the browser uses the word-timestamp ONNX export (~1.05GB).
+  本地转写新增 **Whisper Large v3 Turbo** 档（#127）：接近 large-v2 的质量、远低于它的解码开销。桌面端本地运行 574MB GGML 模型；浏览器端使用带词级时间戳的 ONNX 导出（约 1.05GB）。
+
+<p align="center">
+  <img src="assets/readme-pic/flexcrop-inspector.png" alt="FlexCrop inspector: preview edges 1–4 match Crop Left, Crop Right, Crop Top, and Crop Bottom sliders" width="920" />
+</p>
+
+### Fixed / 修复
+
+- **Windows local transcription never actually ran** (#120): packaging moved `whisper-cli.exe` away from its DLLs, so the process died instantly with a bare exit code for every model size. The executable now ships beside its libraries — verified both ways on a real Windows runner. Linux had the same layout fault and is fixed the same way.
+  **Windows 本地转写此前从未真正运行过**（#120）：打包把 `whisper-cli.exe` 和它的 DLL 分开放置，任何模型尺寸都会立刻以裸退出码失败。现在可执行文件与库同目录（在真实 Windows runner 上双向验证）；Linux 存在同样的布局问题，一并修复。
+- Browser Whisper word timestamps no longer drift from the prefix-alignment bug, and the hallucination-suppression list is active again — transformers.js upgraded to 4.2.0 (#109).
+  浏览器 Whisper 词级时间戳不再受前缀对齐问题影响，幻听抑制列表重新生效——transformers.js 升级到 4.2.0（#109）。
+- Stopping an agent run and immediately sending the next task no longer loses the new answer: late results from the cancelled run settled with the new run's credentials and tore its stream down (#125). Every run now carries an immutable identity, and stale callbacks are fenced.
+  停止 Agent 任务后立刻发送新任务不再丢失新回答：被取消任务的迟到结果曾借用新任务的凭证结算并连带关闭其事件流（#125）。现在每个任务携带不可变身份，过期回调被栅栏拦下。
+- One failed proposal apply no longer silently disables every later apply in the session — the symptom behind "the agent says done but the track is empty" (#129).
+  一次失败的 proposal 应用不再静默禁用会话内之后的所有应用——即「Agent 说完成了但轨道是空的」的元凶（#129）。
+- The floating transcript window no longer opens blank on slow machines: its payload was push-only and the push could beat the page's listener; the window now also pulls on mount.
+  浮动文字稿窗口在慢机器上不再打开即空白：载荷原先只推送一次、可能早于页面监听器注册；现在窗口挂载后会主动拉取。
+- Preview orange outline, clip-path cut, and rotation pivot stay aligned: the preview wrapper uses the stage content box and a single composition scale so Remotion does not letterbox on Y under the overlay.
+  预览橙框、裁切与旋转轴对齐：预览容器按舞台 content box 与单一画布比例适配，避免 Remotion 在 overlay 下上下加黑边。
+
+- A project this build could not read is no longer overwritten by the next save: reads now report missing and unreadable separately, the editor offers retry instead of silently starting from an empty document, a failed bootstrap merge no longer deletes the local project index, and orphan media cleanup no longer purges everything when the index is momentarily empty.
+  本版读不懂的工程不会再被下一次保存覆盖：读取区分"不存在"与"读不出"，编辑器给出重试而不是静默从空文档开始；引导合并失败不再删除本地工程索引；索引短暂为空时，孤儿素材清理不再清空全部素材。
+- Version history, export history, templates and the job registry now preserve records this build cannot parse instead of dropping them on the next write, so opening a project in an older build no longer discards what a newer one wrote.
+  版本历史、导出历史、模板与任务注册表在写回时保留本版解析不了的记录，不再丢弃——用旧版打开工程不会再抹掉新版写入的内容。
+- Multicam and link groups with a slightly out-of-range field are repaired rather than discarded, and per-angle evidence is no longer required for the whole group to survive.
+  多机位与链接组的轻微越界字段改为修正而非整组丢弃，且不再要求每个角度都带证据才能保留。
+- Browser fast export no longer fails on media that is simply slow to open. It inherited Remotion's 30-second per-frame default while the local renderer allowed far more, so the same project could fail on one engine and render on the other; both now share a ten-minute per-frame budget, which bounds a single stuck frame and never the export as a whole.
+  浏览器快导不再因素材"打开慢"而失败。此前它沿用 Remotion 的 30 秒单帧默认值，而本机渲染器的预算宽得多，导致同一工程在一个引擎失败、在另一个引擎正常；现在两条路径共用 10 分钟单帧预算，该预算只约束单帧卡死，不限制导出总时长。
+- Exports started by the Agent no longer report failure for files that had already been written; the download helper reached the browser through `window`, which does not exist in the tool runtime.
+  Agent 发起的导出不再对已经写出的文件报失败——下载辅助函数经由 `window` 访问，而工具运行时没有 `window`。
+- FCPXML export now emits a time map for speed-changed clips, and asset collection no longer decides a clip's video/audio makeup from the first item alone.
+  FCPXML 导出为变速片段写入 timeMap；素材收集不再仅凭第一个片段判定整体的视频/音频构成。
+- An unknown caption template id falls back to the plain style instead of breaking the preview, and bilingual caption translations are marked stale when their timing changes instead of keeping absolute times.
+  未知字幕模板 id 回退到 plain 样式而不是让预览崩溃；双语字幕在时间轴变化后标记为过期，不再固化绝对时间。
+- Agent runs no longer dispatch the same instruction twice on a rapid double send, tool arguments are bounded so an out-of-range motion-graphic size cannot freeze the tab, model-supplied internal `__` fields are stripped before execution, and a tool that fails midway rolls its draft back instead of leaving a forked one.
+  Agent 运行不再因快速双击发送而重复派发同一指令；工具参数加上界，越界的 MG 尺寸不会再冻结标签页；模型传入的内部 `__` 字段在执行前剥离；工具中途失败会回滚草稿而不是留下分叉。
+- Transcript word clicks seek to the right frame under a reordered play order, and local ASR no longer falls back to transcribing the whole video.
+  在调整播放顺序后，点击文字稿词语可跳转到正确帧；本地 ASR 不再回退成整段视频转写。
+- Chat and version writes that fail now surface a toast instead of only a console error.
+  聊天与版本写入失败会给出提示，而不是只打一条控制台错误。
+- Completed the Russian transcription language labels.
+  补全俄语转写语言标签。
+
+### Performance / 性能
+
+- First load dropped from about 3062 KB (900 KB gzip) to 689 KB (198 KB gzip). React was being pulled into the Remotion chunk, so the project list downloaded a 2 MB video renderer it never used; all four locale dictionaries shipped in the entry chunk, so every user parsed three languages they cannot read; and ten dialogs were imported eagerly although each renders only once opened. Dialogs and the non-active languages now load on demand and warm on idle, so opening them stays instant.
+  首屏从约 3062 KB（900 KB gzip）降到 689 KB（198 KB gzip）。此前 React 被打进 Remotion 分块，工程列表要下载 2 MB 的视频渲染器却从不使用；四份语言词典全部进入入口分块，每个用户都要解析三种读不懂的语言；十个对话框被静态引入，而它们只有打开时才渲染。现在对话框与非当前语言按需加载并在空闲时预热，打开依然瞬时。
+- Moving the pointer across the timeline now updates once per displayed frame instead of once per pointer report: 60 pointer moves went from 890 DOM mutations in 292 ms to 250 in 125 ms.
+  在时间线上移动指针改为每显示帧更新一次，而不是每个指针事件更新一次：60 次移动从 890 次 DOM 变更 / 292 ms 降到 250 次 / 125 ms。
+- Long transcripts skip layout for off-screen speech blocks: a 9000-word transcript went from 34.29 ms of layout to 0.64 ms, with text selection across off-screen blocks unaffected.
+  长文字稿跳过屏幕外语音块的布局：9000 词文字稿的布局耗时从 34.29 ms 降到 0.64 ms，跨屏幕外块的文本选择不受影响。
+- Reduced hot-path overhead in the editor store, sequence-graph validation, transcript rendering and agent stream persistence.
+  降低编辑器 store、序列图校验、文字稿渲染与 Agent 流式持久化的热路径开销。
+
+### Security / 安全
+
+- Media read paths (`/media/uploads`, upload listing, presigned reads, media preview, and the desktop static file server) now require the same local request shape the write paths already did.
+  素材读取路径（`/media/uploads`、上传列表、预签名读取、媒体预览与桌面端静态文件服务）现在与写入路径一样要求相同的本机请求形态。
+- Server errors returned to the browser no longer carry absolute filesystem paths, and skill execution rejects inline interpreter invocations.
+  返回浏览器的服务端错误不再携带绝对文件系统路径；技能执行拒绝内联解释器调用。
+
+## [0.2.11] - 2026-08-25
+
+### Added / 新增
+
+- Added an end-to-end Agent livestream clipping workflow that analyzes multimodal evidence, creates multiple named source-linked Sequences, verifies each cut, tracks background rendering in the editor, and automatically saves approved clips to My Media with source provenance.
+  新增端到端 Agent 直播切片工作流：综合分析多模态证据，批量创建命名且保持源素材引用的独立 Sequence，逐个验证切片，在编辑器中跟踪后台渲染，并将审核通过的成片连同来源信息自动保存到“我的素材”。
+
+## [0.2.10] - 2026-08-24
+
+### Added / 新增
+
+- Added xAI Grok as a built-in Agent provider (grok-4.6 default, OpenAI-compatible API at api.x.ai), with the standard settings page, API key configuration, connection testing, model discovery, and model-capability catalog entries.
+  新增 xAI Grok 内置 Agent 供应商（默认 grok-4.6，api.x.ai OpenAI 兼容接口），提供标准设置页、API Key 配置、连接测试、模型发现与模型能力目录条目。
+- Added xAI subscription sign-in (SuperGrok / X Premium+): login is owned by the official Grok CLI (`grok login`); OpenChatCut imports the session server-side, refreshes it automatically through auth.x.ai, and streams Grok over the subscription token. Session credentials never reach the browser, and the API-key provider remains available as a fallback.
+  新增 xAI 订阅登录（SuperGrok / X Premium+）：登录由官方 Grok CLI 负责（终端运行 grok login），OpenChatCut 在服务端导入会话并经 auth.x.ai 自动续期，以订阅会话令牌运行 Grok。会话凭据不会进入浏览器，API Key 供应商继续作为兜底。
+- Added xAI Grok Imagine image and video generation (`grok-imagine` / `grok-imagine-video`): settings pages, connection tests, agent tool schemas, skill references, and the generation job pipeline all carry xAI as a first-class provider. Images are returned as base64 (no CDN download); video runs through the async job model with proxy-aware result downloads. Auth prefers the subscription session and falls back to `LLM_XAI_API_KEY`.
+  新增 xAI Grok Imagine 生图与生视频（`grok-imagine` / `grok-imagine-video`）：设置页、连接测试、Agent 工具 schema、技能参考与生成任务管线均把 xAI 作为一等供应商。生图以 base64 返回（免 CDN 下载）；生视频走异步任务模型，结果下载支持代理。鉴权优先订阅会话，回退 `LLM_XAI_API_KEY`。
+- Added local Silero VAD (onnx-community silero-vad ONNX via onnxruntime-web) as the silence-removal evidence runner: with `VITE_ENABLE_VAD_SILENCE_REMOVAL` enabled, silence trimming only removes spans the model confirms are non-speech. The flag stays off by default; the model loads lazily on first use.
+  新增本地 Silero VAD（onnx-community silero-vad ONNX，经 onnxruntime-web 推理）作为静音删除的证据来源：开启 `VITE_ENABLE_VAD_SILENCE_REMOVAL` 后，仅删除模型确认不含语音的静音段。开关默认关闭，模型首次使用时才加载。
+
+### Fixed / 修复
+
+- Export delivery now uses canonical extensions for H.264, VP8, and ProRes, rejects empty artifacts before commit, serializes export-history writes, and coalesces rapid duplicate starts for the same destination.
+  导出现统一使用 H.264、VP8 与 ProRes 的标准扩展名，在写入目标前拦截空制品，串行化导出历史写入，并合并短时间内指向同一目标的重复导出。
+
+## [0.2.9] - 2026-08-20
+
+### Added / 新增
+
+- Desktop native inference now records CPU/GPU capabilities and selects CoreML/Metal, DirectML, CUDA, WebGPU, or CPU per supported workload; Linux packages now include the native inference workers and ONNX Runtime.
+  桌面端原生推理现会记录 CPU/GPU 能力，并按工作负载选择 CoreML/Metal、DirectML、CUDA、WebGPU 或 CPU；Linux 安装包同步内置原生推理 worker 与 ONNX Runtime。
+
+### Fixed / 修复
+
+- Desktop imports again create durable managed media copies, keeping preview, normalization, and server-side export reachable after the original file moves or a removable volume is disconnected.
+  桌面端导入恢复为可持久的受管素材副本，原文件移动或移动磁盘断开后，预览、规范化与服务端导出仍可访问素材。
+- Media processing now applies software encoder thread limits to output encoders, keeps CFR compatibility normalization for large VFR sources, routes probes through the shared low-priority launcher, and releases settled multipart metadata queues.
+  媒体处理现会将软编码线程上限应用到输出编码器，为大型 VFR 素材保留 CFR 兼容性转换，通过共享低优先级启动器执行探测，并及时释放已结束的分片元数据队列。
+- The Agent run inspector refreshes its sidecar when opened, so the newest run, tool result, and context metrics appear immediately without reloading the editor.
+  Agent 运行检查器打开时会刷新旁车记录，无需重新加载编辑器即可显示最新运行、工具结果与上下文指标。
+
+## [0.2.8] - 2026-08-20
+
+### Added / 新增
+
+- Atlas Cloud text-to-music and Sonilo video-to-music/video-to-SFX providers are available from settings and native Agent tools, including asynchronous job recovery and license sidecars.
+  新增 Atlas Cloud 文生音乐与 Sonilo 视频配乐/视频音效，可从设置和 Agent 原生工具调用，并支持异步任务恢复与许可证旁车文件。
+- The Agent now surfaces missing creative capabilities with an in-editor settings entry and returns actionable diagnostics for unavailable editing tools.
+  Agent 现在会提示缺失的创作能力、提供编辑器内设置入口，并在编辑工具不可用时返回可执行的诊断步骤。
+
+### Fixed / 修复
+
+- Windows H.264 export now probes and uses NVIDIA NVENC, Intel Quick Sync, or AMD AMF when available, preserves automatic libx264 fallback, and avoids hardware-frame/CPU-filter conflicts during frame-rate conversion.
+  Windows H.264 导出会探测并优先使用 NVIDIA NVENC、Intel Quick Sync 或 AMD AMF，保留 libx264 自动回退，并修复帧率转换中的硬件帧与 CPU 滤镜冲突。
+- External MCP registration now keeps a stable token and fallback port across desktop restarts, including first-launch race handling and per-profile isolation.
+  外部 MCP 注册的令牌与备用端口现可跨桌面端重启保持稳定，并处理首次启动竞态与多 profile 隔离。
+- Sonilo source matching, streamed uploads, response parsing, and persisted sound jobs were hardened so large inputs and interrupted sessions recover predictably.
+  加固 Sonilo 素材匹配、流式上传、响应解析和音效任务持久化，使大素材与中断会话可稳定恢复。
+
+## [0.2.7] - 2026-08-17
+
+### Added / 新增
+
+- Marking mode: while playing, the playhead follows the audible media element's own clock (with audio output-latency compensation), so beat markers stay locked to the sound even when the main thread stalls (#90).
+  打标记模式：播放时播放头跟随音频元素自身时钟（含音频输出延迟补偿），主线程卡顿时节拍标记仍与听到的声音对齐（#90）。
+
+### Fixed / 修复
+
+- Server-run drafts failed with 'could not be persisted' after a tab switch or browser restart — the run capability was stored in sessionStorage (per-tab, wiped on close). It now persists in localStorage, and the draft error message carries the actual reason (403 capability lost / 404 run gone).
+  切换标签页或重启浏览器后 server-run 草稿报"could not be persisted"——运行凭证原本存在 sessionStorage（按标签页隔离、关闭即清）。现改存 localStorage，且草稿报错附带真实原因（403 凭证丢失 / 404 运行不存在）。
+
+## [0.2.6] - 2026-08-17
+
+### Added / 新增
+
+- Transition badges on the timeline gain a right-click menu: five duration presets (0.2/0.3/0.5/1/2s) and remove-transition, without hunting through clip effect lists (#88).
+  时间线转场角标新增右键菜单：五档时长预设（0.2/0.3/0.5/1/2 秒）与删除转场，不用再去片段特效列表里翻找（#88）。
+- Renderer GL backend now resolves per platform: angle (Metal/D3D) on macOS/Windows, angle-egl on Linux, with CC_RENDER_GL override for diagnosis. GPU compositing benchmarked ~2.2x faster than software.
+  渲染 GL 后端按平台解析：macOS/Windows 用 angle（Metal/D3D），Linux 用 angle-egl，支持 CC_RENDER_GL 覆盖诊断。实测 GPU 合成比软件渲染快约 2.2 倍。
+
+### Fixed / 修复
+
+- Snapshot model ids (qwen3.7-plus-2026-05-26 style) now resolve to their base catalog entry, and the unknown-model fallback is grounded in the catalog (context 409,600 / output 65,536) with an in-editor estimate hint — no more 'request is too large' for catalog misses.
+  快照式模型 ID（如 qwen3.7-plus-2026-05-26）现匹配到基座条目；未知模型兜底值按目录统计校准（上下文 409,600 / 输出 65,536）并在编辑器提示估算——目录外模型不再报"request is too large"。
+- project-store.verify redirects USERPROFILE on Windows so the check uses its temp root (#89).
+  project-store.verify 在 Windows 上重定向 USERPROFILE，检查使用临时根目录（#89）。
+
+## [0.2.5] - 2026-08-17
+
+### Added / 新增
+
+- User-adjustable UI scale (80%–150%) in Settings → 界面, with Ctrl/Cmd + Plus/Minus/0 zoom shortcuts persisted to the keystore; composes with the automatic shrink-to-fit window scaling (#85).
+  设置 → 界面新增 UI 缩放（80%–150%），支持 Ctrl/Cmd + +/-/0 快捷键并持久化；与窗口自动收缩缩放组合生效（#85）。
+- End-to-end CI coverage for agent local-path import: whitelist containment, tool schema, browser gate, and a real main-process import chain (fingerprint, copy, probe, dedupe) run on every release (#84).
+  Agent 本地路径导入的端到端 CI 覆盖：白名单、工具 schema、浏览器降级、真实主进程导入链（指纹/副本/探测/去重），每次发版执行（#84）。
+
+### Fixed / 修复
+
+- Editor bridge heartbeat dropped offline (connected:false) when the desktop window was minimized or covered — Electron background throttling now disabled on both editor windows, verified at runtime in the platform smoke tests (#86).
+  桌面窗口最小化或被遮挡时编辑桥心跳掉线（connected:false）——两个编辑窗口均关闭 Electron 后台节流，并在三平台 smoke 中做运行时断言（#86）。
+- UI consistency pass: off-scale corner radii unified to the 0/2/4/6 scale, stray hardcoded colors (#f77, #e5866a, #a63d38) moved to --cc-* tokens so skins stay consistent.
+  UI 一致性修复：非标圆角统一到 0/2/4/6 标度，残留硬编码颜色改用 --cc-* token，换肤保持一致。
+
+## [0.2.4] - 2026-08-16
+
+### Added / 新增
+
+- Media-pool transcription: per-card transcribe button with live status badges, batch transcription from the asset menu, and an auto-transcribe-on-ingest policy (off / local engine / all engines) that protects cloud budgets by default.
+  媒体池级转写：卡片转写按钮与实时状态徽章、右键批量转写、导入后自动转写开关（关/仅本地引擎/全部引擎，默认仅本地，保护云端额度）。
+- Transcript reader in the media pool: read the full transcript with timestamped paragraphs, copy full text, and step across every transcribed asset — in-page floating panel on web, independent draggable desktop window in the Electron build.
+  媒体池文字稿查看：按段落与时间戳通读全部转写稿、一键复制全文、跨素材上/下条切换——网页端为可拖浮层，桌面端为可脱离主窗口的独立浮窗。
+- Document attachments: drag md/txt/srt/csv into the composer, lazy-load docx (mammoth) and pdf (pdfjs-dist) parsing (#84).
+  文档附件：md/txt/srt/csv 直接拖入输入框，docx/pdf 懒加载解析（#84）。
+- Local-path media import for the agent: import_asset / import_folder tools gated by the AGENT_IMPORT_ROOTS whitelist (#84).
+  Agent 本地路径导入：import_asset / import_folder 工具 + AGENT_IMPORT_ROOTS 白名单（#84）。
+- hf-cdn.sufy.com as a high-speed model download fallback source.
+  新增 hf-cdn.sufy.com 高速模型下载源。
+- User-selectable project storage location with safe media relocation; isolated development profiles stay isolated, and active SQLite stores are explicitly kept in place until snapshot-based relocation is available.
+  工程存储位置可自定义并安全迁移素材；隔离开发 profile 保持隔离，已启用的 SQLite 工程库会明确留在原目录，等待后续快照式迁移。
+- followup answers and run timing persist across reloads; server-run output flushes every 2s so reloads keep it.
+  followup 答案与运行计时跨刷新持久化；服务端运行输出每 2 秒落盘，刷新不丢。
+
+### Fixed / 修复
+
+- Rotation-coded portrait footage (iPhone-style) was recognized as 16:9; the probe now honors rotation side-data/tags and reports the displayed aspect.
+  旋转元数据的竖拍素材（iPhone 风格）被识别为 16:9；探测现按 rotation 元数据报告显示宽高比。
+- FCPXML exports now include pathurl with native UTF-8 paths so DaVinci Resolve relinks Chinese-named media (#27).
+  FCPXML 导出新增原生 UTF-8 路径的 pathurl，达芬奇可自动重连中文名素材（#27）。
+- Server-run capability overrides are applied on the agent run path (#81).
+  服务端运行路径应用能力覆盖（#81）。
+- Shared-store fallback degrades safely when remote bootstrap fails; editor leases refresh during long polls (#63/#70/#71).
+  共享存储降级在远端引导失败时安全回退；编辑器租约在长轮询期间刷新（#63/#70/#71）。
+- Pool card control buttons (favorite / menu / transcribe) were swallowed by the card click-capture — clicks now reach them.
+  媒体池卡片操作按钮（收藏/菜单/转写）被卡片点击捕获吞掉——点击现已正常到达。
+
+## [0.2.3] - 2026-08-14
+
+### Added / 新增
+
+- download_media and push_asset accept unlimited URL batches (the previous 4-URL cap forced the model to split calls; the server handles one URL per request and has no batch limit).
+  download_media 与 push_asset 不再限制批量 URL 数量（原 4 条上限强制模型拆分调用；服务端按单 URL 处理且无批量限制）。
+- Server runs now surface model reasoning in the chat Thinking Process block: native reasoning streams and inline <think>/<thinking> content forward as thinking-delta events, accumulate into the assistant message, and survive reloads.
+  服务端执行路径恢复思考过程显示：原生推理流与内联 <think>/<thinking> 内容以 thinking-delta 事件转发、累积进助手消息，并跨刷新恢复。
+- Long tool execution reports live progress on the chat status line (local ASR model load/download, cloud transcription polling status and elapsed wait).
+  长耗时工具执行在聊天状态行实时显示进度（本地 ASR 模型加载/下载、云端转写轮询状态与已等待时间）。
+
+### Fixed / 修复
+
+- AI SDK chunk/step timers abort with a TimeoutError DOMException that was classified as non-retryable; transient provider stalls now retry automatically instead of failing the whole run after a silent 120s wait.
+  AI SDK 分块/步骤计时器抛出的 TimeoutError 此前被归为不可重试；瞬时上游断流现在自动重试，不再静默等待 120 秒后整轮失败。
+- A model calling a tool it used earlier in the conversation no longer fails with "Tool is not active for this request": canonical-but-inactive tools are admitted at execution time (activation is a token optimization, not a security boundary).
+  模型调用对话早前用过、但当前请求未激活的工具不再报 "Tool is not active"：目录内但未激活的工具在执行时自动补激活（激活只是 token 优化，不是安全边界）。
+- Missing-audio-track errors now spell out the exact edit_track create call instead of the ambiguous "call edit_track action=list", which models misread as track tools being unavailable.
+  缺失音轨错误现在给出明确的 edit_track create 调用方式，替代易被模型误解为"轨道工具不可用"的模糊提示。
+- The chat status line showed "writing arguments…" during tool execution (the server never streams argument deltas); it now shows "running…" or the live progress note.
+  工具执行阶段聊天状态行此前误显示"正在编写参数…"（服务端从不流式推送参数）；现在显示"正在执行…"或实时进度。
+
+## [0.2.2] - 2026-08-13
+
+### Added / 新增
+
+
+- Server-side execution is now the only Agent run path: the browser-side model loop is removed, Codex turns and vision image attachments flow through the server, and chat, runtime sidecar, drafts, settlements and proposals persist server-side through a single-writer ledger that survives refreshes and service restarts.
+  服务端执行现为 Agent 唯一运行路径：浏览器端模型循环已移除，Codex 回合与视觉图片附件全部经由服务端，聊天、运行时账本、草稿、结算与提案通过单写者账本在服务端持久化，可跨刷新与本地服务重启恢复。
+- The Agent loop no longer caps tool turns: the model decides when the task is done. Long runs are protected by transient-LLM-error retries (rate limit, timeout, 5xx, transport), parallel execution of read-only tools behind an exclusive barrier for mutating tools, pressure-driven context compaction with an automatic retry on context-window overflow, recovery closers for interrupted tool calls, and a rolling event window so long runs never die on the event cap.
+  Agent 循环不再限制工具轮次，由模型自行决定任务完成时机。长运行由以下机制保护：瞬时 LLM 错误重试（限流/超时/5xx/网络）、只读工具并行执行（写工具独占屏障）、按压力触发的上下文压缩（超上下文自动压缩并重试一次）、中断工具调用的恢复闭合事件，以及滚动事件窗口——长运行不再因事件上限而终止。
+- External MCP sessions now close durability and security gaps found by full-tool e2e testing: handoff-token upload admission, registry revision adoption after settlement, owner-gone session cleanup, same-window revision rebinding, and strict external session control tools.
+  外部 MCP 会话补齐全工具端到端实测发现的持久化与安全缺口：handoff 令牌上传准入、结算后注册表版本采纳、主人离开后的会话清理、同窗口版本重绑定，以及严格的外部会话控制工具。
+- Desktop native ASR inference auto-enables in the Electron shell (opt-out), browser transcription defaults to the base tier, and cross-origin isolation enables threaded wasm in the browser.
+  Electron 桌面端默认启用原生 ASR 推理（可关闭），浏览器转写默认使用 base 档位，跨域隔离让浏览器启用多线程 wasm。
+- Text-only models now strip image attachments before the request instead of failing, and the output token budget follows the selected model.
+  纯文本模型在请求前自动剥离图片附件而不是报错，输出 token 预算跟随所选模型。
+
+### Changed / 变更
+
+- Consecutive same-source clips share one decoder instance, reducing video instance count and playback contention on long split runs.
+  连续同源片段共享同一解码实例，减少视频实例数与长分割序列的播放竞争。
+- The run inspector no longer repeats the model reply or the raw server event stream; it surfaces diagnostics only.
+  运行检查器不再重复展示模型回复与原始服务端事件流，只显示诊断信息。
+- The 60-minute music/audio analysis duration cap is removed.
+  移除音乐/音频分析 60 分钟时长上限。
+
+### Fixed / 修复
+
+- Left-edge trim on source-free clips could clamp at the preceding clip; left extension now works again (issue #75).
+  无源片段的左边缘裁剪曾被前一片段钳制；左向扩展现已恢复（issue #75）。
+- CAS contention, settle races and server-restart recovery paths hardened across project documents and the agent runtime ledger; project-store writes no longer surface transient conflicts.
+  项目文档与 Agent 运行时账本的 CAS 竞争、结算竞态与服务重启恢复路径全面加固；工程存储写入不再暴露瞬时冲突。
+- Full-repo scan findings fixed across persistence, editor, UI, audio and ASR; usage panel metrics, follow-up questions and oversized tool results now work on the server-run path; YOLO approval mode reaches the server draft context.
+  全仓扫描发现的问题在持久化、编辑器、UI、音频与 ASR 域逐项修复；用量面板指标、追问与超大工具结果在服务端运行路径正常工作；YOLO 审批模式已传入服务端草稿上下文。
+- BytePlus ModelArk catalog entries completed and model size labels corrected to real download totals.
+  补齐字节跳动 ModelArk 能力目录，模型大小标签修正为真实下载总量。
+
+## [0.2.1] - 2026-08-11
+
+### Added / 新增
+
+- Added opt-in server-side execution for the built-in Agent on API models. A capability-bound local server now owns the model loop while the active editor continues to execute tools through the existing `EditorCommands` boundary; runs survive page refreshes and local service restarts, and the existing browser execution path remains the default.
+  为内置 Agent 的 API 模型新增可选服务端执行模式。本地服务端通过能力令牌接管模型循环，活动编辑器仍经既有 `EditorCommands` 边界执行工具；运行可跨页面刷新和本地服务重启恢复，原有浏览器执行路径继续作为默认模式。
+- Added durable server-run events, ordered SSE replay, reconnect recovery, browser tool claim/result handoff, cancellation, proposal continuation, run inspection, and portable recovery metadata without granting the server direct timeline authority.
+  新增持久化服务端运行事件、有序 SSE 回放、断线恢复、浏览器工具认领/结果回传、取消、提案续接、运行检查器及可移植恢复元数据，同时不向服务端授予时间线直接修改权限。
+- Added a one-click `news-rough-cut` workflow that analyzes the selected news footage before editing, chooses duration from the available information, preserves complete speech, and limits the final soundtrack to the selected source footage's original onsite audio.
+  新增一键式 `news-rough-cut` 新闻智能粗剪工作流：剪辑前完整分析选定新闻素材，根据信息量决定成片时长，保留完整讲话语义，并将最终声音严格限制为选定源素材的原始现场声。
+
+### Security / 安全
+
+- Hardened server-run admission and recovery with loopback/same-origin request checks, per-run capabilities, idempotent request digests, bounded histories and event payloads, credential redaction, retention limits, and fail-closed ownership recovery.
+  通过回环地址/同源请求校验、逐运行能力令牌、幂等请求摘要、有界历史与事件载荷、凭据脱敏、保留上限及失败即关闭的所有权恢复，加固服务端运行的准入与恢复链路。
+
+
+## [0.2.0] - 2026-08-11
 
 ### Added / 新增
 
 - Added opt-in AI SDK speech routing for OpenAI, Gemini, Mistral Voxtral, and Cartesia, plus cloud transcription through OpenAI, Mistral Voxtral, Deepgram, Groq, ElevenLabs Scribe, and Cartesia. AssemblyAI remains the default transcription route and on-device Whisper remains available; the Agent can discover configured providers and explicitly route to one without exposing credentials.
   新增可选的 AI SDK 语音路由：OpenAI、Gemini、Mistral Voxtral 与 Cartesia 配音，以及 OpenAI、Mistral Voxtral、Deepgram、Groq、ElevenLabs Scribe、Cartesia 云端转写。AssemblyAI 仍是默认转写路径，本地 Whisper 继续可用；Agent 可发现已配置的供应商并显式路由，且不会接触密钥。
-- Added in-app desktop updates: packaged macOS, Windows, and Linux builds can check, download, retry, and install the next GitHub Release from the dashboard notice or Settings, with per-platform update metadata published alongside installers.
-  新增桌面端应用内更新：macOS、Windows 与 Linux 安装包可在首页提示或设置中检查、下载、重试并安装下一版 GitHub Release；各平台更新元数据与安装包一同发布。
+- Added in-app desktop updates: packaged Windows and Linux builds can check, download, retry, and install the next GitHub Release from the dashboard notice or Settings. Packaged macOS checks send users to the GitHub Releases download page instead because the current v0.2.0 lane is ad-hoc signed and does not support safe direct installation.
+  新增桌面端应用内更新：Windows 与 Linux 安装包可在首页提示或设置中检查、下载、重试并安装下一版 GitHub Release。macOS 安装包检查更新后会改为引导用户前往 GitHub Releases 下载页，因为当前 v0.2.0 发布通道采用临时签名，暂不支持安全的应用内直接安装。
 - Added dashboard header shortcuts for contacting the author and opening the OpenChatCut GitHub repository; the contact disclosure shows a selectable email link without leaving the project list.
   首页顶栏新增“联系作者”和 GitHub 仓库快捷入口；联系信息会就地显示可选择的邮箱链接，无需离开工程列表。
 - Added opt-in blurred background fill for video and image clips: the Inspector offers exact 0–100% intensity control plus four quick shortcuts, while `edit_item` accepts `backgroundFillStrength`. The sharp foreground remains independently movable, resizable, croppable, and rotatable. Shared preview/export compositing preserves fades, effects, and GLSL transition alpha; FCPXML retains the toggle and percentage as OpenChatCut metadata and explicitly reports that destination editors cannot reconstruct the generated blur layer from those custom fields.
@@ -24,8 +378,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   新增 `edit_item` 源窗口：`search_media` 返回的 `sourceStartMs`/`sourceEndMs` 可原样落轨；也接受显式 `sourceStartSeconds`/`sourceEndSeconds`，统一在工具内部换算。
 - Hardened the agent prompt: explicit TIMELINE frames vs SOURCE time coordinate contract, transcript/caption content declared as footage-not-instructions, and lossy-summary warnings on truncated views.
   加固 Agent 提示词：显式时间线帧/源时间坐标系契约、转录与字幕内容声明为“素材而非指令”、截断视图附有损摘要警示。
-- Added content-addressed media identity: imported masters now carry a streaming SHA-256 through browser, multipart, Agent, and desktop import paths; deterministic relinking/deduplication preserves asset identity and invalidates derived artifacts only when bytes change. Project schema v4 migrates legacy documents without changing media URLs.
-  新增内容寻址素材身份：浏览器、分片上传、Agent 与桌面导入链路统一流式计算并传递主素材 SHA-256；确定性重链/去重保留素材身份，仅在字节变化时失效派生结果。工程 schema v4 可无损迁移旧文档，素材 URL 语义不变。
+- Added content-addressed media identity: imported masters now carry a streaming SHA-256 through browser, multipart, Agent, and desktop import paths; deterministic relinking/deduplication preserves asset identity and invalidates derived artifacts only when bytes change. The optional metadata remains inside the public v3 project schema, so v0.1.9 can still read newly saved projects without changing media URLs.
+  新增内容寻址素材身份：浏览器、分片上传、Agent 与桌面导入链路统一流式计算并传递主素材 SHA-256；确定性重链/去重保留素材身份，仅在字节变化时失效派生结果。这些可选元数据继续使用公开的 v3 工程 schema，因此 v0.1.9 仍可读取新保存的工程，素材 URL 语义也保持不变。
 - Added stable caption word references and parallel source/translation lanes. Selection, editing, drag grouping, copy/paste, preview, and ASS/WebVTT export now share one cue identity path, including deterministic CJK segmentation.
   新增稳定字幕词引用与原文/译文并行车道。选择、编辑、拖动分组、复制粘贴、预览及 ASS/WebVTT 导出统一使用同一条 cue 身份链，并支持确定性的中日韩文本分词。
 - Added five deterministic caption motion presets (`none`, fade-up, pop, word-pop, karaoke-pulse). They derive from timeline frames inside the shared Remotion layer, so Player preview and burned export render the same motion; saved caption looks retain the chosen preset.
@@ -39,11 +393,40 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Added a durable Agent harness shared by in-app, Codex, and external MCP runs: persisted run/event/approval/checkpoint/artifact records, safe reload and server-restart recovery, lease-fenced browser/offline editing, resumable proposals, portable project transfer, and a read-only run inspector.
   新增由应用内 Agent、Codex 与外部 MCP 共用的持久化运行框架：保存运行、事件、审批、上下文检查点与结果归档；支持页面刷新和服务重启后的安全恢复；用租约隔离浏览器与离线编辑；提案可继续处理，工程包可携带恢复状态，并提供只读运行检查器。
+- Added an opt-in SQLite project-store backend with a user-initiated migration flow: the dashboard banner invites migration, the dialog moves projects, chats, versions, exports, and settings into SQLite with an idempotent, resumable import and an HTTP-layer migration endpoint, then switches the runtime atomically. JSON-file paths stay untouched in SQLite mode.
+  新增可选的 SQLite 工程库后端与用户主动迁移流程：首页横幅邀请迁移，迁移对话框将工程、聊天、版本、导出与设置迁入 SQLite，导入幂等可续跑，并提供 HTTP 层迁移端点后原子切换运行时；SQLite 模式下 JSON 文件路径保持不变。
+- Added self-healing editor session credentials: after a reload the editor re-establishes a valid project-store session without manual sign-in, cross-port deletion stays consistent, and sessionless startups remain read-only.
+  新增编辑器会话凭据自愈：页面刷新后自动恢复有效的工程库会话，无需重新登录；跨端口删除保持一致；无会话启动保持只读。
+- Added platform-aware native inference routing on desktop: DirectML / CoreML / Apple-silicon workers are chosen per platform and transparently fall back to the browser engines.
+  新增桌面端平台感知的原生推理路由：按平台选择 DirectML / CoreML / Apple 芯片 worker，并透明回退到浏览器引擎。
+- Added desktop development state isolation and watchable media folders.
+  新增桌面开发状态隔离与可监控的媒体文件夹。
 
 ### Changed / 变更
 
 - Reduced Agent token use with request-scoped tool schemas, one-shot `ToolSearch` expansion, bounded tool-result/history compaction, provider prompt-cache hints, and an in-chat system/tool/history/cache usage breakdown.
   降低 Agent 令牌消耗：按请求暴露工具 schema、每轮最多一次 `ToolSearch` 扩展、对模型可见的工具结果与旧历史做有界压缩、启用供应商提示词缓存提示，并在聊天框展示系统/工具/历史/缓存用量拆分。
+- Upgraded the on-device Base transcription tier to the timestamp-capable Whisper export and gave transcription tools a dedicated five-minute execution window while preserving the 30-second default for unrelated Agent tools.
+  本地 Base 转写档升级为支持时间戳的 Whisper 导出；转写工具获得独立的五分钟执行窗口，其他 Agent 工具仍保持默认 30 秒超时。
+- Self-hosted Geist + Geist Mono as the UI typeface, removing the network font dependency.
+  UI 字体改为自托管 Geist + Geist Mono，不再依赖网络字体。
+- Made semantic-index sampling configurable per media import.
+  语义索引采样率改为可按素材导入配置。
+
+### Fixed / 修复
+
+- Preserved follow-up message order in agent chats and reduced generation/persistence latency by cutting agent-chat hydration network round-trips.
+  修复 Agent 聊天中跟进消息的顺序问题，并通过削减聊天水合的网络往返降低生成与持久化延迟。
+- Kept newly saved projects on the public v3 schema for v0.1.9 compatibility, stopped read-only opens from rewriting projects or version snapshots, and made opt-in SQLite migration single-owner, transactional, resumable, and profile-aware.
+  新保存的工程继续使用公开的 v3 schema，兼容 v0.1.9；只读打开不再改写工程或版本快照；可选 SQLite 迁移改为单执行者、事务化、可续跑并正确隔离开发 profile。
+- Hardened Agent cost and upload boundaries: an explicit cloud transcription provider always uses the paid-operation approval gate, upload receipts remain retryable until the asset edit commits, and upload finalization no longer starts transcription implicitly.
+  加固 Agent 费用与上传边界：显式选择云端转写时始终进入付费操作审批；上传回执在素材编辑真正提交前可安全重试；上传完成后不再隐式启动转写。
+- Made watched-folder import ownership durable across renderer loss, isolated stale watcher generations, and made native ASR cancellation terminate the active worker immediately so media is not deleted or background inference left running.
+  监控文件夹导入在渲染进程丢失时也能保持素材所有权；旧 watcher 代际会被隔离；取消原生 ASR 时立即终止活跃 worker，避免误删素材或残留后台推理。
+- Preserved authored clip slots during relink, blocked any partially materialized blob export before job creation, and retained completed browser exports when a destination handle must be reselected.
+  重链素材时保留已编排的片段时段；任何 Blob 素材未完全就绪都会在创建导出任务前阻止提交；浏览器导出目标需重新选择时会保留已完成的渲染结果。
+- Made isolated development startup reuse only the exact Remotion-compatible cached headless-shell binary, avoiding browser downloads without accepting stale or mismatched executables.
+  隔离开发启动现在只复用与当前 Remotion 精确兼容的本地 headless-shell 缓存，避免重复下载，同时拒绝过期或版本不匹配的可执行文件。
 
 ## [0.1.9] - 2026-08-06
 
@@ -460,7 +843,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Added Electron desktop packaging for macOS, Windows, and Linux.  
   提供 macOS、Windows 与 Linux 的 Electron 桌面端打包能力。
 
-[Unreleased]: https://github.com/0xsline/OpenChatCut/compare/v0.1.4...HEAD
+[0.2.1]: https://github.com/0xsline/OpenChatCut/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/0xsline/OpenChatCut/compare/v0.1.9...v0.2.0
+[0.1.9]: https://github.com/0xsline/OpenChatCut/compare/v0.1.8...v0.1.9
+[0.1.8]: https://github.com/0xsline/OpenChatCut/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/0xsline/OpenChatCut/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/0xsline/OpenChatCut/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/0xsline/OpenChatCut/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/0xsline/OpenChatCut/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/0xsline/OpenChatCut/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/0xsline/OpenChatCut/compare/v0.1.1...v0.1.2

@@ -10,7 +10,6 @@ import { previewTextEditFields } from '../components/preview/previewTextEdit';
 import type { AspectFit, CssTransitionType, GlslTransitionType, ProjectDoc, Timeline, TimelineItem, TimelineState, TransitionDirection } from './types';
 import { sourceFrameAt } from './sourceLimit';
 import { nestedSequenceFrom, resolveTimelineRenderPlan, SequenceGraphError, type SequenceGraphLimits } from './sequenceGraph';
-import { continuousVideoAudioGroups } from './transitionAudio';
 import { PreviewTransitionIn } from './transitionPreview.tsx';
 import { previewTransitionType } from './transitionPreview';
 import { TimelineReadinessGate } from './TimelineReadinessGate';
@@ -19,7 +18,9 @@ import { isBackgroundFillActive } from './backgroundFill';
 import { ClipWrapper } from './TimelineClipWrapper';
 import { GlTransitionVisibility } from './GlTransitionVisibility';
 import { updateReadyGlWindows } from './glTransitionVisibilityState';
-import { AudioClip, BackgroundFillLayer, ContinuousVideoAudio, MediaFill, VisualClipSurface } from './TimelineMediaLayer';
+import { AudioClip, BackgroundFillLayer, ContinuousVideoAudio, MediaFill, SharedVideoVisualGroup, VisualClipSurface } from './TimelineMediaLayer';
+import { firstGlEffect } from '../gl/clipEffects';
+import { continuousVideoAudioGroups, shareableVisualItem } from './transitionAudio';
 import { ItemLayer, SolidLayer, TextLayer, WatermarkLayer } from './TimelineGraphicLayers';
 
 const GRID = 'repeating-conic-gradient(#242424 0% 25%, #1c1c1c 0% 50%) 50% / 40px 40px';
@@ -147,11 +148,12 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
     return 10 ** ((config.audioRouting?.duckDepthDb ?? -12) / 20);
   };
   const fit: AspectFit = state.fit ?? 'contain';
-  // Preview mounts each clip 2s in advance (freezes first frame + transparency): video elements seek/decode in advance, GL compiles in advance,
+  // Preview mounts each clip 1s in advance (freezes first frame + transparency): video elements seek/decode in advance, GL compiles in advance,
   // Eliminate the "last frame stuck" caused by cold start of three media elements at the starting point of the cut point/transition window in the same frame.
   // Headless export renders deterministically frame by frame, preheating will only slow down the export, set to 0.
+  // A 2s premount window multiplied the decoding cost of every 2K/4K clip; 1s still covers element warm-up.
   const environment = getRemotionEnvironment();
-  const premountFrames = environment.isRendering ? 0 : Math.round(state.fps * 2);
+  const premountFrames = environment.isRendering ? 0 : Math.round(state.fps * 1);
   const videoAudioGroups = continuousVideoAudioGroups(ordered, state.transitions);
   const groupedVideoIds = new Set(videoAudioGroups.flatMap((group) => group.map((item) => item.id)));
 
@@ -249,6 +251,35 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
     itemIds: [window.outgoing.id, window.incoming.id],
   }));
 
+  // Consecutive same-source video clips share ONE decoding video element per
+  // group (audio already shares via ContinuousVideoAudio). Any per-clip
+  // rendering concern (GL effects, background fill, transitions, denoise)
+  // keeps the clip on its own element.
+  const sharedVisualGroups = videoAudioGroups.flatMap((group) => {
+    // Split each audio-continuous group into shareable runs: a clip with GL
+    // effects/transitions/animations keeps its own element and breaks the run.
+    const runs: TimelineItem[][] = [];
+    for (const item of group) {
+      const shareable = shareableVisualItem({
+        item,
+        hasGlEffect: !!firstGlEffect(item),
+        hasBackgroundFill: isBackgroundFillActive(state, item),
+        hasExtendBefore: !!extendBefore.get(item.id),
+        hasExtendAfter: !!extendAfter.get(item.id),
+        hasEntrance: !!entranceOf.get(item.id),
+      });
+      if (shareable) {
+        const run = runs.at(-1);
+        if (run) run.push(item);
+        else runs.push([item]);
+      } else {
+        runs.push([]);
+      }
+    }
+    return runs.filter((run) => run.length > 1);
+  });
+  const sharedVisualIds = new Set(sharedVisualGroups.flatMap((group) => group.map((item) => item.id)));
+
   return (
     <AbsoluteFill style={{ background: transparent ? undefined : GRID }}>
       {staticPreviewStatuses.map((status) => (
@@ -258,7 +289,20 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
           listener={onSelectedPreviewStatus}
         />
       ))}
+      {sharedVisualGroups.map((group) => (
+        <SharedVideoVisualGroup
+          key={`sv:${group[0]!.id}`}
+          group={group}
+          fit={fit}
+          muted={isMuted(group[0]!.track)}
+          canvasW={state.width}
+          canvasH={state.height}
+          premountFor={premountFrames}
+          browserRenderer={browserRenderer}
+        />
+      ))}
       {ordered.map((item) => {
+        if (sharedVisualIds.has(item.id)) return null;
         const eb = extendBefore.get(item.id) ?? 0;
         const ea = extendAfter.get(item.id) ?? 0;
         const entrance = entranceOf.get(item.id);

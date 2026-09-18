@@ -14,11 +14,11 @@ import type {
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 export interface ProjectStoreHttpOperations {
-  compareAndSwapAgentRuntime(
-    input: Extract<ProjectStoreRequest, { operation: 'agent-runtime-cas' }>,
+  writeAgentRuntime(
+    input: Extract<ProjectStoreRequest, { operation: 'agent-runtime-write' }>,
   ): Promise<ProjectStoreMutationResponse>;
-  compareAndSwapProjectDocument(
-    input: Extract<ProjectStoreRequest, { operation: 'project-document-cas' }>,
+  writeProjectDocument(
+    input: Extract<ProjectStoreRequest, { operation: 'project-document-write' }>,
   ): Promise<ProjectDocumentMutationResponse>;
   deleteEntry(key: string): Promise<void>;
   getEntry(key: string): Promise<ProjectStoreResponse>;
@@ -30,6 +30,13 @@ export interface ProjectStoreHttpOperations {
   updateAgentRunLease(
     input: Extract<ProjectStoreRequest, { operation: 'agent-run-lease' }>,
   ): Promise<ProjectStoreMutationResponse>;
+  updateExportRecoveryLease(
+    input: Extract<ProjectStoreRequest, { operation: 'export-recovery-lease' }>,
+  ): Promise<ProjectStoreMutationResponse>;
+  semanticVectorsUpsert(input: Extract<ProjectStoreRequest, { operation: 'semantic-vectors-upsert' }>): unknown;
+  semanticVectorsSearch(input: Extract<ProjectStoreRequest, { operation: 'semantic-vectors-search' }>): unknown;
+  semanticVectorsPrune(input: Extract<ProjectStoreRequest, { operation: 'semantic-vectors-prune' }>): unknown;
+  semanticVectorsClear(input: Extract<ProjectStoreRequest, { operation: 'semantic-vectors-clear' }>): unknown;
 }
 
 const isProjectDocumentKey = (key: unknown): key is string =>
@@ -85,28 +92,28 @@ async function handleGet(
   return true;
 }
 
-async function handleAgentRuntimeCas(
+async function handleAgentRuntimeWrite(
   req: IncomingMessage,
   res: ServerResponse,
   operations: ProjectStoreHttpOperations,
 ): Promise<void> {
   const body = await readBody(req);
-  if (!isProjectStoreRequest(body) || body.operation !== 'agent-runtime-cas') {
-    throw new Error('invalid agent runtime CAS request');
+  if (!isProjectStoreRequest(body) || body.operation !== 'agent-runtime-write') {
+    throw new Error('invalid agent runtime write request');
   }
-  sendProjectStoreJson(res, 200, await operations.compareAndSwapAgentRuntime(body));
+  sendProjectStoreJson(res, 200, await operations.writeAgentRuntime(body));
 }
 
-async function handleProjectDocumentCas(
+async function handleProjectDocumentWrite(
   req: IncomingMessage,
   res: ServerResponse,
   operations: ProjectStoreHttpOperations,
 ): Promise<void> {
   const body = await readBody(req);
-  if (!isProjectStoreRequest(body) || body.operation !== 'project-document-cas') {
-    throw new Error('invalid project document CAS request');
+  if (!isProjectStoreRequest(body) || body.operation !== 'project-document-write') {
+    throw new Error('invalid project document write request');
   }
-  sendProjectStoreJson(res, 200, await operations.compareAndSwapProjectDocument(body));
+  sendProjectStoreJson(res, 200, await operations.writeProjectDocument(body));
 }
 
 async function handleAgentRunLease(
@@ -119,6 +126,17 @@ async function handleAgentRunLease(
     throw new Error('invalid agent run lease request');
   }
   sendProjectStoreJson(res, 200, await operations.updateAgentRunLease(body));
+}
+async function handleExportRecoveryLease(
+  req: IncomingMessage,
+  res: ServerResponse,
+  operations: ProjectStoreHttpOperations,
+): Promise<void> {
+  const body = await readBody(req);
+  if (!isProjectStoreRequest(body) || body.operation !== 'export-recovery-lease') {
+    throw new Error('invalid export recovery lease request');
+  }
+  sendProjectStoreJson(res, 200, await operations.updateExportRecoveryLease(body));
 }
 
 async function handleAgentSessionRotate(
@@ -164,12 +182,17 @@ async function handlePost(
   operations: ProjectStoreHttpOperations,
 ): Promise<boolean> {
   if (req.method !== 'POST') return false;
-  if (req.url === '/agent-runtime/cas') await handleAgentRuntimeCas(req, res, operations);
-  else if (req.url === '/project-document/cas') await handleProjectDocumentCas(req, res, operations);
+  if (req.url === '/agent-runtime/write') await handleAgentRuntimeWrite(req, res, operations);
+  else if (req.url === '/project-document/write') await handleProjectDocumentWrite(req, res, operations);
   else if (req.url === '/agent-runtime/lease') await handleAgentRunLease(req, res, operations);
+  else if (req.url === '/export-recovery/lease') await handleExportRecoveryLease(req, res, operations);
   else if (req.url === '/agent-session/rotate') await handleAgentSessionRotate(req, res, operations);
   else if (req.url === '/merge') await handleMerge(req, res, operations);
   else if (req.url === '/project/purge') await handleProjectPurge(req, res, operations);
+  else if (req.url === '/semantic-vectors/upsert') await handleSemanticVectors(req, res, operations, 'semantic-vectors-upsert');
+  else if (req.url === '/semantic-vectors/search') await handleSemanticVectors(req, res, operations, 'semantic-vectors-search');
+  else if (req.url === '/semantic-vectors/prune') await handleSemanticVectors(req, res, operations, 'semantic-vectors-prune');
+  else if (req.url === '/semantic-vectors/clear') await handleSemanticVectors(req, res, operations, 'semantic-vectors-clear');
   else return false;
   return true;
 }
@@ -183,7 +206,7 @@ async function handleEntryMutation(
     const body = await readBody(req);
     if (!isProjectStoreKey(body.key) || !Object.hasOwn(body, 'value')) throw new Error('invalid entry');
     if (isProjectDocumentKey(body.key)) {
-      throw new Error('project document writes require authoritative ownership CAS');
+      throw new Error('project document writes require authoritative ownership');
     }
     await operations.setEntry(body.key, body.value);
     sendProjectStoreJson(res, 200, { ok: true });
@@ -195,6 +218,22 @@ async function handleEntryMutation(
   await operations.deleteEntry(key);
   sendProjectStoreJson(res, 200, { ok: true });
   return true;
+}
+
+async function handleSemanticVectors(
+  req: IncomingMessage,
+  res: ServerResponse,
+  operations: ProjectStoreHttpOperations,
+  operation: 'semantic-vectors-upsert' | 'semantic-vectors-search' | 'semantic-vectors-prune' | 'semantic-vectors-clear',
+): Promise<void> {
+  const body = await readBody(req);
+  const dispatch: Record<string, (input: never) => unknown> = {
+    'semantic-vectors-upsert': (input) => operations.semanticVectorsUpsert(input as never),
+    'semantic-vectors-search': (input) => operations.semanticVectorsSearch(input as never),
+    'semantic-vectors-prune': (input) => operations.semanticVectorsPrune(input as never),
+    'semantic-vectors-clear': (input) => operations.semanticVectorsClear(input as never),
+  };
+  sendProjectStoreJson(res, 200, await dispatch[operation](body as never));
 }
 
 export async function routeProjectStoreRequest(

@@ -3,13 +3,15 @@ import { useT } from '../../i18n/locale';
 import { theme } from '../../theme';
 import { Icon, type IconName } from '../icons';
 import type { ChatMode } from './ChatComposer';
+import codexPng from '../../../assets/vendor-icons/codex-color.png';
+import copilotSvg from '../../../assets/vendor-icons/copilot.svg?raw';
 
 export type ComposerPopover =
   | 'mode' | 'model' | 'skill' | 'settings' | 'assets' | 'templates' | 'more' | null;
 
 interface ToolbarProps {
   mode: ChatMode;
-  activeModel?: { providerLabel: string; model: string };
+  activeModel?: { providerLabel: string; model: string; backend: 'api' | 'codex' | 'copilot' };
   contextLabel: string;
   contextTitle: string;
   contextNearLimit: boolean;
@@ -73,7 +75,15 @@ export function ComposerToolbar({
             : t('选择模型')}
           onClick={(event) => onTogglePop('model', event.currentTarget)}
           style={{ height: 28, minWidth: 0, maxWidth: 196, display: 'flex', alignItems: 'center', gap: 4, padding: '0 6px', border: 0, borderRadius: 4, background: pop === 'model' ? theme.panel : 'transparent', color: contextNearLimit ? theme.gold : theme.textDim, cursor: running ? 'default' : 'pointer', fontSize: 11, flexShrink: 1 }}>
-          <Icon name="cloud" size={13} />
+          {activeModel?.backend === 'codex' ? (
+            <img src={codexPng} alt="" aria-hidden style={{ width: 15, height: 15, borderRadius: 4, objectFit: 'contain', flex: '0 0 auto' }} />
+          ) : activeModel?.backend === 'copilot' ? (
+            // Static codebase asset, non-user input — inlined so it inherits currentColor.
+            <span aria-hidden dangerouslySetInnerHTML={{ __html: copilotSvg }}
+              style={{ width: 15, height: 15, fontSize: 15, flex: '0 0 auto', display: 'inline-flex' }} />
+          ) : (
+            <Icon name="cloud" size={13} />
+          )}
           <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeModel?.model ?? t('模型')}</span>
           {contextLabel && <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', fontSize: 10 }}>{contextLabel}</span>}
           <Icon name="chevronDown" size={10} />

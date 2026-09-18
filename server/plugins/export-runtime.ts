@@ -1,7 +1,8 @@
-import { spawn } from 'node:child_process';
-import { readdir, stat, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { constants as fsConstants } from 'node:fs';
+import { copyFile, link, readdir, stat, unlink } from 'node:fs/promises';
+import { extname, join } from 'node:path';
 import { ffmpegBin } from '../media-binaries.ts';
+import { ffmpegThreadArgs, spawnMediaProcess } from '../media-process.ts';
 import { isSafeUploadName } from '../media-dir.ts';
 import {
   h264EncoderAttempts,
@@ -12,7 +13,6 @@ import {
   h264GlobalArgs,
   shouldFallbackH264Encoder,
   resolveH264Encoder,
-  resolveHwDecodeArgs,
   type H264Encoder,
   type H264EncoderOutcome,
 } from '../media-acceleration.ts';
@@ -37,6 +37,7 @@ interface CleanupStaleExportOptions {
   now?: number;
   retentionMs?: number;
   onError?: (path: string, error: unknown) => void;
+  shouldRetain?: (renderId: string) => Promise<boolean> | boolean;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -45,15 +46,16 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function isTemporaryExportFilename(filename: string): boolean {
-  return EXPORT_JOB_FILENAME.test(filename);
-}
 
 export function exportJobFilename(id: string, extension: string): string {
   if (!EXPORT_JOB_ID.test(id) || !EXPORT_JOB_EXTENSIONS.has(extension)) {
     throw new Error('invalid export job filename');
   }
   return `${EXPORT_JOB_FILE_PREFIX}${id}.${extension}`;
+}
+
+export function assertNonEmptyExportBytes(size: number): void {
+  if (size <= 0) throw new Error('export renderer produced an empty file');
 }
 
 export function exportJobResultName(path: string, assetId: string): string | null {
@@ -63,6 +65,47 @@ export function exportJobResultName(path: string, assetId: string): string | nul
   const match = EXPORT_JOB_FILENAME.exec(name);
   if (!isSafeUploadName(name) || !match || match[1].toLowerCase() !== assetId.toLowerCase()) return null;
   return name;
+}
+
+interface PromotableExportResult {
+  assetId: string;
+  path: string;
+  sizeBytes?: number;
+}
+
+/** Publish a completed job output as ordinary managed media so job cleanup can
+ * remove its temporary name without removing the user's saved asset. */
+export async function promoteExportResult<T extends PromotableExportResult>(
+  result: T,
+  directory: string,
+): Promise<T> {
+  const sourceName = exportJobResultName(result.path, result.assetId);
+  if (!sourceName) throw new Error('export result is not promotable');
+  const publishedName = `openchatcut-derived-${result.assetId}${extname(sourceName).toLowerCase()}`;
+  const source = join(directory, sourceName);
+  const destination = join(directory, publishedName);
+  const sourceInfo = await stat(source);
+  assertNonEmptyExportBytes(sourceInfo.size);
+  try {
+    await link(source, destination);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code !== 'EEXIST') {
+      if (!['EPERM', 'EXDEV', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP'].includes(code ?? '')) throw error;
+      try {
+        await copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+      } catch (copyError) {
+        if (errorCode(copyError) !== 'EEXIST') throw copyError;
+      }
+    }
+  }
+  const publishedInfo = await stat(destination);
+  if (publishedInfo.size !== sourceInfo.size) throw new Error('promoted export size mismatch');
+  return {
+    ...result,
+    path: `/media/uploads/${publishedName}`,
+    sizeBytes: publishedInfo.size,
+  };
 }
 
 export async function unlinkWithRetry(path: string, attempts = 3, delayMs = 100): Promise<void> {
@@ -97,11 +140,13 @@ export async function cleanupStaleExportFiles(
 
   let removed = 0;
   for (const entry of entries) {
-    if (!entry.isFile() || !isTemporaryExportFilename(entry.name)) continue;
+    const match = entry.isFile() ? EXPORT_JOB_FILENAME.exec(entry.name) : null;
+    if (!match) continue;
     const path = join(directory, entry.name);
     try {
       const info = await stat(path);
       if (now - info.mtimeMs < retentionMs) continue;
+      if (await options.shouldRetain?.(match[1])) continue;
       await unlinkWithRetry(path);
       removed += 1;
     } catch (error) {
@@ -184,7 +229,7 @@ export async function withExportPermit<T>(
 
 function runFfmpeg(args: string[], signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(ffmpegBin(), args, { stdio: ['ignore', 'ignore', 'pipe'], signal });
+    const child = spawnMediaProcess(ffmpegBin(), [...ffmpegThreadArgs(), ...args], { stdio: ['ignore', 'ignore', 'pipe'], signal });
     let stderr = '';
     let settled = false;
     let timeoutError: Error | undefined;
@@ -214,7 +259,9 @@ export function retimeVideoEncodingArgs(
   encoder: H264Encoder,
   targetBitrate: number,
 ): string[] {
-  if (codec === 'vp8') return ['-c:v', 'libvpx', '-b:v', String(targetBitrate)];
+  if (codec === 'vp8') {
+    return ['-c:v', 'libvpx', ...ffmpegThreadArgs(), '-b:v', String(targetBitrate)];
+  }
   return h264EncodingArgs({ encoder, targetBitrate, softwarePreset: 'medium' });
 }
 
@@ -257,14 +304,12 @@ async function retimeH264(
   signal?: AbortSignal,
 ): Promise<H264EncoderOutcome> {
   const preferred = await resolveH264Encoder(ffmpegBin());
-  const hwDecode = await resolveHwDecodeArgs(ffmpegBin(), preferred);
   let fallbackReason: string | undefined;
   let lastError: unknown;
   for (const encoder of h264EncoderAttempts(preferred)) {
     try {
       const args = [
         ...base,
-        ...hwDecode,
         ...h264GlobalArgs(encoder),
         '-i', input,
         '-vf', h264FilterChain(encoder, [`fps=${targetFps}`]),

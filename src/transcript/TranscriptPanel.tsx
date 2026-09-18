@@ -3,8 +3,9 @@ import type { PlayerRef } from '@remotion/player';
 import type { TimelineItem, TrackId } from '../editor/types';
 import { emitSelectionRef, transcriptRefFromDomSelection, useSelectionRefMode } from '../agent/selection-refs';
 import { useTranscript } from './useTranscript';
+import { wordTimelineFrame } from './edit';
 import { preferredTranscriptionProvider } from './provider';
-import { hasOperationalTranscript, msToFrame, type TranscriptWord } from './types';
+import { hasOperationalTranscript, type TranscriptWord } from './types';
 import { analyzeSilences } from './segment';
 import { ScriptView } from './TranscriptViews';
 import { theme } from '../theme';
@@ -261,8 +262,8 @@ export function TranscriptPanel({
             <div className="cc-tx-empty-title">{t('转写词级文字稿')}</div>
             <p className="cc-tx-muted">
               {localProvider
-                ? t('中文词级转写 · 本地模型 · 该轨共 {n} 段会逐段转写（免费、离线、素材不出本机）。转写后可点词删减（删词=剪音频）。', { n: clips.length })
-                : t('中文词级转写 · 说话人分离 · 该轨共 {n} 段会逐段上传。转写后可点词删减（删词=剪音频）。', { n: clips.length })}
+                ? t('多语言词级转写 · 本地模型 · 该轨共 {n} 段会逐段转写（免费、离线、素材不出本机）。转写后可点词删减（删词=剪音频）。', { n: clips.length })
+                : t('多语言词级转写 · 说话人分离 · 该轨共 {n} 段会逐段上传。转写后可点词删减（删词=剪音频）。', { n: clips.length })}
             </p>
             {skippedMusic > 0 && (
               <label className="cc-tx-check music">
@@ -435,7 +436,10 @@ export function TranscriptPanel({
                           if (!operational) return;
                           setFocusItemId(c.id);
                           if (editMode) onToggleWord(c.id, w.gi);
-                          else playerRef.current?.seekTo(c.startFrame + msToFrame(w.start, fps));
+                          // Project the SOURCE word through the same math the
+                          // render layer uses — naive startFrame+msToFrame is
+                          // wrong on split/trimmed/edited/rate-stretched clips.
+                          else playerRef.current?.seekTo(wordTimelineFrame(c, w, fps) ?? c.startFrame);
                         }}
                         onDeleteGap={(afterGi) => {
                           if (!operational) return;

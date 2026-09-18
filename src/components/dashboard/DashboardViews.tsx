@@ -1,12 +1,16 @@
+import { Suspense, useEffect } from 'react';
 import type { ProjectMeta } from '../../persist/projectStoreCoordinators';
 import { theme } from '../../theme';
 import { useT } from '../../i18n/locale';
-import { MediaCleanupDialog } from '../../media/MediaCleanupDialog';
-import { ShortcutsDialog } from '../../shortcuts/ShortcutsDialog';
 import { DashboardHeaderLinks } from '../DashboardHeaderLinks';
 import { BrandMark, Icon, OpenChatCutWordmark } from '../icons';
-import { McpGuideDialog } from '../settings/McpGuide';
-import { SettingsDialog } from '../settings/SettingsDialog';
+import { bindAction } from '../../shortcuts/actionRegistry';
+// Opened on demand, so they load on demand — see dashboardDialogs.tsx.
+import {
+  McpGuideDialog, MediaCleanupDialog, SettingsDialog, ShortcutsDialog, StorageMigrationDialog,
+} from './dashboardDialogs';
+import { useDashboardDialogPrefetch } from './dashboardDialogLoaders';
+import { StorageMigrationBanner } from '../settings/StorageMigrationBanner';
 import { SkinPicker } from '../settings/SkinPicker';
 import { LocaleToggle } from '../TopBar';
 import {
@@ -66,6 +70,7 @@ export function DashboardTitlebarContent({ model }: { model: DashboardModel }) {
         <button onClick={() => model.setDialog('shortcuts', true)} data-tip={t('编辑快捷键')} aria-label={t('编辑快捷键')} className="cc-header-btn cc-tip cc-tip-r" style={settingsBtn}><Icon name="keyboard" size={16} /></button>
         <LocaleToggle />
         <SkinPicker />
+        <button onClick={() => model.setDialog('storage', true)} data-tip={t('数据存储')} aria-label={t('数据存储')} className="cc-header-btn cc-tip cc-tip-r" style={settingsBtn}><Icon name="database" size={16} /></button>
         <button onClick={() => model.setDialog('settings', true)} data-tip={t('设置 · API 密钥')} aria-label={t('设置 · API 密钥')} className="cc-header-btn cc-tip cc-tip-r" style={settingsBtn}><Icon name="sliders" size={16} /></button>
       </span>
     </>
@@ -120,7 +125,7 @@ function ProjectActions({ project, props, model }: { project: ProjectMeta; props
         model.rename.setConfirmId(null);
       }}
       disabled={model.transfer.busy}
-      style={{ ...miniBtn, color: '#f77' }}
+      style={{ ...miniBtn, color: theme.danger }}
       title={t('彻底删除工程,并清掉只有它引用的素材文件')}
     >{t('确认删除')}</button>;
   }
@@ -176,6 +181,7 @@ export function DashboardContent({ props, model }: { props: DashboardProps; mode
   return (
     <main style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       <div style={{ maxWidth: 1120, margin: '0 auto', padding: '28px 24px 80px' }}>
+        <StorageMigrationBanner onOpenDialog={() => model.setDialog('storage', true)} />
         {model.modelSnapshot.loaded && model.modelSnapshot.choices.length === 0 && <ModelSetupCard onOpen={() => model.setDialog('settings', true)} />}
         <ProjectToolbar projects={props.projects} model={model} />
         <ProjectGrid props={props} model={model} />
@@ -185,12 +191,21 @@ export function DashboardContent({ props, model }: { props: DashboardProps; mode
 }
 
 export function DashboardDialogs({ model }: { model: DashboardModel }) {
+  // The settings dialog's Anthropic pane summons the MCP guide through the
+  // action registry; in the editor the top bar answers, here the dashboard's
+  // own dialog state does. Without this the button silently does nothing on
+  // the projects page, which is exactly where a new user starts.
+  useEffect(() => bindAction('open-mcp-guide', () => model.setDialog('mcp', true)), [model]);
+  useDashboardDialogPrefetch();
   return (
-    <>
+    // No fallback: a dialog that is still loading shows nothing, exactly as it
+    // did before it was opened. The idle prefetch keeps that window tiny.
+    <Suspense fallback={null}>
       {model.dialogs.settings && <SettingsDialog onClose={() => model.setDialog('settings', false)} />}
       {model.dialogs.shortcuts && <ShortcutsDialog onClose={() => model.setDialog('shortcuts', false)} />}
       {model.dialogs.mcp && <McpGuideDialog onClose={() => model.setDialog('mcp', false)} />}
       {model.dialogs.cleanup && <MediaCleanupDialog onClose={() => model.setDialog('cleanup', false)} />}
-    </>
+      {model.dialogs.storage && <StorageMigrationDialog onClose={() => model.setDialog('storage', false)} />}
+    </Suspense>
   );
 }

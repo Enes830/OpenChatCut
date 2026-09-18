@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import type { AgentContext } from './context';
 import type { AgentSettings } from './settings/agentSettings';
-import type { RuntimeGuardRequest } from './runtime-guard';
-import type { GuardDecision } from './skills/costGuard';
 import { TOOL_SCHEMAS } from './tools';
 import {
   assertValidAgentToolSchemas,
@@ -27,10 +25,13 @@ import { computeAgentRequestShapeFingerprint } from './runtime';
 import type { Proposal } from './proposal';
 import { isFailedToolResult } from './toolFailure';
 import { verifyArtifactAndCheckpointScenarios } from './harness-runtime-artifacts.verify-helper';
+import { AGENT_TOOL_TIMEOUTS } from './api-attempt';
 
 const projectId = 'harness-runtime-verify';
 const aspectSchema = TOOL_SCHEMAS.find((schema) => schema.name === 'set_aspect_ratio')!;
 const installSkillSchema = TOOL_SCHEMAS.find((schema) => schema.name === 'install_skill')!;
+assert.equal(AGENT_TOOL_TIMEOUTS.toolMs, 30_000);
+assert.equal(AGENT_TOOL_TIMEOUTS.tools.transcribe_trackMs, 900_000);
 const ctx = {
   getProjectId: () => projectId,
   getState: () => ({ items: [], transitions: [] }),
@@ -57,17 +58,12 @@ function fakeRecorder(log: string[], failure?: 'requested'): AgentRunRecorder {
 
 async function executeWithRecorder(
   recorder: AgentRunRecorder,
-  log: string[],
   executeTool: () => Promise<unknown>,
-  guard: RuntimeGuardRequest | null = null,
-  decision: GuardDecision = 'allow-once',
 ) {
   return executeOpenChatCutTool(aspectSchema, { ratio: '9:16' }, {
     ctx, settings, runRecorder: recorder, toolCallId: 'call-1',
     toolCatalog: TOOL_SCHEMAS, activeToolCatalog: [aspectSchema],
     onEvent: () => undefined,
-    resolveGuard: async () => guard,
-    onSkillGuard: async () => { log.push('ui-decision'); return decision; },
     executeTool: async () => executeTool(),
   });
 }
@@ -75,14 +71,11 @@ async function executeWithRecorder(
 async function executeInstallSkill(
   log: string[],
   executeTool: () => Promise<unknown>,
-  onSkillGuard?: (guard: RuntimeGuardRequest) => Promise<GuardDecision>,
 ): Promise<CodexToolExecution> {
   return executeOpenChatCutTool(installSkillSchema, { repo: 'owner/skill' }, {
     ctx, settings, runRecorder: fakeRecorder(log), toolCallId: crypto.randomUUID(),
     toolCatalog: TOOL_SCHEMAS, activeToolCatalog: [installSkillSchema],
     onEvent: () => undefined,
-    resolveGuard: async () => null,
-    onSkillGuard,
     executeTool: async () => executeTool(),
   });
 }
@@ -105,6 +98,65 @@ function verifyPoliciesAndSchemas(): void {
   assert.throws(() => assertValidAgentToolSchemas([{
     name: 'broken', description: 'broken', input_schema: { type: 'not-a-json-type' },
   } as unknown as AgentToolSchema]), /Malformed JSON schema/);
+}
+
+// The load_skill schema declares files.minItems=1, file:string and offset:integer, so a
+// model's filler (`files: []`, `file: null`, `offset: "0"`) would be rejected by Ajv before
+// the executor's own normalization ever ran. The boundary normalizes first.
+function verifySkillInvocationValidation(): void {
+  const loadSkill = TOOL_SCHEMAS.find((schema) => schema.name === 'load_skill')!;
+  const check = (args: Record<string, unknown>) => (
+    validateAgentToolInvocation(loadSkill, args, [loadSkill])
+  );
+  const accepted = (args: Record<string, unknown>): Record<string, unknown> => {
+    const validation = check(args);
+    assert.equal(validation.ok, true, `expected ${JSON.stringify(args)} to validate`);
+    return validation.ok ? validation.args : {};
+  };
+  assert.deepEqual(accepted({ name: 's', files: [] }), { name: 's' }, 'files: [] is filler, not a violation');
+  assert.deepEqual(accepted({ name: 's', file: null, files: ['a.md'] }), { name: 's', files: ['a.md'] });
+  assert.deepEqual(accepted({ name: 's', files: 'a.md' }), { name: 's', files: ['a.md'] }, 'a bare string is a one-file batch');
+  assert.deepEqual(accepted({ name: 's', file: ['a.md'] }), { name: 's', file: 'a.md' }, 'a one-element array is one file');
+  assert.deepEqual(
+    accepted({ name: 's', file: 'a.md', offset: '5', limit: '100' }),
+    { name: 's', file: 'a.md', offset: 5, limit: 100 },
+    'integer-looking strings become integers before the schema sees them',
+  );
+  assert.deepEqual(accepted({ name: 's', offset: 0, limit: 48_000 }), { name: 's' }, 'paging without a file is dropped');
+  // Genuine violations still fail at the boundary.
+  assert.equal(check({ name: 's', files: 123 }).ok, false);
+  assert.equal(check({ name: 's', file: 'a.md', offset: -1 }).ok, false);
+  assert.equal(check({ name: 's', file: 'a.md', limit: 999_999 }).ok, false);
+  assert.equal(check({ files: ['a.md'] }).ok, false, 'name stays required');
+}
+
+// End to end through the shared boundary: the executor receives the normalized arguments,
+// and they are what gets recorded.
+async function verifySkillBoundaryNormalization(): Promise<void> {
+  const loadSkill = TOOL_SCHEMAS.find((schema) => schema.name === 'load_skill')!;
+  const received: Record<string, unknown>[] = [];
+  const events: unknown[] = [];
+  const run = (args: Record<string, unknown>) => executeOpenChatCutTool(loadSkill, args, {
+    ctx, settings, toolCallId: crypto.randomUUID(),
+    toolCatalog: TOOL_SCHEMAS, activeToolCatalog: [loadSkill],
+    onEvent: (event) => { if (event.type === 'tool') events.push(event.args); },
+    executeTool: async (_name, args) => {
+      received.push(args);
+      return { skill: 's', files: ['SKILL.md'] };
+    },
+  });
+  const reported = await run({ name: 's', file: '', files: [], offset: 0, limit: 48_000 });
+  assert.equal(reported.success, true, 'the reported merged shape crosses the boundary');
+  assert.deepEqual(received.at(-1), { name: 's' });
+  assert.deepEqual(events.at(-1), { name: 's' }, 'the tool event carries the normalized arguments');
+  await run({ name: 's', file: 'SKILL.md', files: ['references/a.md'], offset: 0, limit: 48_000 });
+  assert.deepEqual(received.at(-1), { name: 's', files: ['references/a.md'] }, 'offset 0 does not outrank the batch');
+  await run({ name: 's', file: 'SKILL.md', files: ['references/a.md'], offset: 5_000 });
+  assert.deepEqual(received.at(-1), { name: 's', file: 'SKILL.md', offset: 5_000 }, 'a real continuation keeps the page');
+  const rejected = await run({ name: 's', files: 123 });
+  assert.equal(rejected.success, false);
+  assert.match(String((rejected.result as { error?: string }).error ?? ''), /Invalid arguments for tool load_skill/);
+  assert.equal(received.length, 3, 'a genuine violation never reaches the executor');
 }
 
 function verifySecretProjectionFixtures(): void {
@@ -141,75 +193,35 @@ function verifySecretProjectionFixtures(): void {
 
 async function verifyDurableBoundary(): Promise<void> {
   const ordered: string[] = [];
-  await executeWithRecorder(fakeRecorder(ordered), ordered, async () => {
+  await executeWithRecorder(fakeRecorder(ordered), async () => {
     ordered.push('side-effect');
     return { ok: true };
   });
   assert.deepEqual(ordered, ['requested', 'started', 'side-effect', 'outcome:success']);
   const closed: string[] = [];
   let mutated = false;
-  const failed = await executeWithRecorder(fakeRecorder(closed, 'requested'), closed, async () => {
+  const failed = await executeWithRecorder(fakeRecorder(closed, 'requested'), async () => {
     mutated = true;
     return { ok: true };
   });
   assert.equal(failed.success, false);
   assert.equal(mutated, false, 'durability failure must precede side effects');
-  const guarded: RuntimeGuardRequest = {
-    skill: 'image-gen', tool: aspectSchema.name, summary: 'guarded request',
-  };
-  const denied: string[] = [];
-  await executeWithRecorder(fakeRecorder(denied), denied, async () => {
-    throw new Error('denied tool must not execute');
-  }, guarded, 'deny');
-  assert.deepEqual(denied, [
-    'requested', 'approval-requested', 'ui-decision', 'approval-decided', 'outcome:denied',
-  ]);
   const ambiguous: string[] = [];
-  const unknown = await executeWithRecorder(fakeRecorder(ambiguous), ambiguous, async () => {
+  const unknown = await executeWithRecorder(fakeRecorder(ambiguous), async () => {
     throw new Error('connection lost after provider accepted request');
-  }, guarded);
+  });
   assert.equal(unknown.success, false);
-  assert.equal(ambiguous.at(-1), 'outcome:outcome_unknown');
+  assert.equal(ambiguous.at(-1), 'outcome:terminal_failure');
 }
 
-async function verifyGenericApprovalBoundary(): Promise<void> {
+async function verifyDirectExecutionBoundary(): Promise<void> {
+  // No approval gate: persistent-local tools execute straight through.
   let executions = 0;
-  const missing: string[] = [];
-  const missingResult = await executeInstallSkill(missing, async () => {
+  await executeInstallSkill([], async () => {
     executions += 1;
     return { ok: true };
   });
-  const missingOutput = missingResult.result;
-  assert.equal(
-    !!missingOutput && typeof missingOutput === 'object'
-      && 'denied' in missingOutput && missingOutput.denied === true,
-    true,
-  );
-  assert.equal(executions, 0, 'persistent local tools fail closed without an approval UI');
-
-  const denied: string[] = [];
-  await executeInstallSkill(denied, async () => {
-    executions += 1;
-    return { ok: true };
-  }, async (guard) => {
-    assert.equal(guard.permissionKind, 'persistent_local');
-    assert.equal(guard.approval, 'once');
-    return 'deny';
-  });
-  assert.equal(executions, 0, 'denial blocks install_skill before dispatch');
-
-  let approvals = 0;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    await executeInstallSkill([], async () => {
-      executions += 1;
-      return { ok: true };
-    }, async () => {
-      approvals += 1;
-      return 'allow-once';
-    });
-  }
-  assert.equal(executions, 2);
-  assert.equal(approvals, 2, 'allow-once is requested again instead of becoming remembered permission');
+  assert.equal(executions, 1, 'install_skill executes without a confirmation card');
 }
 
 async function verifyAbortFence(): Promise<void> {
@@ -224,7 +236,6 @@ async function verifyAbortFence(): Promise<void> {
     onEvent: (event) => {
       if (event.type === 'tool' && !isFailedToolResult(event.result)) projectedToDocument = true;
     },
-    resolveGuard: async () => null,
     executeTool: async () => {
       entered.resolve();
       return slow.promise;
@@ -241,7 +252,7 @@ async function verifyAbortFence(): Promise<void> {
 
 async function verifyArtifactFailureFence(): Promise<void> {
   const oversizedMarker = `RAW-${'x'.repeat(20_000)}`;
-  const oversized = await executeWithRecorder(fakeRecorder([]), [], async () => ({
+  const oversized = await executeWithRecorder(fakeRecorder([]), async () => ({
     payload: oversizedMarker,
   }));
   assert.equal(oversized.success, false);
@@ -250,7 +261,7 @@ async function verifyArtifactFailureFence(): Promise<void> {
 
   const circular: Record<string, unknown> = { payload: 'CIRCULAR-RAW' };
   circular.self = circular;
-  const unserializable = await executeWithRecorder(fakeRecorder([]), [], async () => circular);
+  const unserializable = await executeWithRecorder(fakeRecorder([]), async () => circular);
   assert.equal(unserializable.success, false);
   assert.doesNotMatch(JSON.stringify(unserializable.result), /CIRCULAR-RAW/,
     'serialization/digest failure cannot project the raw tool result');
@@ -373,20 +384,27 @@ async function verifyProposalTerminalFence(): Promise<void> {
   assert.notEqual(proposal.id, proposal.agentRunId);
   await recorder.recordProposal(proposal.id, 'created');
   await recorder.finalize('waiting_approval');
-  assert.equal(await resumeAgentRun(projectId, recorder.runId), recorder,
-    'proposal settlement reuses the live recorder that owns the review lease');
+  const recoveryLeaseToken = recorder.recoveryLeaseToken();
+  recorder.stopLease();
+  assert.equal(await resumeAgentRun(projectId, recorder.runId, 'wrong-token'), null,
+    'refresh recovery rejects an untrusted recorder lease token');
+  const resumed = await resumeAgentRun(projectId, recorder.runId, recoveryLeaseToken);
+  assert(resumed, 'refresh recovery renews the stored recorder lease token');
+  assert.equal(resumed.recoveryLeaseToken(), recoveryLeaseToken,
+    'the recovery lease token survives the browser handoff unchanged');
   let run = (await loadAgentRuntimeSidecar(projectId)).runs.find((item) => item.runId === recorder.runId)!;
   assert.deepEqual(run.proposalIds, [proposal.id]);
   assert.equal(run.events.find((event) => event.type === 'proposal_created')?.proposalId, proposal.id);
   assert.equal(proposal.agentRunId, run.runId);
   assert.equal(run.events.filter((event) => event.type === 'final').length, 0);
-  await recorder.recordProposal(proposal.id, 'applied');
+  await resumed.confirmOwnership();
+  await resumed.recordProposal(proposal.id, 'applied');
   run = (await loadAgentRuntimeSidecar(projectId)).runs.find((item) => item.runId === recorder.runId)!;
   assert.equal(run.events.find((event) => event.type === 'proposal_applied')?.proposalId, proposal.id);
   assert.equal(run.events.filter((event) => event.type === 'final').length, 0);
-  await recorder.finalize('completed');
+  await resumed.finalize('completed');
   run = (await loadAgentRuntimeSidecar(projectId)).runs.find((item) => item.runId === recorder.runId)!;
-  await recorder.finalize('completed', 'duplicate terminal callback');
+  await resumed.finalize('completed', 'duplicate terminal callback');
   run = (await loadAgentRuntimeSidecar(projectId)).runs.find((item) => item.runId === recorder.runId)!;
   assert.equal(run.events.filter((event) => event.type === 'final').length, 1);
 }
@@ -404,24 +422,21 @@ async function verifyYoloSkipsAllGuards(): Promise<void> {
     ctx: yoloCtx, settings, runRecorder: fakeRecorder(log), toolCallId: 'yolo-1',
     toolCatalog: TOOL_SCHEMAS, activeToolCatalog: [aspectSchema],
     onEvent: () => undefined,
-    resolveGuard: async () => ({
-      skill: 'high-cost-operation', tool: aspectSchema.name, summary: 'paid op',
-      permissionKind: 'persistent_local', approval: 'always',
-    }),
-    onSkillGuard: async () => { log.push('ui-decision'); return 'deny'; },
     executeTool: async () => { log.push('executed'); return { ok: true }; },
   });
-  assert.equal(execution.success, true, 'YOLO mode executes a guarded (paid) tool');
-  assert.equal(log.includes('ui-decision'), false, 'YOLO mode never shows the confirmation card');
+  assert.equal(execution.success, true, 'every mode executes tools directly');
+  assert.equal(log.includes('ui-decision'), false, 'no confirmation card is ever shown');
   assert.equal(log.includes('executed'), true, 'the guarded tool actually ran');
 }
 
 resetAgentRuntimeStoreMemory();
 verifyPoliciesAndSchemas();
+verifySkillInvocationValidation();
+await verifySkillBoundaryNormalization();
 verifySecretProjectionFixtures();
 assert.equal(sanitizeJsonForArtifact({ tokenCount: 4, accessToken: 'secret' })?.redacted, true);
 await verifyDurableBoundary();
-await verifyGenericApprovalBoundary();
+await verifyDirectExecutionBoundary();
 await verifyAbortFence();
 await verifyArtifactFailureFence();
 await verifyRequestShapeFingerprint();

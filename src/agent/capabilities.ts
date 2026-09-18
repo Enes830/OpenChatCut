@@ -1,5 +1,5 @@
 // Which key-gated capabilities are actually configured. The booleans are computed
-// SERVER-SIDE in vite.config.ts (from .env.local) and injected via `define` as
+// SERVER-SIDE in config/vite.config.ts (from .env.local) and injected via `define` as
 // __CONFIGURED_CAPS__ — BOOLEANS ONLY, never any key value reaches the browser.
 // The system prompt reads this so the agent plans around what's available instead
 // of promising e.g. raw graph and only discovering "not configured" mid-execution.
@@ -63,6 +63,7 @@ const CAP_PROVIDERS: Partial<Record<CapabilityKey, ProviderRow[]>> = {
     { label: 'MiniMax', arg: 'image-01', argKey: 'model', need: [['MINIMAX_API_KEY']] },
     { label: 'WaveSpeed', arg: 'wavespeed', argKey: 'model', need: [['WAVESPEED_API_KEY']] },
     { label: 'BytePlus', arg: 'byteplus', argKey: 'model', need: [['BYTEPLUS_API_KEY']] },
+    { label: 'xAI Grok', arg: 'grok-imagine', argKey: 'model', need: [['LLM_XAI_OAUTH_API_KEY'], ['LLM_XAI_API_KEY']] },
   ],
   voice: [
     { label: 'ElevenLabs', arg: 'elevenlabs', argKey: 'provider', need: [['ELEVENLABS_API_KEY']] },
@@ -77,14 +78,22 @@ const CAP_PROVIDERS: Partial<Record<CapabilityKey, ProviderRow[]>> = {
     { label: 'Cartesia', arg: 'cartesia', argKey: 'provider', need: [['CARTESIA_API_KEY']] },
   ],
   video: [
+    { label: 'OFox', arg: 'ofox', argKey: 'model', need: [['LLM_OFOX_API_KEY']] },
     { label: 'Seedance', arg: 'seedance2', argKey: 'model', need: [['SEEDANCE_API_KEY']] },
     { label: 'Kling', arg: 'kling', argKey: 'model', need: [['KLING_API_KEY']] },
     { label: 'Hailuo', arg: 'hailuo', argKey: 'model', need: [['MINIMAX_API_KEY']] },
+    { label: 'xAI Grok', arg: 'grok-imagine-video', argKey: 'model', need: [['LLM_XAI_OAUTH_API_KEY'], ['LLM_XAI_API_KEY']] },
     { label: 'BytePlus', arg: 'byteplus', argKey: 'model', need: [['BYTEPLUS_API_KEY']] },
   ],
   music: [
     { label: 'Mureka', arg: 'mureka', argKey: 'provider', need: [['MUREKA_API_KEY']] },
     { label: 'MiniMax', arg: 'minimax', argKey: 'provider', need: [['MINIMAX_API_KEY']] },
+    { label: 'Atlas Cloud', arg: 'atlas', argKey: 'provider', need: [['ATLASCLOUD_API_KEY']] },
+    { label: 'Sonilo', arg: 'sonilo', argKey: 'provider', need: [['SONILO_API_KEY']] },
+  ],
+  sound: [
+    { label: 'ElevenLabs', arg: 'elevenlabs', argKey: 'provider', need: [['ELEVENLABS_API_KEY']] },
+    { label: 'Sonilo', arg: 'sonilo', argKey: 'provider', need: [['SONILO_API_KEY']] },
   ],
   stock: [
     { label: 'Pexels', arg: 'pexels', argKey: 'provider', need: [['PEXELS_API_KEY']] },
@@ -148,7 +157,7 @@ const CAP_ROWS: { key: CapabilityKey; label: string; tool: string; fallback: str
   { key: 'sound', label: 'Sound generation', tool: 'submit_sound', fallback: 'use list_audio/add_audio from the sound-effects library' },
   { key: 'stock', label: 'Stock-media search', tool: 'search_stock_media', fallback: 'use push_asset to import a known public URL directly' },
   { key: 'transcription', label: 'Transcription/talking-head editing', tool: 'transcribe_track', fallback: 'word-level deletion, filler cleanup, and automatic captions are unavailable' },
-  { key: 'sandbox', label: 'Sandbox execution (ffmpeg/node/python)', tool: 'run_code', fallback: 'skip sandbox steps such as probe_media' },
+  { key: 'sandbox', label: 'Sandbox execution (ffmpeg/node/python)', tool: 'run_code', fallback: 'skip run_code steps; probe_media does not need the sandbox and stays available' },
   { key: 'web', label: 'Web extraction', tool: 'web_browser', fallback: 'ask the user to paste the page content' },
 ];
 

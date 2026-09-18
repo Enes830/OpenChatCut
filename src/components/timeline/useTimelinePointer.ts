@@ -7,11 +7,9 @@ import {
   isItemSelected, selectedIdsOf, trackKind,
   type KeyframeEasing, type KeyframeProp, type TimelineItem, type TimelineState, type TrackId,
 } from '../../editor/types';
-import { groupMoveIds, moveItemsByDelta } from '../../editor/multiSelect';
 import { upsertKeyframe } from '../../editor/keyframes';
 import { getKeyframePropertyDefinition } from '../../editor/keyframeRegistry';
-import { rateStretchItem } from '../../editor/rateStretch';
-import { remainingSourceFrames, sourceFramesToTimelineFrames, sourceWindowForTimelineRange } from '../../editor/sourceLimit';
+import { remainingSourceFrames, sourceFramesToTimelineFrames } from '../../editor/sourceLimit';
 import {
   collectTimelineSnapPoints, snapDraggedEdges, sortTimelineSnapPoints,
   type SnapHold, type SnapPoint,
@@ -26,6 +24,8 @@ import {
 import { emitSelectionRef, resolveTimelinePick, type TimelinePickDrag } from '../../agent/selection-refs';
 import { hasOperationalTranscript } from '../../transcript/types';
 import { SNAP_PX, type Drag, type DragMode, type EditMode } from './timelineUtil';
+import { commitTimelineDragGesture, predecessorRightEdge } from './timelineDragCommit';
+export { commitTimelineDragGesture } from './timelineDragCommit';
 
 export interface PenDrag {
   itemId: string; prop: KeyframeProp; fromFrame: number; frame: number; value: number; easing?: KeyframeEasing;
@@ -74,89 +74,6 @@ interface PointerDeps {
   isOverChatComposer?: (clientX: number, clientY: number) => boolean;
   /** Add the frozen mixed selection to chat instead of committing a timeline move. */
   onDropSelectionToChat?: (selection: TimelineMarqueeSelection) => void;
-}
-
-function commitMoveGesture(state: TimelineState, commands: EditorCommands, drag: Drag) {
-  const { id, baseStart, deltaF, targetTrack, baseTrack } = drag;
-  const validTrack = !!targetTrack
-    && trackKind(state, targetTrack) === trackKind(state, baseTrack)
-    && !state.tracks?.[targetTrack]?.locked;
-  const track = validTrack ? targetTrack : baseTrack;
-  if (deltaF === 0 && track === baseTrack) return;
-  const ids = groupMoveIds(state, id);
-  if (ids.length === 1) {
-    commands.moveItem(id, { startFrame: Math.max(0, baseStart + deltaF), track });
-    return;
-  }
-  const next = moveItemsByDelta(
-    state,
-    ids,
-    deltaF,
-    track !== baseTrack ? { from: baseTrack, to: track } : null,
-  );
-  if (next !== state) commands.applyState(next);
-}
-
-function commitTrimGesture(
-  state: TimelineState,
-  commands: EditorCommands,
-  drag: Drag,
-  editMode: EditMode,
-) {
-  const { id, mode, baseStart, baseDur, baseSrcIn, deltaF, baseTrack } = drag;
-  if (editMode === 'rate-stretch') {
-    const next = rateStretchItem(state, id, mode === 'trim-left' ? 'left' : 'right', deltaF);
-    if (next !== state) commands.applyState(next);
-    return;
-  }
-  if (mode === 'trim-left') {
-    const target = state.items.find((item) => item.id === id);
-    if (!target) return;
-    const wordDriven = target.kind === 'audio' && hasOperationalTranscript(target);
-    const sourceBacktrack = wordDriven
-      ? baseSrcIn
-      : sourceFramesToTimelineFrames(target, baseSrcIn);
-    const earliestDelta = Math.max(-baseStart, -Math.floor(sourceBacktrack));
-    const delta = Math.max(Math.min(deltaF, baseDur - 1), earliestDelta);
-    if (delta !== 0) commands.setItemTiming(id, {
-      startFrame: baseStart + delta,
-      durationInFrames: baseDur - delta,
-      srcInFrame: wordDriven
-        ? sourceWindowForTimelineRange({ srcInFrame: baseSrcIn, playbackRate: 1 }, delta, baseDur - delta).startFrame
-        : sourceWindowForTimelineRange(
-            { ...target, srcInFrame: baseSrcIn },
-            delta,
-            baseDur - delta,
-          ).startFrame,
-    });
-    return;
-  }
-  const durationInFrames = Math.max(1, baseDur + deltaF);
-  const actual = durationInFrames - baseDur;
-  if (actual === 0) return;
-  if (editMode !== 'trim') {
-    commands.setItemTiming(id, { durationInFrames });
-    return;
-  }
-  const clipEnd = baseStart + baseDur;
-  const items = state.items.map((item) =>
-    item.id === id ? { ...item, durationInFrames }
-      : item.track === baseTrack && item.startFrame >= clipEnd
-        ? { ...item, startFrame: item.startFrame + actual }
-        : item);
-  commands.applyState({ ...state, items });
-}
-
-export function commitTimelineDragGesture(
-  state: TimelineState,
-  commands: EditorCommands,
-  drag: Drag,
-  editMode: EditMode,
-) {
-  if (drag.mode === 'slip') {
-    if (Math.abs(drag.deltaF) >= 1e-6) commands.slipItem(drag.id, drag.deltaF);
-  } else if (drag.mode === 'move') commitMoveGesture(state, commands, drag);
-  else commitTrimGesture(state, commands, drag, editMode);
 }
 
 export function useTimelinePointer(deps: PointerDeps) {
@@ -270,6 +187,28 @@ export function useTimelinePointer(deps: PointerDeps) {
     const limit = remainingSourceFrames(it, it.srcInFrame ?? 0, state.assets);
     return limit === null ? Infinity : limit - baseDur;
   };
+  /**
+   * The minimum (most-negative) delta the left handle may reach: it cannot extend
+   * past the nearest preceding same-track clip's right edge (or timeline zero).
+   * Mirrors commitTrimGesture so the preview does not show an overlap the commit
+   * would clamp away.
+   */
+  const trimLeftFloor = (id: string, baseStart: number): number => {
+    const it = state.items.find((x) => x.id === id);
+    if (!it) return -baseStart;
+    let floor = -baseStart;
+    if (it.kind === 'video' || it.kind === 'audio' || it.kind === 'sequence') {
+      const wordDriven = it.kind === 'audio' && hasOperationalTranscript(it);
+      const sourceBacktrack = wordDriven
+        ? (it.srcInFrame ?? 0)
+        : sourceFramesToTimelineFrames(it, it.srcInFrame ?? 0);
+      floor = Math.max(floor, -Math.floor(sourceBacktrack));
+    }
+    return Math.max(
+      floor,
+      predecessorRightEdge(state, id, it.track, baseStart) - baseStart,
+    );
+  };
   const applyPointerMove = (clientX: number, clientY: number, publish = true) => {
     const currentMarquee = marqueeRef.current;
     if (currentMarquee) {
@@ -309,6 +248,9 @@ export function useTimelinePointer(deps: PointerDeps) {
     const cap = currentDrag.mode === 'trim-right'
       ? trimRightCap(currentDrag.id, currentDrag.baseDur)
       : Infinity;
+    const floor = currentDrag.mode === 'trim-left'
+      ? trimLeftFloor(currentDrag.id, currentDrag.baseStart)
+      : -Infinity;
     const selectionDelta = currentDrag.mode === 'move'
       ? clampTimelineSelectionDelta(
         state,
@@ -317,7 +259,7 @@ export function useTimelinePointer(deps: PointerDeps) {
         snapped.deltaF,
       )
       : snapped.deltaF;
-    const deltaF = Math.min(selectionDelta, cap);
+    const deltaF = Math.min(Math.max(selectionDelta, floor), cap);
     const snapAt = deltaF === snapped.deltaF ? snapped.snapAt : null;
     const targetTrack = currentDrag.mode === 'move'
       ? trackFromClientY(clientY)

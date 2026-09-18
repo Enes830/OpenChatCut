@@ -12,6 +12,9 @@ import {
   modelCacheDir,
   parseTarget,
   settlePartDownloadRound,
+  sourceMissingOnError,
+  __getAbsentSourcesForVerify,
+  __resetModelMissingState,
   type PartStreamFactory,
   type ProxyTarget,
 } from './hf-proxy';
@@ -44,6 +47,14 @@ assert.deepEqual(parseTarget(asrPath), {
   filePath: asrFile.path,
 });
 
+// transformers.js v4 probes config files with revision "main"; it must resolve
+// to the catalog-pinned revision (same sha-verified file tuple).
+assert.deepEqual(parseTarget(`/${asrModel.modelId}/resolve/main/${asrFile.path}`), {
+  modelId: asrModel.modelId,
+  revision: asrModel.revision,
+  filePath: asrFile.path,
+});
+
 const rejectedPaths = [
   `/musetric/beat-this-onnx/resolve/${RHYTHM_REVISION}/%`,
   `/musetric/beat-this-onnx/resolve/${RHYTHM_REVISION}/.`,
@@ -55,7 +66,6 @@ const rejectedPaths = [
   `/musetric/beat-this-onnx/resolve/main/beat_this.onnx`,
   `/musetric/beat-this-onnx/resolve/${RHYTHM_REVISION}/not-in-catalog.onnx`,
   `/unlisted/repository/resolve/${RHYTHM_REVISION}/beat_this.onnx`,
-  `/${asrModel.modelId}/resolve/main/${asrFile.path}`,
   `/${asrModel.modelId}/resolve/${'0'.repeat(40)}/${asrFile.path}`,
   `/${asrModel.modelId}/resolve/${asrModel.revision}/not-in-catalog.json`,
 ];
@@ -144,8 +154,50 @@ await assert.rejects(
 await assert.rejects(stat(cachedDownload), { code: 'ENOENT' });
 await assert.rejects(stat(`${cachedDownload}.part`), { code: 'ENOENT' });
 
+// A deterministic mirror-absence failure must be classified "source missing"
+// so the next file of the same model can skip that source wholesale.
+assert.equal(sourceMissingOnError(new Error('model download failed (curl exit 22): ... returned error: 404')), true);
+assert.equal(sourceMissingOnError(new Error('invalid content-range: {"Code":10990101007,"Message":"获取模型文件失败，文件内容为空"}')), true);
+// Transient failures and unrelated HTTP errors must NOT be treated as absence
+// (a 502 makes curl exit 22 too, but it is not a 404; a timeout is exit 28).
+assert.equal(sourceMissingOnError(new Error('model download failed (curl exit 28): Operation timed out')), false);
+assert.equal(sourceMissingOnError(new Error('model download failed (curl exit 22): The requested URL returned error: 502')), false);
+assert.equal(sourceMissingOnError(null), false);
+assert.equal(sourceMissingOnError('not an error'), false);
+// The session-scoped cache must be empty until a source is marked absent, and
+// a reset clears it (mirrors __resetModelPackState driving a fresh session).
+__resetModelMissingState();
+
+// Integration: the real download loop must record a mirror that deterministically
+// 404s for a model as "absent" for that modelId, so later files of the same model
+// skip it. rhythm-lite (musetric/beat-this-onnx) is NOT on ModelScope but IS on
+// HuggingFace; config.json is tiny (~1KB) so this completes quickly. The download
+// 404s on ModelScope first (marking it absent), then falls through to HF.
+if (!process.env.HF_PROXY_SKIP_INTEGRATION) {
+  const integrationDir = await mkdtemp(join(tmpdir(), 'openchatcut-hf-proxy-integration-'));
+  try {
+    __resetModelMissingState();
+    const tinyDestination = join(integrationDir, 'config.json');
+    await downloadModelFile(
+      { modelId: 'musetric/beat-this-onnx', revision: RHYTHM_REVISION, filePath: 'config.json' },
+      tinyDestination,
+    );
+    const absent = __getAbsentSourcesForVerify().get('musetric/beat-this-onnx') ?? [];
+    assert.equal(
+      absent.includes('modelscope'),
+      true,
+      `ModelScope must be recorded absent for a mirrored-but-404 model; got: ${[...absent]}`,
+    );
+  } finally {
+    await rm(integrationDir, { recursive: true, force: true });
+  }
+}
+
 const originalHome = process.env.HOME;
+const originalUserProfile = process.env.USERPROFILE;
+// os.homedir() resolves USERPROFILE on Windows; HOME alone only covers POSIX.
 process.env.HOME = directory;
+process.env.USERPROFILE = directory;
 assert.equal(modelCacheDir(), join(directory, '.openchatcut', 'asr-models'));
 const resolveInstalled = async (target: ProxyTarget) => {
   if (target.modelId !== asrTarget.modelId
@@ -186,6 +238,8 @@ try {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = originalUserProfile;
   await rm(directory, { recursive: true, force: true });
 }
 

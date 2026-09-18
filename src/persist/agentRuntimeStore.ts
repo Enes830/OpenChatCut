@@ -1,6 +1,6 @@
 import type { AgentRunLeaseState } from '../../shared/project-store-transport';
 import {
-  kvCompareAndSwapAgentRuntime,
+  kvWriteAgentRuntime,
   kvDel,
   kvGet,
   kvKeys,
@@ -85,7 +85,11 @@ function notify(projectId: string): void {
 async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSidecar) => [AgentRuntimeSidecar, T]): Promise<{ result: T; previous: AgentRuntimeSidecar; next: AgentRuntimeSidecar }> {
   const sessionGeneration = await agentSessionWriteGeneration(projectId);
   const key = runtimeKey(projectId, sessionGeneration);
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  // Primary writer is this process (serialized by enqueue/withStoreLock).
+  // External MCP sessions still write from the browser, so a bounded retry
+  // converges transient revision contests instead of hard-failing either
+  // writer; each attempt re-reads the canonical revision.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
     const raw = await kvGet<unknown>(key);
     const previous = scopeAgentRuntimeSidecar(
       normalizeSidecar(projectId, raw),
@@ -96,8 +100,8 @@ async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSi
       ...changed, sessionGeneration,
       revision: previous.revision + 1, updatedAt: Date.now(), lastWriterId: crypto.randomUUID(),
     });
-    const canonical = await kvCompareAndSwapAgentRuntime({
-      operation: 'agent-runtime-cas',
+    const canonical = await kvWriteAgentRuntime({
+      operation: 'agent-runtime-write',
       key,
       expectedRevision: raw === undefined ? null : previous.revision,
       value: next,
@@ -105,10 +109,13 @@ async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSi
     if (canonical.accepted) {
       return { result, previous, next: normalizeSidecar(projectId, canonical.value) };
     }
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 10 + attempt * 5);
+    await promise;
   }
-  throw new Error('Concurrent agent runtime update could not be serialized.');
+  throw new Error('agent runtime sidecar write was rejected after retries');
 }
-async function mutate<T>(projectId: string, change: (current: AgentRuntimeSidecar) => [AgentRuntimeSidecar, T]): Promise<T> {
+export async function mutate<T>(projectId: string, change: (current: AgentRuntimeSidecar) => [AgentRuntimeSidecar, T]): Promise<T> {
   requireProjectId(projectId);
   return enqueue(projectId, () => withProjectLock(projectId, async () => {
     const { result, previous, next } = await mutateOnce(projectId, change);
@@ -124,6 +131,8 @@ async function mutate<T>(projectId: string, change: (current: AgentRuntimeSideca
 export async function loadAgentRuntimeSidecar(projectId: string): Promise<AgentRuntimeSidecar> {
   requireProjectId(projectId);
   const generation = await currentAgentSessionGeneration(projectId);
+  // The server store is authoritative after serverization (the browser no
+  // longer writes the sidecar); kvGet falls back to local IndexedDB offline.
   const raw = await kvGet<unknown>(runtimeKey(projectId, generation));
   return scopeAgentRuntimeSidecar(normalizeSidecar(projectId, raw), generation);
 }
@@ -256,6 +265,22 @@ export async function storeAgentArtifact(record: AgentArtifactRecord): Promise<b
     }
   }));
 }
+export async function deleteAgentArtifacts(
+  projectId: string,
+  artifactIds: readonly string[],
+): Promise<void> {
+  const removing = new Set(artifactIds.filter((artifactId) => ARTIFACT_ID.test(artifactId)));
+  if (!removing.size) return;
+  await mutate(projectId, (current) => [{
+    ...current,
+    runs: current.runs.map((run) => ({
+      ...run,
+      artifactIds: run.artifactIds.filter((artifactId) => !removing.has(artifactId)),
+    })),
+    artifacts: current.artifacts.filter((artifact) => !removing.has(artifact.artifactId)),
+  }, undefined]);
+}
+
 export async function loadAgentArtifact(projectId: string, artifactId: string): Promise<AgentArtifactRecord | null> {
   requireProjectId(projectId);
   if (!ARTIFACT_ID.test(artifactId)) return null;
@@ -339,9 +364,21 @@ export function clearAgentSessionContext(
     const generation = await currentAgentSessionGeneration(projectId);
     if (!projectStoreRemoteAvailable()) {
       const current = await loadAgentRuntimeSidecar(projectId);
-      if (current.runs.some((run) =>
-        !terminal(run.status) && !allowedActiveRunIds.has(run.runId))) {
-        throw new Error('Agent session cannot be cleared while another run is active.');
+      const blocked = current.runs.find((run) =>
+        !terminal(run.status) && !allowedActiveRunIds.has(run.runId));
+      if (blocked) {
+        throw Object.assign(new Error(
+          `Agent session cannot be cleared while another run is active: ${blocked.runId}`,
+        ), {
+          code: 'agent_session_clear_blocked',
+          run: {
+            runId: blocked.runId,
+            status: blocked.status,
+            updatedAt: blocked.updatedAt,
+            ...(blocked.ownerInstanceId ? { ownerInstanceId: blocked.ownerInstanceId } : {}),
+            ...(blocked.leaseExpiresAt ? { leaseExpiresAt: blocked.leaseExpiresAt } : {}),
+          },
+        });
       }
     }
     const prefix = artifactPrefix(projectId, generation);

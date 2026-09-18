@@ -1,27 +1,35 @@
-// Right column of the settings panel: Select the provider's configuration page (header + field card + test connection row) and field rendering.
-// Detach from SettingsDialog.tsx (500 line limit); the layout shell and left/center columns are still there.
-// "Test connection" goes to POST /api/keys/test: Combine the unsaved temporary values ​​of this page as overrides
-// Send to the server for detection (only effective this time, not dropped), the key value will never appear in the response.
+// Provider configuration page, field rendering, and connection tests.
 import { useState } from 'react';
 import { theme, themeAlpha } from '../../theme';
-import { useT } from '../../i18n/locale';
+import { t, useT } from '../../i18n/locale';
 import { VendorIcon } from './vendorIcons';
+import { Icon } from '../icons';
 import { CodexAccountCard } from './CodexAccountCard';
 import type { CodexAgentModel } from '../../../shared/codex-agent';
 import type { CodexSettingsController } from './useCodexSettings';
+import { copilotReasoningOptions } from './copilotReasoning';
+import type { CopilotSettingsController } from './useCopilotSettings';
 import { shouldRenderModelPicker } from './codexReasoning';
 import { llmProviderConfigNames, normalizeLlmProvider } from '../../../shared/llm-providers';
 import { MODEL_CAPABILITY_OVERRIDES_KEY } from '../../../shared/model-capabilities';
+import { CopilotVendorPane } from './CopilotVendorPane';
 import { ModelCapabilityEditor } from './ModelCapabilityEditor';
+import { XaiOauthVendorPane } from './XaiOauthVendorPane';
 import { VisionModelPane } from './VisionModelPane';
 import { LocalAsrPane } from './LocalAsrPane';
+import { LocalModelPackPane } from './LocalModelPackPane';
+import { SemanticModelPackPane } from './SemanticModelPackPane';
+import { SettingsNoteAction } from './SettingsNoteAction.tsx';
 import {
   fieldPlaceholder, isModelField, modelValue, selectOptionLabel, selectOptions, vendorConfigured,
   type KeyStatusResponse, type SelectOption, type SettingsField, type SettingsVendorPage,
   type StagedValues as Values,
 } from './settingsSchema';
-export const ON = theme.success; // Status green → Semantic token (graphite value ≈ original #4caf7d, light skin automatically changes to dark green)
-export const WARN = '#f77';    // Error / Clear warning (retain the original panel error color)
+import {
+  browseBtn, clearBtn, fieldCardBox, fieldHead, fieldHint, input, ON, pageNote,
+  pane, select, sourceTag, testBtn, testMsg, testRow, WARN,
+} from './settingsVendorPane.styles';
+export { ON, WARN } from './settingsVendorPane.styles';
 
 /** Field rendering shared context: server status + temporary storage + plain text switch + temporary storage/clear callback. */
 export interface FieldCtx {
@@ -33,13 +41,12 @@ export interface FieldCtx {
   modelOptions: Record<string, readonly string[]>;
   onModelsDiscovered: (name: string, models: readonly string[]) => void;
   codex: CodexSettingsController;
+  copilot: CopilotSettingsController;
+  /** Re-read /api/keys and push the result to the agent runtime (used by connection-style pages after login/logout). */
+  refreshStatus: () => Promise<void>;
 }
-
 const CAPABILITY_OVERRIDE_FIELD: SettingsField = {
-  name: MODEL_CAPABILITY_OVERRIDES_KEY,
-  label: '模型能力',
-  kind: 'text',
-  defaultLabel: '',
+  name: MODEL_CAPABILITY_OVERRIDES_KEY, label: '模型能力', kind: 'text', defaultLabel: '',
 };
 
 function capabilityOverridesValue(ctx: FieldCtx): string {
@@ -60,9 +67,16 @@ export function VendorPane({ page, hint, ctx }: {
 }) {
   const t = useT();
   if (page.connection === 'codex') return <CodexVendorPane page={page} hint={hint} ctx={ctx} />;
+  if (page.connection === 'copilot') return (
+    <CopilotVendorPane page={page} hint={hint} ctx={ctx} rawOverrides={capabilityOverridesValue(ctx)}
+      onOverridesChange={(value) => ctx.onStage(CAPABILITY_OVERRIDE_FIELD, value)}>
+      {page.fields.map((field) => <FieldRow key={field.name} field={field} ctx={ctx} />)}
+    </CopilotVendorPane>
+  );
+  if (page.connection === 'xai-oauth') return <XaiOauthVendorPane page={page} hint={hint} ctx={ctx} />;
   if (page.key === 'llm/vision') return <VisionModelPane />;
-  if (page.key === 'transcription/local') return <LocalAsrPane fields={page.fields} ctx={ctx} />;
-  const on = vendorConfigured(ctx.status, page, ctx.codex.status);
+  if (page.kind === 'local-models') return <LocalModelsPane page={page} fields={page.fields} ctx={ctx} />;
+  const on = vendorConfigured(ctx.status, page, ctx.codex.status, ctx.copilot.status);
   return (
     <div style={pane}>
       <div>
@@ -75,6 +89,7 @@ export function VendorPane({ page, hint, ctx }: {
       </div>
       <section style={fieldCardBox}>
         {page.note && <div style={pageNote}>{t(page.note)}</div>}
+        {page.noteAction && <SettingsNoteAction config={page.noteAction} />}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: page.note ? 9 : 0 }}>
           {page.fields.map((f) => <FieldRow key={f.name} field={f} ctx={ctx} />)}
         </div>
@@ -117,6 +132,7 @@ function CodexVendorPane({ page, hint, ctx }: {
       <CodexAccountCard controller={ctx.codex} />
       <section style={fieldCardBox}>
         {page.note && <div style={pageNote}>{t(page.note)}</div>}
+        {page.noteAction && <SettingsNoteAction config={page.noteAction} />}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: page.note ? 9 : 0 }}>
           {page.fields.map((field) => <FieldRow key={field.name} field={field} ctx={ctx} />)}
         </div>
@@ -131,8 +147,36 @@ function CodexVendorPane({ page, hint, ctx }: {
   );
 }
 
+function LocalModelsPane({ page, fields, ctx }: {
+  page: SettingsVendorPage; fields: readonly SettingsField[]; ctx: FieldCtx;
+}) {
+  const t = useT();
+  const title = page.key === 'local/asr' ? '本地转写' : page.key === 'local/music/packs' ? '节拍与音乐分析' : '画面语义搜索';
+  return (
+    <div style={pane}>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {page.icon ? <Icon name={page.icon} size={18} /> : <VendorIcon vendor={page.vendor} size={18} />}
+          <b style={{ fontSize: 13 }}>{t(title)}</b>
+        </div>
+        <div style={{ fontSize: 11.5, color: theme.textDim, marginTop: 3, paddingLeft: 26 }}>
+          {t('本地模型按需安装，索引、转写和分析都在本机完成。')}
+        </div>
+      </div>
+      {page.key === 'local/asr' && <LocalAsrPane fields={fields} ctx={ctx} />}
+      {page.key === 'local/music/packs' && <LocalModelPackPane
+        packIds={['rhythm-lite', 'music-semantics-lite']}
+        title="节拍与音乐分析模型"
+        description="模型不会自动安装。安装后，节拍与音乐语义分析只在本机运行。" />}
+      {page.key === 'local/semantic/setup' && <SemanticModelPackPane />}
+    </div>
+  );
+}
+
+
 // ── Test connection ───────────────────────────────────────────────────────
 
+interface ProbeRequestResult { body: ProbeResponse; staged: boolean; }
 interface ProbeResponse { ok: boolean; message: string; latencyMs?: number; models?: string[]; }
 interface ProbeShown { page: string; ok: boolean; message: string; }
 
@@ -146,7 +190,25 @@ function stagedOverrides(page: SettingsVendorPage, values: Values): Record<strin
   return overrides;
 }
 
-function TestConnectionRow({ page, ctx }: { page: SettingsVendorPage; ctx: FieldCtx }) {
+async function requestProbe(page: SettingsVendorPage, ctx: FieldCtx, translate: typeof t): Promise<ProbeRequestResult> {
+  const overrides = stagedOverrides(page, ctx.values);
+  if (page.kind === 'settings' && page.fields[0]) {
+    const field = page.fields[0];
+    const effectiveValue = ctx.values[field.name] ?? modelValue(ctx.status, field.name);
+    if (effectiveValue?.trim()) overrides[field.name] = effectiveValue.trim();
+    else delete overrides[field.name];
+  }
+  const staged = Object.keys(ctx.values).some((name) => page.fields.some((field) => field.name === name));
+  const res = await fetch('/api/keys/test', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ page: page.key, overrides }),
+  });
+  const body = await res.json().catch(() => null) as ProbeResponse | null;
+  if (!body || typeof body.message !== 'string') throw new Error(translate('测试请求失败 ({n})', { n: res.status }));
+  return { body, staged };
+}
+
+export function TestConnectionRow({ page, ctx }: { page: SettingsVendorPage; ctx: FieldCtx }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ProbeShown | null>(null);
@@ -154,17 +216,10 @@ function TestConnectionRow({ page, ctx }: { page: SettingsVendorPage; ctx: Field
 
   const test = async (): Promise<void> => {
     setBusy(true); setResult(null);
-    const overrides = stagedOverrides(page, ctx.values);
-    const staged = Object.keys(overrides).length > 0;
     try {
-      const res = await fetch('/api/keys/test', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ page: page.key, overrides }),
-      });
-      const body = await res.json().catch(() => null) as ProbeResponse | null;
-      if (!body || typeof body.message !== 'string') throw new Error(t('测试请求失败 ({n})', { n: res.status }));
+      const { body, staged } = await requestProbe(page, ctx, t);
       const suffix = staged && body.ok ? t('（按当前输入测试，记得保存）') : '';
-      setResult({ page: page.key, ok: body.ok, message: body.message + suffix });
+      setResult({ page: page.key, ok: body.ok, message: t(body.message) + suffix });
       const modelField = page.fields.find((field) => field.discoverableModel);
       if (body.ok && modelField && Array.isArray(body.models)) {
         ctx.onModelsDiscovered(modelField.name, body.models);
@@ -177,11 +232,12 @@ function TestConnectionRow({ page, ctx }: { page: SettingsVendorPage; ctx: Field
   };
 
   const discoversModels = page.fields.some((field) => field.discoverableModel);
+  const isProxy = page.key === 'agent/proxy';
   return (
     <div style={testRow}>
       <button type="button" onClick={() => { void test(); }} disabled={busy}
         style={{ ...testBtn, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}>
-        {busy ? t('测试中…') : discoversModels ? t('测试并读取模型') : t('测试连接')}
+        {busy ? t('测试中…') : discoversModels ? t('测试并读取模型') : isProxy ? t('测试代理连接') : t('测试连接')}
       </button>
       {shown && (
         <span style={{ ...testMsg, color: shown.ok ? ON : WARN }} title={shown.message}>
@@ -192,7 +248,7 @@ function TestConnectionRow({ page, ctx }: { page: SettingsVendorPage; ctx: Field
         <span style={{ ...testMsg, color: theme.textDim }}>
           {discoversModels
             ? t('验证地址与密钥，并读取该接口可用的模型')
-            : t('发一条最小请求验证 Key 与地址可用')}
+            : isProxy ? t('使用当前代理地址访问外网探测端点') : t('发一条最小请求验证 Key 与地址可用')}
         </span>
       )}
     </div>
@@ -236,12 +292,16 @@ export function FieldRow({ field, ctx }: { field: SettingsField; ctx: FieldCtx }
   const clearable = configured && field.kind !== 'select' && field.kind !== 'toggle';
   const discovered = field.name === 'CODEX_MODEL'
     ? ctx.codex.models.map((model) => model.id)
-    : field.discoverableModel ? ctx.modelOptions[field.name] ?? [] : [];
+    : field.name === 'COPILOT_MODEL'
+      ? ctx.copilot.models.filter((model) => model.supportsTools).map((model) => model.id)
+      : field.discoverableModel ? ctx.modelOptions[field.name] ?? [] : [];
   const options = field.name === 'CODEX_REASONING_EFFORT'
     ? codexReasoningOptions(ctx, (effort) => effort
       ? t('模型默认（{name}）', { name: effort })
       : t('模型默认'))
-    : undefined;
+    : field.name === 'COPILOT_REASONING_EFFORT'
+      ? copilotReasoningOptions(ctx, t('模型默认'))
+      : undefined;
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <span style={fieldHead}>
@@ -260,7 +320,8 @@ export function FieldRow({ field, ctx }: { field: SettingsField; ctx: FieldCtx }
         ? <ToggleSwitch field={field} shown={shown} onStage={onStage} />
         : shouldRenderModelPicker(field, discovered.length)
           ? <ModelInput field={field} shown={shown} models={discovered} reveal={reveal}
-              loading={field.name === 'CODEX_MODEL' && ctx.codex.modelBusy}
+              loading={(field.name === 'CODEX_MODEL' && ctx.codex.modelBusy)
+                || (field.name === 'COPILOT_MODEL' && ctx.copilot.modelBusy)}
               configured={configured} stagedClear={stagedClear} onStage={onStage} />
           : field.kind === 'select'
           ? <SelectInput field={field} status={status} shown={shown} options={options} onStage={onStage} />
@@ -348,12 +409,13 @@ interface TextInputProps {
 
 function TextInput({ field, shown, reveal, configured, stagedClear, onStage }: TextInputProps) {
   const listId = field.kind === 'text' && field.options ? `cc-dl-${field.name}` : undefined;
+  const displayValue = stagedClear ? shown : shown || field.defaultValue || '';
   return (
     <>
       <input
         type={field.kind === 'secret' && !reveal ? 'password' : 'text'}
         autoComplete="off" spellCheck={false} list={listId}
-        value={shown}
+        value={displayValue}
         onChange={(e) => onStage(field, e.target.value)}
         placeholder={fieldPlaceholder(field, configured, stagedClear)}
         style={stagedClear ? { ...input, border: `0.5px solid ${WARN}` } : input}
@@ -422,38 +484,3 @@ function SelectInput({ field, status, shown, options, onStage }: {
     </select>
   );
 }
-
-// ── Style ───────────────────────────────────────────────────────────
-
-const pane: React.CSSProperties = {
-  flex: 1, minWidth: 0, overflowY: 'auto', padding: '14px 20px 16px', display: 'flex', flexDirection: 'column', gap: 12,
-};
-  const fieldCardBox: React.CSSProperties = { background: theme.bg, border: `0.5px solid ${theme.border}`, borderRadius: 4, padding: '11px 13px' };
-const pageNote: React.CSSProperties = { fontSize: 10.5, color: theme.textDim };
-const fieldHead: React.CSSProperties = {
-  fontSize: 11.5, color: theme.text, display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'space-between',
-};
-const input: React.CSSProperties = {
-  font: 'inherit', fontSize: 12.5, background: theme.panelAlt, color: theme.text,
-  border: `0.5px solid ${theme.border}`, borderRadius: 6, padding: '6px 9px', width: '100%', outline: 'none',
-};
-const select: React.CSSProperties = { ...input, cursor: 'pointer', colorScheme: 'var(--cc-color-scheme)' };
-const sourceTag: React.CSSProperties = { fontSize: 10, color: theme.textDim, border: `0.5px solid ${theme.border}`, borderRadius: 4, padding: '0 5px' };
-const clearBtn: React.CSSProperties = {
-  font: 'inherit', fontSize: 10.5, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', flex: '0 0 auto', textDecoration: 'underline',
-};
-const browseBtn: React.CSSProperties = {
-  font: 'inherit', fontSize: 11.5, color: theme.text, background: theme.panelAlt,
-  border: `0.5px solid ${theme.border}`, borderRadius: 6, padding: '6px 11px',
-  cursor: 'pointer', flex: '0 0 auto', whiteSpace: 'nowrap',
-};
-const fieldHint: React.CSSProperties = { fontSize: 10.5, color: theme.textDim };
-const testRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, minHeight: 26 };
-const testBtn: React.CSSProperties = {
-  font: 'inherit', fontSize: 11.5, background: 'transparent', color: theme.text,
-  border: `0.5px solid ${theme.border}`, borderRadius: 4, padding: '4px 11px', flex: '0 0 auto',
-};
-const testMsg: React.CSSProperties = {
-  flex: 1, minWidth: 0, fontSize: 11, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box',
-  WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-};

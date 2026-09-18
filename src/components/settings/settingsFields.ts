@@ -13,6 +13,7 @@ export interface SettingsField {
   readonly note?: string;
   readonly options?: readonly SelectOption[];
   readonly defaultLabel?: string;
+  readonly defaultValue?: string;
   readonly discoverableModel?: boolean;
 }
 
@@ -21,8 +22,15 @@ export interface SettingsVendorPage {
   readonly vendor: VendorId;
   readonly title: string;
   readonly note?: string;
-  readonly connection?: 'codex';
+  readonly icon?: IconName;
+  readonly connection?: 'codex' | 'xai-oauth' | 'copilot';
+  readonly kind?: 'provider' | 'settings' | 'local-models';
   readonly fields: readonly SettingsField[];
+  /** Renders as a button under the note, dispatching a global action. The note
+   *  under Anthropic tells Claude Code subscribers where to go (the external
+   *  MCP panel) without giving them any way to get there; naming a destination
+   *  the reader cannot reach is what made the only entry path undiscoverable. */
+  readonly noteAction?: { readonly label: string; readonly action: string };
 }
 
 export interface SettingsGroup {
@@ -45,11 +53,18 @@ export interface KeyStatusResponse {
   keys: Record<string, KeyState>;
   caps: Record<string, boolean>;
   models: Record<string, string>;
+  /** Set by the save response when the change only lands on the next launch
+   *  (project storage folder: the runtime profile resolves at startup). */
+  restartRequired?: boolean;
 }
-
 export const secret = (name: string, label: string): SettingsField => ({ name, label, kind: 'secret' });
-export const text = (name: string, label: string, placeholder?: string, note?: string): SettingsField =>
-  ({ name, label, kind: 'text', placeholder, note });
+export const text = (
+  name: string,
+  label: string,
+  placeholder?: string,
+  note?: string,
+  defaultValue?: string,
+): SettingsField => ({ name, label, kind: 'text', placeholder, note, defaultValue });
 export const modelText = (
   name: string,
   label: string,
@@ -59,7 +74,11 @@ export const modelText = (
 ): SettingsField => ({ name, label, kind: 'text', defaultLabel, note, discoverableModel });
 export const directory = (name: string, label: string, defaultLabel: string, note?: string): SettingsField =>
   ({ name, label, kind: 'directory', defaultLabel, note });
-export const modelSelect = (
+/** Vendor model id: free text with the known ids as autocomplete suggestions.
+ *  A plain <select> could only hold one of its own options, so a model the
+ *  vendor shipped after this list was written was unreachable until we
+ *  released a new build. */
+export const modelPicker = (
   name: string,
   label: string,
   defaultLabel: string,
@@ -67,8 +86,9 @@ export const modelSelect = (
 ): SettingsField => ({
   name,
   label,
-  kind: 'select',
+  kind: 'text',
   defaultLabel,
+  note: '也可以手动填写厂商的其它模型 ID，建议列表仅为常用模型。',
   options: values.map((value) => ({ value, label: value })),
 });
 

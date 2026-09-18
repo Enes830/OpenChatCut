@@ -4,8 +4,14 @@ import type {
 } from '../shared/project-store-transport.ts';
 import { isProjectStoreRequest } from '../shared/project-store-validation.ts';
 import {
-  compareAndSwapAgentRuntime,
-  compareAndSwapProjectDocument,
+  clearSemanticVectors,
+  pruneSemanticVectors,
+  searchSemanticVectors,
+  upsertSemanticVectors,
+} from './storage/semantic-vectors.ts';
+import {
+  writeAgentRuntime,
+  writeProjectDocument,
   deleteStoredEntry,
   getStoredEntry,
   mergeStoredEntries,
@@ -13,6 +19,7 @@ import {
   rotateAgentSession,
   setStoredEntry,
   updateStoredAgentRunLease,
+  updateExportRecoveryLease,
 } from './plugins/project-store.ts';
 
 export async function executeProjectStoreRequest(
@@ -33,12 +40,14 @@ export async function executeProjectStoreRequest(
         entries: projects === undefined ? {} : { projects },
       };
     }
-    case 'agent-runtime-cas':
-      return compareAndSwapAgentRuntime(request);
-    case 'project-document-cas':
-      return compareAndSwapProjectDocument(request);
+    case 'agent-runtime-write':
+      return writeAgentRuntime(request);
+    case 'project-document-write':
+      return writeProjectDocument(request);
     case 'agent-run-lease':
       return updateStoredAgentRunLease(request);
+    case 'export-recovery-lease':
+      return updateExportRecoveryLease(request);
     case 'agent-session-rotate':
       return rotateAgentSession(request.projectId);
     case 'set':
@@ -53,5 +62,14 @@ export async function executeProjectStoreRequest(
     case 'purge-project':
       await deleteStoredEntry(`project:${request.projectId}`);
       return { ok: true };
+    case 'semantic-vectors-upsert':
+      return { semanticVectors: upsertSemanticVectors(request.scopeId, request.assetId, request.samples) };
+    case 'semantic-vectors-search':
+      return { semanticVectors: searchSemanticVectors(request.scopeId, request.queryVector, request.limit) };
+    case 'semantic-vectors-prune':
+      return { semanticVectors: pruneSemanticVectors(request.scopeId, request.validAssetIds,
+        request.validSourceRevisions ? new Map(Object.entries(request.validSourceRevisions)) : undefined) };
+    case 'semantic-vectors-clear':
+      return { semanticVectors: clearSemanticVectors(request.scopeId) };
   }
 }

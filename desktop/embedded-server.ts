@@ -5,15 +5,19 @@
 // ④ /media/uploads Direct reading of assets at runtime + dist/ static cover (desktop/static-files.ts)
 // The key still only lives in this process; the rendering process (BrowserWindow) only sees the same-origin HTTP API.
 import { readFile } from 'node:fs/promises';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
 import type { ViteDevServer } from 'vite';
 import { serverPlugins } from '../server/plugins/index.ts';
 import { getKey, seedKeystore } from '../server/keystore.ts';
-import { proxyMiddleware } from '../server/proxy.ts';
+import { trustedEditorRequest } from '../server/editor-auth.ts';
+import { proxyMiddleware, type ProxyRoute } from '../server/proxy.ts';
 import { parseEnvText } from './env-file.ts';
-import { createMiniConnect } from './mini-connect.ts';
+import { createMiniConnect, type MiniConnect } from './mini-connect.ts';
+import { listenWithAffinity } from './embedded-port.ts';
+import { runtimeProfile } from '../server/runtime-profile.ts';
 import { distStaticMiddleware, uploadsMiddleware } from './static-files.ts';
+import { registerProductAssetRoot } from '../server/product-assets.ts';
 
 export interface EmbeddedServer {
   server: Server;
@@ -31,7 +35,45 @@ function assemblyHeaders(): Record<string, string> {
   return k ? { authorization: k } : {};
 }
 
+function assemblyAiProxyAuthorized(req: IncomingMessage): boolean {
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (fetchSite !== undefined && fetchSite !== 'same-origin' && fetchSite !== 'none') return false;
+  const method = req.method?.toUpperCase();
+  const isRead = method === 'GET' || method === 'HEAD';
+  return trustedEditorRequest(req, !isRead);
+}
+
+export function authorizeAssemblyAiProxy(
+  req: IncomingMessage,
+  res: ServerResponse,
+  next: () => void,
+): void {
+  if (assemblyAiProxyAuthorized(req)) {
+    next();
+    return;
+  }
+  req.resume();
+  res.writeHead(403, {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+  });
+  res.end(JSON.stringify({ error: 'untrusted editor request' }));
+}
+
+export function mountAssemblyAiProxy(
+  app: Pick<MiniConnect, 'use'>,
+  route: ProxyRoute = {
+    target: () => 'https://api.assemblyai.com',
+    headers: assemblyHeaders,
+  },
+): void {
+  app.use('/assemblyai', authorizeAssemblyAiProxy);
+  app.use('/assemblyai', proxyMiddleware(route));
+}
+
 export async function startEmbeddedServer(distDir: string): Promise<EmbeddedServer> {
+  // Product files (fonts, voice samples, LUTs, …) live in resources/dist when packaged.
+  registerProductAssetRoot(distDir);
   await seedFromEnvLocal();
 
   const app = createMiniConnect((err) => {
@@ -39,11 +81,8 @@ export async function startEmbeddedServer(distDir: string): Promise<EmbeddedServ
   });
   const server = createServer((req, res) => app.handle(req, res));
 
-  // The agent is in front (the path does not conflict with the plugin, so it will take less matching)
-  app.use('/assemblyai', proxyMiddleware({
-    target: () => 'https://api.assemblyai.com',
-    headers: assemblyHeaders,
-  }));
+  // Authorize the renderer request before the proxy can inject the provider key.
+  mountAssemblyAiProxy(app);
 
   // vite server pile: complete set of plugin dependencies = middlewares.use + config.logger (verified by plugin)
   const fake = {
@@ -57,7 +96,7 @@ export async function startEmbeddedServer(distDir: string): Promise<EmbeddedServ
       },
     },
   } as unknown as ViteDevServer;
-  for (const plugin of serverPlugins({ projectStoreHttp: false })) {
+  for (const plugin of serverPlugins({ projectStoreHttp: true })) {
     const hook = plugin.configureServer;
     const fn = typeof hook === 'function' ? hook : hook?.handler;
     await fn?.call(plugin as never, fake);
@@ -67,23 +106,14 @@ export async function startEmbeddedServer(distDir: string): Promise<EmbeddedServ
   app.use('/media/uploads', uploadsMiddleware());
   app.use(distStaticMiddleware(distDir));
 
-  // Port policy: priority 5199 (document address of external MCP client in README); occupied (web page dev
-  // server / second desktop instance), fall back to a random port - the App must be able to start, and the MCP client is started instead.
-  // The actual port in the log. Other listen errors are still thrown.
-  const listenOn = (port: number) => new Promise<number>((resolvePort, reject) => {
-    const onError = (err: Error) => reject(err);
-    server.once('error', onError);
-    server.listen(port, '127.0.0.1', () => {
-      server.off('error', onError);
-      const addr = server.address();
-      if (addr && typeof addr === 'object') resolvePort(addr.port);
-      else reject(new Error('embedded server failed to bind'));
-    });
-  });
-  const port = await listenOn(5199).catch((err: NodeJS.ErrnoException) => {
-    if (err.code !== 'EADDRINUSE') throw err;
-    console.warn('[embedded-server] port 5199 in use — falling back to a random port; point external MCP clients at the origin logged below');
-    return listenOn(0);
-  });
+  // Port policy: canonical 5199 first (the documented external-MCP address),
+  // then the fallback used last time it was busy, then a fresh random port that
+  // becomes the remembered one. See listenWithAffinity for why the fallback has
+  // to be stable: a random port per launch silently broke registered agents.
+  const profile = runtimeProfile();
+  const port = await listenWithAffinity(
+    server,
+    profile.mode === 'isolated-dev' ? { profileId: profile.id } : {},
+  );
   return { server, port, origin: `http://127.0.0.1:${port}` };
 }

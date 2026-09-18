@@ -1,21 +1,29 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, stat, truncate, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { seedKeystore } from '../server/keystore.ts';
+import { resolveUploadFile } from '../server/media-dir.ts';
+import { mediaReferenceManifestPath } from '../server/media-references.ts';
 import {
   hasAlphaPixelFormat,
   importLocalMedia,
   isTransparentMovProbe,
   transparentMovProxyArgs,
-} from './local-media-import.ts';
+} from '../server/local-media-import.ts';
 import {
   createLocalMediaImportHandler,
   importLocalMediaFromFile,
   LOCAL_MEDIA_IMPORT_CHANNEL,
 } from './local-media-bridge.ts';
+
+const mainSource = await readFile(new URL('./main.ts', import.meta.url), 'utf8');
+assert.match(
+  mainSource,
+  /createLocalMediaImportHandler\(importLocalMedia\)/,
+  'desktop main must bind native reference imports',
+);
 
 assert.equal(hasAlphaPixelFormat('yuva444p10le'), true, 'ProRes 4444 alpha must be detected');
 assert.equal(hasAlphaPixelFormat('gbrap12le'), true, 'planar RGB alpha must be detected');
@@ -46,6 +54,7 @@ assert.equal(args[audioCodecIndex + 1], 'libopus', 'WebM proxy audio must use br
 assert.ok(args.includes('yuva420p'), 'proxy must preserve alpha');
 assert.ok(args.includes('alpha_mode=1'), 'proxy must label VP9 alpha for Chromium');
 assert.equal(args.includes('libx264'), false, 'H.264 would discard alpha');
+assert.ok(args.indexOf('-threads') > args.indexOf('-c:v'), 'VP9 encoder threads belong to the output option group');
 
 const previousMediaDir = process.env.MEDIA_DIR;
 const testRoot = await mkdtemp(join(tmpdir(), 'openchatcut-local-import-'));
@@ -64,57 +73,60 @@ try {
 
   const imported = await importLocalMedia(sourcePath, 'camera-original.mov');
   const importedPath = join(uploadDirectory, imported.storedName);
-  const [sourceInfo, importedInfo] = await Promise.all([stat(sourcePath), stat(importedPath)]);
-
-  assert.equal(sourceInfo.dev, importedInfo.dev, 'fixture must exercise a same-volume import');
-  assert.notEqual(importedInfo.ino, sourceInfo.ino, 'imported media must not be a hard link');
+  await assert.rejects(stat(importedPath), { code: 'ENOENT' }, 'native import must not copy media bytes');
   assert.equal(imported.src, `/media/uploads/${imported.storedName}`);
   assert.equal(imported.storedName.endsWith('.mov'), true);
-  assert.equal(imported.contentHash, expectedContentHash, 'native import must stream-hash the copied snapshot');
+  assert.equal(imported.contentHash, expectedContentHash, 'native import must stream-hash the source');
+  assert.equal(
+    resolveUploadFile(imported.storedName),
+    await realpath(sourcePath),
+    'the stable media URL must resolve to the source',
+  );
+  await assert.doesNotReject(
+    stat(mediaReferenceManifestPath(uploadDirectory, imported.storedName)),
+    'native import must persist a small reference manifest',
+  );
 
-  await truncate(sourcePath, 0);
   await writeFile(sourcePath, 'replacement source bytes');
   assert.deepEqual(
-    await readFile(importedPath),
-    originalContents,
-    'truncating and rewriting the source must not alter the imported snapshot',
+    await readFile(resolveUploadFile(imported.storedName)!),
+    Buffer.from('replacement source bytes'),
+    'a reference must keep reading the external source instead of a stale copy',
   );
 
   let simulatedStatPath = '';
-  let simulatedCopy:
-    | { source: string; destination: string; mode: number }
-    | undefined;
   let simulatedHashPath = '';
+  let simulatedReference: { directory: string; name: string; sourcePath: string } | undefined;
   const importedLarge = await importLocalMedia(
     largeSourcePath,
     'source-over-10gb.mp4',
     {
       stat: async (path) => {
         simulatedStatPath = path;
-        return { isFile: () => true, size: overTenGigabytes };
-      },
-      copyFile: async (source, destination, mode) => {
-        simulatedCopy = { source, destination, mode };
+        return { isFile: () => true, size: overTenGigabytes, mtimeMs: 123 };
       },
       hashFile: async (path) => {
         simulatedHashPath = path;
         return 'A'.repeat(64);
       },
+      registerReference: async (directory, name, referencedSourcePath) => {
+        simulatedReference = { directory, name, sourcePath: referencedSourcePath };
+      },
     },
   );
   assert.equal(simulatedStatPath, largeSourcePath, 'large imports must inspect the native source path');
-  assert.deepEqual(simulatedCopy, {
-    source: largeSourcePath,
-    destination: join(uploadDirectory, importedLarge.storedName),
-    mode: constants.COPYFILE_FICLONE,
-  }, 'large imports must reach the copy operation without allocating a 10 GiB fixture');
+  assert.deepEqual(simulatedReference, {
+    directory: uploadDirectory,
+    name: importedLarge.storedName,
+    sourcePath: largeSourcePath,
+  }, 'large imports must register the source without allocating a 10 GiB fixture');
   assert.equal(importedLarge.storedName.endsWith('.mp4'), true);
   assert.equal(
     simulatedHashPath,
-    join(uploadDirectory, importedLarge.storedName),
-    'large imports hash the copied destination through the injected streaming boundary',
+    '',
+    'multi-GiB imports skip the full-file SHA-256 pass to avoid doubling disk I/O',
   );
-  assert.equal(importedLarge.contentHash, 'a'.repeat(64), 'injected SHA-256 is normalized to lowercase');
+  assert.equal(importedLarge.contentHash, '', 'large imports report no content hash (dedup disabled)');
 
   const bridgeFile = { name: 'camera-original.mov' } as File;
   const bridgeSourcePath = join(testRoot, 'camera-original.mov');

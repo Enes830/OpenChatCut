@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
-import { loadInitialProjects, type ProjectStartupSource } from './appShell';
+import { readFile } from 'node:fs/promises';
+import { loadInitialProjects, syncAgentBackends, type ProjectStartupSource } from './appShell';
+import { getActiveAgentModelChoice } from '../agent/model-selection';
 import type { ProjectMeta } from '../persist/projectStoreCoordinators';
+import { syncDesktopNativeInferenceEnabled } from '../transcript/desktop-inference-preference';
 
 const demo = { id: 'demo', name: '示例工程', updatedAt: 1 };
 
@@ -58,4 +61,65 @@ assert.deepEqual(
   'existing projects remain readable without write authority',
 );
 
-console.log('appShell.verify: project startup authority semantics passed');
+const appSource = await readFile(new URL('../App.tsx', import.meta.url), 'utf8');
+assert.match(appSource, /useInferenceWarmup\(route\.name === 'editor'\)/, 'App wires unified inference warmup only while editing');
+assert.doesNotMatch(appSource, /useLocalAsrWarmup/, 'App no longer wires the ASR-only warmup path');
+
+const descriptors = {
+  window: Object.getOwnPropertyDescriptor(globalThis, 'window'),
+  localStorage: Object.getOwnPropertyDescriptor(globalThis, 'localStorage'),
+};
+const applied: boolean[] = [];
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: { getItem: () => '1', setItem: () => undefined },
+});
+Object.defineProperty(globalThis, 'window', {
+  configurable: true,
+  value: { openChatCutDesktop: { inference: { setEnabled: async (enabled: boolean) => { applied.push(enabled); } } } },
+});
+try {
+  assert.equal(await syncDesktopNativeInferenceEnabled(), true, 'restart reads the persisted native inference preference');
+  assert.deepEqual(applied, [true], 'restart sync applies the preference to the desktop bridge');
+} finally {
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else Reflect.deleteProperty(globalThis, key);
+  }
+}
+
+const originalFetch = globalThis.fetch;
+const pendingCopilot = Promise.withResolvers<Response>();
+const requestedPaths: string[] = [];
+let copilotSaved = '';
+let startupTimeout: ReturnType<typeof setTimeout> | undefined;
+try {
+  globalThis.fetch = async (input) => {
+    const path = String(input);
+    requestedPaths.push(path);
+    if (path === '/api/copilot/status') return pendingCopilot.promise;
+    return Response.json(path === '/api/codex/status' ? { installed: false } : {
+      keys: { LLM_OPENAI_API_KEY: { configured: true } },
+      models: { LLM_PROVIDER: 'openai', LLM_OPENAI_MODEL: 'gpt-5.5', COPILOT_MODEL: copilotSaved },
+    });
+  };
+  await syncAgentBackends(() => true);
+  assert.equal(requestedPaths.includes('/api/copilot/status'), false,
+    'an unconfigured optional backend must not start on app launch');
+  copilotSaved = 'auto';
+  await Promise.race([
+    syncAgentBackends(() => true),
+    new Promise<never>((_, reject) => {
+      startupTimeout = setTimeout(() => reject(new Error('API startup waited for Copilot')), 500);
+    }),
+  ]);
+  assert.equal(requestedPaths.includes('/api/copilot/status'), true);
+  assert.equal(getActiveAgentModelChoice()?.backend, 'api',
+    'configured API models are usable while a Copilot status request remains unresolved');
+} finally {
+  clearTimeout(startupTimeout);
+  pendingCopilot.resolve(Response.json({ installed: false }));
+  globalThis.fetch = originalFetch;
+}
+
+console.log('appShell.verify: project startup and optional-backend isolation passed');

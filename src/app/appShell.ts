@@ -1,7 +1,10 @@
+import { startUiLocaleSync } from '../i18n/localeSync';
 import { useCallback, useEffect, useState } from 'react';
 import { applyLiveCaps, applyLiveKeyStatus, applyLiveModels } from '../agent/capabilities';
 import { fetchCodexModels, fetchCodexStatus } from '../agent/codex/client';
-import { applyAgentModelStatus, applyCodexAgentStatus } from '../agent/model-selection';
+import { fetchCopilotModels, fetchCopilotStatus } from '../agent/copilot/client';
+import { applyAgentModelStatus, applyCodexAgentStatus, applyCopilotAgentStatus, selectAgentModel, getActiveAgentModelChoice, getAgentModelSnapshot } from '../agent/model-selection';
+import { loadAgentModelPref } from '../persist/sessionPrefs';
 import type { ProjectDoc, TimelineState } from '../editor/types';
 import {
   createProject,
@@ -12,11 +15,6 @@ import {
 import type { ProjectMeta } from '../persist/projectStoreCoordinators';
 import { kvRemoteMode } from '../persist/sharedKv';
 import { projectStoreWriteCredential } from '../persist/projectStoreTransport';
-import { warmUpLocalAsr } from '../transcript/local-asr';
-import {
-  preferredTranscriptionProvider,
-  TRANSCRIPTION_PROVIDER_CHANGE_EVENT,
-} from '../transcript/provider';
 
 export type AppRoute = { name: 'dashboard' } | { name: 'editor'; id: string };
 
@@ -49,7 +47,26 @@ export function navigateTo(hash: string): void {
   window.location.hash = hash;
 }
 
-async function syncAgentBackends(isActive: () => boolean): Promise<void> {
+async function syncCopilotBackend(
+  isActive: () => boolean,
+  savedModel?: string,
+  savedReasoningEffort?: string,
+): Promise<void> {
+  try {
+    const status = await fetchCopilotStatus();
+    if (!isActive()) return;
+    const models = status.installed && status.supported && status.authenticated
+      ? await fetchCopilotModels().catch(() => null)
+      : null;
+    if (isActive()) applyCopilotAgentStatus(
+      status, savedModel, savedReasoningEffort, models && !models.error ? models.models : [],
+    );
+  } catch {
+    // An optional backend must not prevent configured API/Codex models from loading.
+  }
+}
+
+export async function syncAgentBackends(isActive: () => boolean): Promise<void> {
   const [keyResult, codexResult] = await Promise.allSettled([
     fetch('/api/keys').then(async (response): Promise<LiveAgentStatus> => {
       if (!response.ok) throw new Error('Agent key status is unavailable.');
@@ -69,10 +86,14 @@ async function syncAgentBackends(isActive: () => boolean): Promise<void> {
       applyAgentModelStatus(keys ?? {}, models);
       savedCodexModel = models.CODEX_MODEL;
       savedCodexReasoningEffort = models.CODEX_REASONING_EFFORT;
+      if (models.COPILOT_MODEL || loadAgentModelPref()?.startsWith('copilot:')) {
+        void syncCopilotBackend(isActive, models.COPILOT_MODEL, models.COPILOT_REASONING_EFFORT);
+      }
     }
+    startUiLocaleSync(models?.UI_LOCALE);
   }
   if (codexResult.status !== 'fulfilled') return;
-  const modelResult = codexResult.value.account?.type === 'chatgpt'
+  const modelResult = codexResult.value.installed && codexResult.value.account?.type !== 'apiKey'
     ? await fetchCodexModels().catch(() => null)
     : null;
   if (!isActive()) return;
@@ -82,6 +103,14 @@ async function syncAgentBackends(isActive: () => boolean): Promise<void> {
     savedCodexReasoningEffort,
     modelResult && !modelResult.error ? modelResult.models : [],
   );
+  // When Codex (the MCP route) is available and the user has never pinned a
+  // model, make Codex the active model so the composer starts on the MCP
+  // backend instead of the configured default LLM.
+  const active = getActiveAgentModelChoice();
+  if (active && active.backend !== 'codex' && !loadAgentModelPref()) {
+    const codex = getAgentModelSnapshot().choices.find((choice) => choice.backend === 'codex');
+    if (codex) selectAgentModel(codex.id);
+  }
 }
 
 export function useAppRoute(): AppRoute {
@@ -100,37 +129,6 @@ export function useAgentBackendSync(): void {
     void syncAgentBackends(() => alive);
     return () => { alive = false; };
   }, []);
-}
-
-export function useLocalAsrWarmup(routeName: AppRoute['name']): void {
-  useEffect(() => {
-    if (routeName !== 'editor') return;
-    let alive = true;
-    let timer: number | null = null;
-    const schedule = () => {
-      if (timer !== null) window.clearTimeout(timer);
-      if (preferredTranscriptionProvider() !== 'local') return;
-      timer = window.setTimeout(() => {
-        void fetch('/api/asr-models', { cache: 'no-store' })
-          .then((response) => (response.ok ? response.json() : null))
-          .catch(() => null)
-          .then((body: { models?: { modelId?: string; downloaded?: boolean }[] } | null) => {
-            if (!alive || !Array.isArray(body?.models)) return;
-            const downloadedIds = body.models
-              .filter((model) => model.downloaded && typeof model.modelId === 'string')
-              .map((model) => model.modelId as string);
-            if (downloadedIds.length > 0) void warmUpLocalAsr(downloadedIds);
-          });
-      }, 4000);
-    };
-    schedule();
-    window.addEventListener(TRANSCRIPTION_PROVIDER_CHANGE_EVENT, schedule);
-    return () => {
-      alive = false;
-      if (timer !== null) window.clearTimeout(timer);
-      window.removeEventListener(TRANSCRIPTION_PROVIDER_CHANGE_EVENT, schedule);
-    };
-  }, [routeName]);
 }
 
 export interface ProjectStartupSource {

@@ -152,6 +152,15 @@ function minimaxMusic(args: GenerateArgs): SubmitMusicArgs {
   };
 }
 
+function atlasMusic(args: GenerateArgs): SubmitMusicArgs {
+  return {
+    ...musicBase(args, 'atlas', 't2m'),
+    isInstrumental: bool(args.isInstrumental),
+    sampleRate: num(args.sampleRate),
+    bitrate: num(args.bitrate),
+  };
+}
+
 function murekaMusic(args: GenerateArgs): SubmitMusicArgs {
   const allowed = new Set<MusicMode>(['instrumental', 'song', 'prompt-song', 'soundtrack', 'track']);
   const mode = allowed.has(args.mode as MusicMode) ? args.mode as MusicMode : 'instrumental';
@@ -167,9 +176,18 @@ function murekaMusic(args: GenerateArgs): SubmitMusicArgs {
   };
 }
 
-const MUSIC_STRATEGIES = { mureka: murekaMusic, minimax: minimaxMusic } as const;
+// Sonilo v2m is video-conditioned: the project video asset (the rendered cut)
+// is the input; prompt is a single optional style hint. Everything else is
+// provider-specific elsewhere and dropped here.
+const soniloMusic = (args: GenerateArgs): SubmitMusicArgs => ({
+  provider: 'sonilo', mode: 'v2m', prompt: str(args.prompt), name: str(args.name),
+  sourceAssetId: str(args.sourceAssetId),
+});
+
+const MUSIC_STRATEGIES = { mureka: murekaMusic, minimax: minimaxMusic, atlas: atlasMusic, sonilo: soniloMusic } as const;
 export function buildSubmitMusicArgs(args: GenerateArgs): SubmitMusicArgs {
-  return MUSIC_STRATEGIES[args.provider === 'minimax' ? 'minimax' : 'mureka'](args);
+  const provider = args.provider === 'minimax' || args.provider === 'atlas' || args.provider === 'sonilo' ? args.provider : 'mureka';
+  return MUSIC_STRATEGIES[provider](args);
 }
 
 const videoBase = (args: GenerateArgs, model: SubmitVideoArgs['model']): SubmitVideoArgs => ({
@@ -178,8 +196,8 @@ const videoBase = (args: GenerateArgs, model: SubmitVideoArgs['model']): SubmitV
   resolution: args.resolution as SubmitVideoArgs['resolution'], firstFrame: str(args.firstFrame), lastFrame: str(args.lastFrame),
 });
 
-// seedance2 (Volcengine) and byteplus (BytePlus ModelArk) are the same Ark Seedance API/fields.
-const seedanceStyleVideo = (model: 'seedance2' | 'byteplus') => (args: GenerateArgs): SubmitVideoArgs => ({
+// OFox shares these input fields; its server validator rejects unsupported Ark options.
+const seedanceStyleVideo = (model: 'seedance2' | 'byteplus' | 'ofox') => (args: GenerateArgs): SubmitVideoArgs => ({
   ...videoBase(args, model), ratio: str(args.ratio), refImages: list(args.refImages), refVideos: list(args.refVideos),
   refAudios: list(args.refAudios), generateAudio: bool(args.generateAudio), seed: num(args.seed),
   cameraFixed: bool(args.cameraFixed), watermark: bool(args.watermark), returnLastFrame: bool(args.returnLastFrame),
@@ -187,6 +205,7 @@ const seedanceStyleVideo = (model: 'seedance2' | 'byteplus') => (args: GenerateA
 });
 const seedanceVideo = seedanceStyleVideo('seedance2');
 const byteplusVideo = seedanceStyleVideo('byteplus');
+const ofoxVideo = seedanceStyleVideo('ofox');
 const klingVideo = (args: GenerateArgs): SubmitVideoArgs => ({
   ...videoBase(args, 'kling'), ratio: str(args.ratio), mode: args.mode as SubmitVideoArgs['mode'],
   refImages: list(args.refImages), refVideos: list(args.refVideos),
@@ -197,14 +216,24 @@ const klingVideo = (args: GenerateArgs): SubmitVideoArgs => ({
 const hailuoVideo = (args: GenerateArgs): SubmitVideoArgs => ({
   ...videoBase(args, 'hailuo'), promptOptimizer: bool(args.promptOptimizer), fastPretreatment: bool(args.fastPretreatment),
 });
+// xAI Grok Imagine Video: text-to-video only — the base fields are the whole surface.
+const grokVideo = (args: GenerateArgs): SubmitVideoArgs => videoBase(args, 'grok-imagine-video');
 
-const VIDEO_STRATEGIES = { seedance2: seedanceVideo, kling: klingVideo, hailuo: hailuoVideo, byteplus: byteplusVideo } as const;
+const VIDEO_STRATEGIES = { seedance2: seedanceVideo, kling: klingVideo, hailuo: hailuoVideo, byteplus: byteplusVideo, 'grok-imagine-video': grokVideo, ofox: ofoxVideo } as const;
 export function buildSubmitVideoArgs(args: GenerateArgs): SubmitVideoArgs {
-  const model = args.model === 'kling' || args.model === 'hailuo' || args.model === 'byteplus' ? args.model : 'seedance2';
+  const model = args.model === 'kling' || args.model === 'hailuo' || args.model === 'byteplus' || args.model === 'grok-imagine-video' || args.model === 'ofox' ? args.model : 'seedance2';
   return VIDEO_STRATEGIES[model](args);
 }
 
-export const buildSubmitSoundArgs = (args: GenerateArgs): SubmitSoundArgs => ({
-  prompt: String(args.prompt ?? ''), durationSeconds: num(args.durationSeconds), promptInfluence: num(args.promptInfluence),
-  loop: bool(args.loop), outputFormat: str(args.outputFormat), name: str(args.name),
-});
+export const buildSubmitSoundArgs = (args: GenerateArgs): SubmitSoundArgs => {
+  // Sonilo SFX come from the video itself; ElevenLabs synthesis controls
+  // (and the prompt) do not apply and are dropped.
+  if (args.provider === 'sonilo') {
+    return { provider: 'sonilo', sourceAssetId: str(args.sourceAssetId), name: str(args.name) };
+  }
+  return {
+    provider: 'elevenlabs',
+    prompt: String(args.prompt ?? ''), durationSeconds: num(args.durationSeconds), promptInfluence: num(args.promptInfluence),
+    loop: bool(args.loop), outputFormat: str(args.outputFormat), name: str(args.name),
+  };
+};

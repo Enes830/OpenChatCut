@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { t } from '../i18n/locale';
 import type { LLMMessage } from './runtime';
 import { INITIAL } from '../editor/initial';
 import type { Proposal } from './proposal';
@@ -30,6 +31,26 @@ import {
   agentSessionWriteGeneration,
   currentAgentSessionGeneration,
 } from '../persist/agentSessionGeneration';
+import {
+  readStoredServerRun,
+  saveStoredServerRun,
+} from './serverRunSessionStorage';
+
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+  get length(): number { return this.values.size; }
+  clear(): void { this.values.clear(); }
+  getItem(key: string): string | null { return this.values.get(key) ?? null; }
+  key(index: number): string | null { return [...this.values.keys()][index] ?? null; }
+  removeItem(key: string): void { this.values.delete(key); }
+  setItem(key: string, value: string): void { this.values.set(key, value); }
+}
+
+const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+Object.defineProperty(globalThis, 'localStorage', {
+  value: new MemoryStorage(),
+  configurable: true,
+});
 
 interface FakeAgentState {
   state: AgentHookState;
@@ -104,6 +125,12 @@ const projectId = `clear-history-${crypto.randomUUID()}`;
 await seedChat(projectId, 'sensitive context');
 const staleChat = await loadChat(projectId);
 const runId = await seedRun(projectId, 'completed', 'sensitive context');
+assert(saveStoredServerRun(projectId, {
+  projectId,
+  runId,
+  activeToolNames: [],
+  attempts: [],
+}));
 const artifactBody = 'sensitive tool output';
 const artifactId = 'clear-history-art';
 await storeAgentArtifact({
@@ -163,6 +190,11 @@ assert.equal(await kvGet(agentArtifactKey(projectId, artifactId)), undefined, 'a
 assert.equal(await kvGet(`chat:${projectId}`), undefined, 'chat bytes are reclaimed');
 assert.equal(await kvGet(`proposal:${projectId}`), undefined, 'proposal bytes are reclaimed');
 assert.equal(await kvGet(`agent-runtime:${projectId}`), undefined, 'runtime bytes are reclaimed');
+assert.equal(
+  readStoredServerRun(projectId),
+  null,
+  'successful generation rotation clears this tab server-run recovery state',
+);
 assert.ok(staleChat, 'stale chat fixture captured');
 await kvSet(`chat:${projectId}`, staleChat);
 await kvSet(`agent-runtime:${projectId}`, staleRuntime);
@@ -170,7 +202,7 @@ assert.equal(await loadChat(projectId), null, 'late old-generation chat cannot r
 assert.equal((await loadAgentRuntimeSidecar(projectId)).runs.length, 0, 'late old-generation runtime cannot resurrect');
 
 await seedChat(projectId, 'must survive active run');
-await seedRun(projectId, 'running', 'external active run');
+const activeRunId = await seedRun(projectId, 'running', 'external active run');
 await kvSet(`chat:${projectId}`, staleChat);
 await kvSet(`agent-runtime:${projectId}`, staleRuntime);
 assert.deepEqual(
@@ -188,7 +220,12 @@ await clearAgentHistory(blocked.state, projectId);
 assert.notEqual(await loadChat(projectId), null, 'active run blocks chat deletion');
 assert.equal((await loadAgentRuntimeSidecar(projectId)).runs.length, 1, 'active run ledger survives');
 assert.deepEqual(blocked.state.llmRef.current, [{ role: 'user', content: 'must survive active run' }]);
-assert.match(blocked.messages.at(-1)?.text ?? '', /无法清空/);
+assert.ok(
+  blocked.messages.at(-1)?.text.includes(t('运行 {runId}（{status}）仍在进行。请先停止该运行，确认检查器中没有活动任务后再重试。', {
+    runId: activeRunId,
+    status: 'running',
+  })),
+);
 await purgeAgentRuntime(projectId);
 await clearChat(projectId);
 
@@ -239,5 +276,11 @@ await assert.rejects(
   /Stored Agent session generation is invalid/,
 );
 await kvDel(`agent-session-generation:${corruptProjectId}`);
+
+if (originalLocalStorage) {
+  Object.defineProperty(globalThis, 'localStorage', originalLocalStorage);
+} else {
+  Reflect.deleteProperty(globalThis, 'localStorage');
+}
 
 console.log('useAgentHistoryActions.verify: context and inspector history clear atomically');

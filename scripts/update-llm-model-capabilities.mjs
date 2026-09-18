@@ -15,6 +15,7 @@ const PROVIDERS = {
   minimax: 'minimax',
   xiaomi: 'xiaomi',
   mistral: 'mistral',
+  xai: 'xai',
   openrouter: 'openrouter',
 };
 // BytePlus ModelArk has no models.dev provider. Hand-vendored from the
@@ -57,6 +58,28 @@ const BYTEPLUS_MODELS = {
     supportsTools: true,
     reasoning: true,
     reasoningEfforts: ['minimal', 'low', 'medium', 'high'],
+  },
+  // Verified directly against GET /api/v3/models (token_limits) on the
+  // account's ModelArk endpoint; both were missing from the catalog and
+  // fell back to the unknown-model defaults (8192/2048), which made the
+  // agent trim requests to a fraction of what these models actually support.
+  'deepseek-v3-2-251201': {
+    contextWindowTokens: 131072,
+    maxInputTokens: 98304,
+    maxOutputTokens: 32768,
+    input: ['text'],
+    supportsTools: true,
+    reasoning: true,
+    reasoningEfforts: [],
+  },
+  'seed-2-0-pro-260328': {
+    contextWindowTokens: 262144,
+    maxInputTokens: 262144,
+    maxOutputTokens: 131072,
+    input: ['text', 'image', 'video'],
+    supportsTools: true,
+    reasoning: true,
+    reasoningEfforts: [],
   },
 };
 const OUTPUT_PATH = resolve(

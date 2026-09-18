@@ -4,10 +4,12 @@
 //
 // Large video masters: before uploading to AssemblyAI we ask the dev server to
 // extract a 64kbps mono ASR track (POST /api/extract-audio) so a 1GB clip does
-// not get re-fetched + re-uploaded whole. Falls back to the original path.
+// not get re-fetched + re-uploaded whole. Cloud callers may fall back to the
+// original path; browser-local ASR requires the compact extract.
 import type { TranscriptResult } from './types';
 import { getMediaBlob } from '../persist/mediaBlobStore';
 
+const ASSEMBLYAI_POLL_DEADLINE_MS = 30 * 60 * 1000;
 const BASE = '/assemblyai/v2';
 
 /** Prefer extract for these (video always; large pure-audio too). */
@@ -135,11 +137,17 @@ async function createTranscript(audioUrl: string, opts: TranscribeOptions = {}):
 
 async function poll(
   id: string,
-  onWait?: () => void,
+  onWait?: (note?: string) => void,
   onCheckpoint?: AssemblyAiCheckpointWriter,
   resume: AssemblyAiResumeCheckpoint = {},
 ): Promise<TranscriptResult> {
+  // A provider job stuck in queued/processing must not poll forever (and
+  // re-enter the same loop on every reload via the resume checkpoint).
+  const deadline = Date.now() + ASSEMBLYAI_POLL_DEADLINE_MS;
   for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error('transcription timed out while waiting for the provider; please retry');
+    }
     const r = await serviceFetch(`${BASE}/transcript/${id}`);
     if (!r.ok) throw new Error(`poll failed: HTTP ${r.status}`);
     const d = await r.json();
@@ -168,7 +176,8 @@ async function poll(
       return { text: d.text ?? words.map((w: { text: string }) => w.text).join(''), words, utterances };
     }
     if (d.status === 'error') throw new Error(d.error ?? 'transcription error');
-    onWait?.();
+    const waited = Math.max(0, Math.round((ASSEMBLYAI_POLL_DEADLINE_MS - (deadline - Date.now())) / 1000));
+    onWait?.(`云端转写中（${String(d.status)}，已等待 ${waited}s）`);
     await new Promise((res) => setTimeout(res, 2500));
   }
 }
@@ -203,9 +212,14 @@ export async function loadTranscriptionSource(path: string): Promise<Blob> {
 /**
  * Ask the local server to extract a speech-sized audio file for ASR.
  * Returns the new /media/uploads/… path, or null if extract is unavailable.
+ * Browser-local ASR sets `required` so a failed extract never falls through to
+ * decoding an entire video master in the renderer.
  */
-export async function extractAudioForAsr(src: string): Promise<string | null> {
-  if (!src.startsWith('/media/uploads/')) return null;
+export async function extractAudioForAsr(src: string, required = false): Promise<string | null> {
+  if (!src.startsWith('/media/uploads/')) {
+    if (required) throw new TranscriptionError('source-unavailable', `音轨提取只支持工程素材：${src}`);
+    return null;
+  }
   try {
     const res = await fetch('/api/extract-audio', {
       method: 'POST',
@@ -216,11 +230,24 @@ export async function extractAudioForAsr(src: string): Promise<string | null> {
       const data = (await res.json().catch(() => null)) as { noAudio?: boolean } | null;
       if (data?.noAudio) throw new TranscriptionError('no-audio', `该片段没有音轨，无法转写：${src}`);
     }
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (!required) return null;
+      const detail = await res.text().catch(() => '');
+      throw new TranscriptionError(
+        'service-unavailable',
+        `音轨提取失败（HTTP ${res.status}${detail ? `：${detail.slice(0, 300)}` : ''}）`,
+      );
+    }
     const data = (await res.json()) as { path?: string; ok?: boolean };
-    return data.path && data.path.startsWith('/media/uploads/') ? data.path : null;
+    if (data.path?.startsWith('/media/uploads/')) return data.path;
+    if (required) throw new TranscriptionError('service-unavailable', '音轨提取服务返回了无效路径');
+    return null;
   } catch (error) {
     if (error instanceof TranscriptionError) throw error;
+    if (required) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new TranscriptionError('service-unavailable', `音轨提取失败：${detail}`);
+    }
     return null;
   }
 }
@@ -250,10 +277,14 @@ async function shouldExtractForAsr(path: string): Promise<boolean> {
  * Pass opts.asrPath when extract already raced ahead of normalize/finalize.
  * Shared with the local ASR provider — do not break its callers.
  */
-export async function transcriptionSourceForPath(path: string, opts: TranscribeOptions): Promise<string> {
+export async function transcriptionSourceForPath(
+  path: string,
+  opts: TranscribeOptions,
+  requireExtractedAudio = false,
+): Promise<string> {
   if (opts.asrPath && opts.asrPath.startsWith('/media/')) return opts.asrPath;
   if (await shouldExtractForAsr(path)) {
-    const extracted = await extractAudioForAsr(path);
+    const extracted = await extractAudioForAsr(path, requireExtractedAudio);
     if (extracted) return extracted;
   }
   return path;
@@ -294,7 +325,7 @@ export async function transcribePathResumable(
   path: string,
   resume: AssemblyAiResumeCheckpoint,
   onCheckpoint: AssemblyAiCheckpointWriter,
-  onWait?: () => void,
+  onWait?: (note?: string) => void,
   opts: TranscribeOptions = {},
 ): Promise<TranscriptResult> {
   let checkpoint = { ...resume };
@@ -324,7 +355,7 @@ export async function transcribePathResumable(
 
 export async function transcribePath(
   path: string,
-  onWait?: () => void,
+  onWait?: (note?: string) => void,
   opts: TranscribeOptions = {},
 ): Promise<TranscriptResult> {
   return transcribePathResumable(path, {}, () => {}, onWait, opts);

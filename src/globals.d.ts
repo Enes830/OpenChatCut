@@ -1,4 +1,4 @@
-// Build-time global injected by Vite `define` in vite.config.ts (computed from
+// Build-time global injected by Vite `define` in config/vite.config.ts (computed from
 // .env.local key presence — BOOLEANS ONLY, no key value ever reaches the browser).
 // Declared here as a GLOBAL ambient (not a module-local `declare const`) so esbuild
 // treats it as a free identifier and applies the define replacement; a module-local
@@ -7,7 +7,7 @@
 declare const __CONFIGURED_CAPS__: Record<string, boolean> | undefined;
 declare const __APP_VERSION__: string | undefined;
 
-declare module '*.frag?raw' {
-  const source: string;
-  export default source;
+declare module '*.png' {
+  const url: string;
+  export default url;
 }

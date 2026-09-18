@@ -51,7 +51,7 @@ export function invocationFromApproval(
     toolName: binding.tool,
     argsDigest: binding.argsDigest,
     operationId: binding.operationId,
-    policy: policyForTool(binding.tool, true),
+    policy: policyForTool(binding.tool),
   };
 }
 
@@ -174,7 +174,6 @@ export class ExternalSessionRunLedger {
   async requested(
     toolName: string,
     args: Record<string, unknown>,
-    guarded = false,
   ): Promise<ExternalRecordedInvocation> {
     const toolCallId = `external_${crypto.randomUUID()}`;
     const operationId = typeof args.operationId === 'string' ? args.operationId : undefined;
@@ -189,7 +188,7 @@ export class ExternalSessionRunLedger {
       toolName,
       argsDigest,
       operationId,
-      policy: policyForTool(toolName, guarded, args),
+      policy: policyForTool(toolName, args),
     };
   }
 
@@ -228,7 +227,17 @@ export class ExternalSessionRunLedger {
     if (result !== undefined && invocation.toolName === 'load_skill') {
       return this.captureExactSkillResult(invocation, outcome, result);
     }
-    const sanitized = result === undefined ? null : sanitizeJsonForArtifact(result);
+    const imagePayloads = result
+      && typeof result === 'object'
+      && !Array.isArray(result)
+      && Array.isArray((result as Record<string, unknown>).__images)
+      ? (result as Record<string, unknown>).__images as unknown[]
+      : [];
+    const archiveResult = imagePayloads.length
+      ? Object.fromEntries(Object.entries(result as Record<string, unknown>)
+        .filter(([key]) => key !== '__images'))
+      : result;
+    const sanitized = result === undefined ? null : sanitizeJsonForArtifact(archiveResult);
     if (result !== undefined && !sanitized) {
       await this.recordProjectionFailure(invocation);
       throw new ExternalEditSessionOutcomeError(
@@ -243,7 +252,7 @@ export class ExternalSessionRunLedger {
         : await this.recorder.archiveToolResult({
           toolCallId: invocation.toolCallId,
           toolName: invocation.toolName,
-          result,
+          result: archiveResult,
           forceArchive: true,
         });
       await this.recorder.recordToolOutcome({
@@ -260,6 +269,14 @@ export class ExternalSessionRunLedger {
       );
     }
     if (result === undefined) return undefined;
+    if (imagePayloads.length) {
+      const metadata = artifact
+        ? artifactPlaceholder(artifact)
+        : compactToolResultForModel(JSON.parse(sanitized!.body));
+      return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? { ...metadata as Record<string, unknown>, __images: imagePayloads }
+        : { result: metadata, __images: imagePayloads };
+    }
     if (artifact) return artifactPlaceholder(artifact);
     return compactToolResultForModel(JSON.parse(sanitized!.body));
   }
@@ -415,4 +432,3 @@ export class ExternalSessionRunLedger {
     await this.recorder.finalize(status, summary);
   }
 }
-

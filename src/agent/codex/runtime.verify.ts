@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import type { ModelMessage } from 'ai';
+import './runtime-tool-boundary.verify.ts';
 import type { AgentContext } from '../context.ts';
 import type { AgentEvent } from '../runtime.ts';
 import { INITIAL } from '../../editor/initial.ts';
 import { docFromTimeline } from '../../persist/projectStore.ts';
-import { executeOpenChatCutTool, runCodexAgent, runCodexSummary } from './runtime.ts';
-import { TOOL_SCHEMAS } from '../tools.ts';
-import { DEFAULT_AGENT_SETTINGS } from '../settings/agentSettings.ts';
+import { runCodexAgent, runCodexSummary } from './runtime.ts';
 import { ToolFailureTracker } from '../toolFailure.ts';
 
 const encoder = new TextEncoder();
@@ -26,41 +25,6 @@ const context: AgentContext = {
   audio: [],
   getProjectId: () => 'project-1',
 };
-
-const removeItemSchema = TOOL_SCHEMAS.find((schema) => schema.name === 'remove_item');
-assert.ok(removeItemSchema);
-const rejectedMutation = await executeOpenChatCutTool(
-  removeItemSchema,
-  { itemId: 'missing' },
-  {
-    ctx: context,
-    onEvent: () => undefined,
-    settings: DEFAULT_AGENT_SETTINGS,
-    resolveGuard: async () => null,
-  },
-);
-assert.equal(rejectedMutation.success, false);
-assert.match(JSON.stringify(rejectedMutation.result), /no item missing/);
-
-const followupSchema = TOOL_SCHEMAS.find((schema) => schema.name === 'ask_followup_questions');
-assert.ok(followupSchema);
-const settlementOrder: string[] = [];
-const settledFollowup = await executeOpenChatCutTool(
-  followupSchema,
-  { fields: [{ id: 'style', label: 'Which style?', type: 'text' }] },
-  {
-    ctx: context,
-    onEvent: (event) => {
-      if (event.type === 'tool') settlementOrder.push(`tool:${event.name}`);
-    },
-    settings: DEFAULT_AGENT_SETTINGS,
-    resolveGuard: async () => null,
-    onFollowup: () => settlementOrder.push('followup'),
-  },
-);
-assert.equal(settledFollowup.success, true);
-assert.deepEqual(settlementOrder, ['followup', 'tool:ask_followup_questions'],
-  'the real tool boundary exposes the follow-up before emitting its tool event');
 
 const followupFailures = new ToolFailureTracker();
 followupFailures.record('edit_item', {
@@ -226,15 +190,16 @@ try {
       executeTool: async () => ({ success: true, result: null }),
     },
   );
-  assert.match(String(resumed.at(-1)?.content), /couldn't complete the requested operation/);
-  assert.doesNotMatch(String(resumed.at(-1)?.content), /completed successfully/);
+  assert.match(String(resumed.at(-1)?.content), /completed successfully/, 'assistant text is kept when a carried tool failure closes');
+  assert.doesNotMatch(String(resumed.at(-1)?.content), /couldn't complete the requested operation|有工具调用失败/, 'no failure-report template is injected');
   assert.equal(followupFailures.hasUnresolved, false, 'terminal failure reporting closes the carried failure');
-  assert.doesNotMatch(
+  assert.match(
     resumedEvents
       .filter((event): event is Extract<AgentEvent, { type: 'text-delta' }> => event.type === 'text-delta')
       .map((event) => event.delta)
       .join(''),
     /completed successfully/,
+    'model text streams even with a carried tool failure',
   );
 } finally {
   globalThis.fetch = originalFetch;
@@ -381,15 +346,14 @@ try {
   );
   assert.equal(failureSubmissions[0]?.success, false);
   assert.match(String(result.at(-2)?.content), /success=false/);
-  assert.match(String(result.at(-1)?.content), /couldn't complete the requested operation/);
-  assert.match(String(result.at(-1)?.content), /updates\[0\]: item not found: missing/);
-  assert.doesNotMatch(String(result.at(-1)?.content), /successfully/);
+  assert.match(String(result.at(-1)?.content), /Updated the volume successfully/, 'assistant text is kept after a tool failure');
+  assert.doesNotMatch(String(result.at(-1)?.content), /couldn't complete the requested operation|有工具调用失败/, 'no failure-report template is injected; the model replies freely');
   const displayed = failureEvents
     .filter((event): event is Extract<AgentEvent, { type: 'text-delta' }> => event.type === 'text-delta')
     .map((event) => event.delta)
     .join('');
-  assert.match(displayed, /couldn't complete the requested operation/);
-  assert.doesNotMatch(displayed, /Updated the volume successfully/);
+  assert.match(displayed, /Updated the volume successfully/, 'model text must stream even when a tool failed');
+  assert.doesNotMatch(displayed, /couldn't complete the requested operation|有工具调用失败/);
 } finally {
   globalThis.fetch = originalFetch;
 }
@@ -429,9 +393,10 @@ try {
       executeTool: async () => ({ success: true, result: null }),
     },
   );
-  assert.match(String(rejected.at(-1)?.content), /couldn't complete the requested operation/);
-  assert.doesNotMatch(JSON.stringify(rejected), /completed successfully/);
-  assert.doesNotMatch(
+  assert.match(String(rejected.at(-1)?.content), /completed successfully/, 'assistant text is kept after a rejected tool');
+  assert.doesNotMatch(String(rejected.at(-1)?.content), /couldn't complete the requested operation|有工具调用失败/, 'no failure-report template is injected');
+  assert.doesNotMatch(JSON.stringify(rejected), /couldn't complete the requested operation|有工具调用失败/);
+  assert.match(
     rejectedEvents
       .filter((event): event is Extract<AgentEvent, { type: 'text-delta' }> => event.type === 'text-delta')
       .map((event) => event.delta)

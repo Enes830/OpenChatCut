@@ -1,10 +1,13 @@
+export { loadProjectThumb, saveProjectThumb } from './projectThumbStore';
 import type { ProjectDoc, TimelineState } from '../editor/types';
 import type { LlmProvider } from '../../shared/llm-providers';
 import { CURRENT_PROJECT_VERSION } from '../../shared/project-version';
 import {
   kvDel as idbDel,
+  kvGet,
   kvGet as idbGet,
   kvKeys as idbKeys,
+  kvSet,
   kvSet as idbSet,
   kvPurgeProject,
   resetSharedKvMemory,
@@ -106,8 +109,10 @@ const chatKey = (id: string, generation = 'legacy') => generation === 'legacy'
   ? `chat:${id}`
   : `agent-session-chat:${id}:${generation}`;
 const chatWriteQueues = new Map<string, Promise<void>>();
+const MAX_CHAT_SERVER_RUN_TURN_IDS = 256;
 
-function serializeChatWrite(projectId: string, work: () => Promise<void>): Promise<void> {
+
+function serializeChatWrite<T>(projectId: string, work: () => Promise<T>): Promise<T> {
   const previous = chatWriteQueues.get(projectId) ?? Promise.resolve();
   const run = previous.catch(() => undefined).then(work);
   const settled = run.then(() => undefined, () => undefined);
@@ -122,10 +127,12 @@ export interface PersistedChat {
   messages: unknown[];
   llm: unknown[];
   changeLog?: unknown[];
+  contextUsage?: unknown;
   llmFormat?: 'ai-sdk-v1';
   llmProvider?: LlmProvider;
   toolFailures?: unknown;
   sessionGeneration?: string;
+  serverRunTurnIds?: string[];
 }
 
 export function isPersistedChat(v: unknown): v is PersistedChat {
@@ -134,30 +141,80 @@ export function isPersistedChat(v: unknown): v is PersistedChat {
     && Array.isArray((v as { llm?: unknown }).llm);
 }
 
-export async function loadChat(projectId: string): Promise<PersistedChat | null> {
+/** Chat load outcome. "missing" (nothing stored, or a fresh session
+ * generation) is a legitimate empty chat; "unreadable" means stored bytes
+ * exist but this read failed — hydrating an empty session then would let the
+ * next persist overwrite a real conversation. */
+export type ChatLoadResult =
+  | { readonly status: 'ok'; readonly chat: PersistedChat }
+  | { readonly status: 'missing' }
+  | { readonly status: 'unreadable' };
+
+export async function loadChatResult(projectId: string): Promise<ChatLoadResult> {
+  let raw: unknown;
+  let generation: Awaited<ReturnType<typeof currentAgentSessionGeneration>>;
   try {
     await chatWriteQueues.get(projectId);
-    const generation = await currentAgentSessionGeneration(projectId);
-    const raw = await idbGet<unknown>(chatKey(projectId, generation));
-    return isPersistedChat(raw)
-      && agentSessionGenerationMatches(raw.sessionGeneration, generation) ? raw : null;
+    generation = await currentAgentSessionGeneration(projectId);
+    // The server store is authoritative after serverization (chat survives
+    // origin/browser changes); kvGet falls back to local IndexedDB offline.
+    raw = await kvGet<unknown>(chatKey(projectId, generation));
   } catch {
-    return null;
+    // Transient read failure — NOT "there is no chat".
+    return { status: 'unreadable' };
   }
+  if (raw === undefined || raw === null) return { status: 'missing' };
+  if (!isPersistedChat(raw)) return { status: 'unreadable' };
+  // A stored chat from an older session generation is intentionally not shown:
+  // the generation bump IS the "start a fresh conversation" record.
+  if (!agentSessionGenerationMatches(raw.sessionGeneration, generation)) return { status: 'missing' };
+  return { status: 'ok', chat: raw };
+}
+
+export async function loadChat(projectId: string): Promise<PersistedChat | null> {
+  const result = await loadChatResult(projectId);
+  return result.status === 'ok' ? result.chat : null;
+}
+
+function serverRunTurnIds(chat: unknown): string[] {
+  if (!isPersistedChat(chat) || !Array.isArray(chat.serverRunTurnIds)) return [];
+  return chat.serverRunTurnIds.filter((id): id is string => typeof id === 'string')
+    .slice(-MAX_CHAT_SERVER_RUN_TURN_IDS);
 }
 
 export function saveChat(projectId: string, chat: PersistedChat): Promise<void> {
   const generation = agentSessionWriteGeneration(projectId);
   return serializeChatWrite(projectId, async () => {
-    try {
-      const sessionGeneration = await generation;
-      await idbSet(chatKey(projectId, sessionGeneration), {
-        ...chat,
-        sessionGeneration,
-      });
-    } catch {
-      /* ignore persist failures; the session still works in-memory */
+    const sessionGeneration = await generation;
+    const key = chatKey(projectId, sessionGeneration);
+    const priorIds = serverRunTurnIds(await kvGet<unknown>(key));
+    await kvSet(key, {
+      ...chat,
+      ...(priorIds.length ? { serverRunTurnIds: priorIds } : {}),
+      sessionGeneration,
+    });
+  });
+}
+
+export function saveServerRunChat(
+  projectId: string,
+  runId: string,
+  chat: PersistedChat,
+): Promise<boolean> {
+  const generation = agentSessionWriteGeneration(projectId);
+  return serializeChatWrite(projectId, async () => {
+    const sessionGeneration = await generation;
+    const key = chatKey(projectId, sessionGeneration);
+    const existing = await kvGet<unknown>(key);
+    const priorIds = serverRunTurnIds(existing);
+    if (priorIds.includes(runId)) return false;
+    const nextRunIds = [...priorIds, runId].slice(-MAX_CHAT_SERVER_RUN_TURN_IDS);
+    await kvSet(key, { ...chat, serverRunTurnIds: nextRunIds, sessionGeneration });
+    const stored = await kvGet<unknown>(key);
+    if (!serverRunTurnIds(stored).includes(runId)) {
+      throw new Error('Server run model history could not be persisted.');
     }
+    return true;
   });
 }
 
@@ -251,28 +308,35 @@ export async function loadRawProject(id: string): Promise<unknown> {
 export async function loadProject(id: string, options?: ProjectMigrationOptions): Promise<ProjectDoc | null> {
   try {
     const raw = await idbGet<unknown>(projectKey(id));
-    let upgraded = false;
-    const doc = migrateProjectDoc(raw, {
-      onProgress: (progress) => {
-        upgraded = true;
-        options?.onProgress?.(progress);
-      },
-    });
-    if (!doc) return null;
-    // Persist only after the complete chain succeeds. A broken migration leaves
-    // the original bytes untouched and can be retried by a future build.
-    if (upgraded) {
-      try {
-        await idbSet(projectKey(id), doc);
-      } catch {
-        // The migrated in-memory document is still safe to open. Persistence can
-        // retry on the next load without ever writing an intermediate version.
-      }
-    }
-    return doc;
+    return migrateProjectDoc(raw, options);
   } catch {
     return null;
   }
+}
+
+/** Editor-entry load result: "missing" (no stored document — an empty project
+ * is legitimate) is distinct from "unreadable" (stored bytes exist but the
+ * read or migration failed). The editor must never open an unreadable project
+ * as empty: the 500ms autosave would overwrite the real data. */
+export type ProjectLoadResult =
+  | { readonly status: 'ok'; readonly doc: ProjectDoc }
+  | { readonly status: 'missing' }
+  | { readonly status: 'unreadable' };
+
+export async function loadProjectForEditing(
+  id: string,
+  options?: ProjectMigrationOptions,
+): Promise<ProjectLoadResult> {
+  let raw: unknown;
+  try {
+    raw = await idbGet<unknown>(projectKey(id));
+  } catch {
+    // Transient read failure is NOT "no document" — block editing, retry later.
+    return { status: 'unreadable' };
+  }
+  if (raw === undefined || raw === null) return { status: 'missing' };
+  const doc = migrateProjectDoc(raw, options);
+  return doc ? { status: 'ok', doc } : { status: 'unreadable' };
 }
 
 /** Capture and enqueue a project's document; writes for the same project never overlap. */
@@ -353,21 +417,6 @@ export async function duplicateProject(id: string, name?: string): Promise<Proje
 }
 
 /** Soft-delete: hide from dashboard/list; data kept for restore_project. */
-// ── Project card poster frame cache (key=updatedAt, re-rendering will be invalidated as soon as the project changes) ──────────────────
-interface ProjectThumb {
-  key: number;
-  dataUrl: string;
-}
-
-export async function loadProjectThumb(id: string): Promise<ProjectThumb | null> {
-  const v = await idbGet<ProjectThumb>(`thumb:${id}`);
-  return v && typeof v.dataUrl === 'string' && typeof v.key === 'number' ? v : null;
-}
-
-export async function saveProjectThumb(id: string, key: number, dataUrl: string): Promise<void> {
-  await idbSet(`thumb:${id}`, { key, dataUrl });
-}
-
 export async function deleteProject(id: string): Promise<void> {
   await mutateProjectIndex((index) => {
     if (!index.some((meta) => meta.id === id)) return { next: null, value: undefined };

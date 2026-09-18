@@ -11,6 +11,8 @@ import {
   type ExternalCallTerminalOutcome,
   type ExternalToolSchema,
 } from './broker-types.ts';
+import { waitForBrokerWake, wakeBrokerWaiters } from './broker-waiters.ts';
+import { EditSessionOwnershipRegistry } from './edit-session-ownership.ts';
 
 export { ExternalEditorCallError } from './broker-types.ts';
 export type {
@@ -19,10 +21,6 @@ export type {
   ExternalToolSchema,
 } from './broker-types.ts';
 
-interface EditSessionOwner {
-  ownerId: string;
-  binding: EditorBinding;
-}
 interface QueuedCall {
   id: string;
   ownerId: string;
@@ -48,50 +46,24 @@ export interface ExternalEditorCancellation {
   id: string;
   outcome: Exclude<ExternalCallTerminalOutcome, 'applied'>;
   message: string;
+  /** Legacy field accepted by older editors. New brokers preserve orphaned drafts for recovery. */
+  ownerGone?: string[];
 }
 
+/** Total time a single editor long-poll waits for an incoming call. */
+const EDITOR_POLL_BUDGET_MS = 25_000;
+/** Refresh the editor registration before the online lease can expire. */
+const EDITOR_POLL_REFRESH_MS = 8_000;
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_TIMEOUT_MS = 600_000;
 const queues = new Map<string, QueuedCall[]>();
 const pending = new Map<string, QueuedCall>();
 const waiters = new Map<string, Set<() => void>>();
-const editSessionOwners = new Map<string, EditSessionOwner>();
+const sessionOwnership = new EditSessionOwnershipRegistry();
 const cancellationQueues = new Map<string, ExternalEditorCancellation[]>();
 const cancellationWaiters = new Map<string, Set<() => void>>();
 
 const editorKey = (projectId: string, editorInstanceId: string) => `${projectId}\u0000${editorInstanceId}`;
-
-
-function wake(waiterMap: Map<string, Set<() => void>>, key: string): void {
-  for (const waiter of waiterMap.get(key) ?? []) waiter();
-}
-
-function waitForWake(
-  waiterMap: Map<string, Set<() => void>>,
-  key: string,
-  signal: AbortSignal,
-  timeoutMs: number,
-): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      signal.removeEventListener('abort', finish);
-      const listeners = waiterMap.get(key);
-      listeners?.delete(finish);
-      if (!listeners?.size) waiterMap.delete(key);
-      resolve();
-    };
-    const listeners = waiterMap.get(key) ?? new Set<() => void>();
-    listeners.add(finish);
-    waiterMap.set(key, listeners);
-    const timer = setTimeout(finish, timeoutMs);
-    signal.addEventListener('abort', finish, { once: true });
-  });
-}
 
 
 function removeQueuedCall(call: QueuedCall): void {
@@ -111,7 +83,7 @@ function enqueueCancellation(
   const queue = cancellationQueues.get(key) ?? [];
   queue.push({ id: call.id, outcome, message });
   cancellationQueues.set(key, queue);
-  wake(cancellationWaiters, key);
+  wakeBrokerWaiters(cancellationWaiters, key);
 }
 
 function terminalMessage(value: unknown): string {
@@ -125,22 +97,6 @@ function terminalMessage(value: unknown): string {
   return String(value);
 }
 
-function recordEditSessionOwner(call: QueuedCall, value: unknown): void {
-  if (
-    call.name !== 'begin_edit_session'
-    || !value
-    || typeof value !== 'object'
-    || Array.isArray(value)
-  ) return;
-  if (!('editSessionId' in value)) return;
-  const editSessionId = value.editSessionId;
-  if (typeof editSessionId !== 'string' || !editSessionId.trim()) return;
-  editSessionOwners.set(editSessionId.trim(), {
-    ownerId: call.ownerId,
-    binding: { ...call.binding },
-  });
-}
-
 function finishCall(
   call: QueuedCall,
   outcome: ExternalCallTerminalOutcome,
@@ -150,12 +106,12 @@ function finishCall(
   if (!pending.delete(call.id)) return false;
   clearTimeout(call.timer);
   removeQueuedCall(call);
-  wake(waiters, call.binding.projectId);
+  wakeBrokerWaiters(waiters, call.binding.projectId);
   if (outcome === 'applied') {
-    recordEditSessionOwner(call, value);
-    call.resolve(value);
+    call.resolve(sessionOwnership.finishApplied(call, value));
     return true;
   }
+  sessionOwnership.releaseRecovery(call);
   const message = terminalMessage(value);
   if (notifyEditor && call.state === 'in_flight') enqueueCancellation(call, outcome, message);
   call.reject(new ExternalEditorCallError(outcome, message));
@@ -169,7 +125,7 @@ function cancelCalls(
   notifyEditor = true,
 ): number {
   let count = 0;
-  for (const call of [...pending.values()]) {
+  for (const call of pending.values()) {
     if (predicate(call) && finishCall(call, outcome, message, notifyEditor)) count += 1;
   }
   return count;
@@ -202,7 +158,7 @@ const registry = new EditorConnectionRegistry({
     );
   },
   wakeProject(projectId) {
-    wake(waiters, projectId);
+    wakeBrokerWaiters(waiters, projectId);
   },
   hasInFlightCall(projectId) {
     return [...pending.values()].some((call) => (
@@ -291,13 +247,7 @@ export function editSessionOwnerMatches(
   binding: EditorBinding,
   editSessionId: unknown,
 ): boolean {
-  if (typeof editSessionId !== 'string') return false;
-  const owner = editSessionOwners.get(editSessionId.trim());
-  return Boolean(
-    owner
-    && owner.ownerId === ownerId
-    && sameBinding(owner.binding, binding)
-  );
+  return sessionOwnership.owns(ownerId, binding, editSessionId);
 }
 
 function requireOwnedEditSession(
@@ -305,20 +255,32 @@ function requireOwnedEditSession(
   binding: EditorBinding,
   args: Record<string, unknown>,
 ): void {
-  if (editSessionOwnerMatches(ownerId, binding, args.editSessionId)) return;
-  throw new ExternalEditorCallError(
-    'rejected',
-    'The requested edit session does not belong to this MCP transport and editor binding.',
-  );
+  sessionOwnership.requireOwned(ownerId, binding, args.editSessionId);
 }
 
-function requireCurrentBinding(binding: EditorBinding, allowRevisionDrift: boolean): void {
+function requireCurrentBinding(
+  binding: EditorBinding,
+  allowRevisionDrift: boolean,
+  allowAdopt: boolean,
+): EditorBinding {
   // Terminal status reads may use the original editor identity after apply
   // advances the revision; every mutation remains pinned to the exact binding.
   const matches = allowRevisionDrift
     ? editorBindingIdentityMatches(binding)
     : editorBindingMatches(binding);
-  if (matches) return;
+  if (matches) return binding;
+  // A same-editor revision advance between bind and invoke (an autosave landing
+  // or a settle syncing the registry) is legitimate progression, not a stale
+  // takeover: adopt the registry's current snapshot for calls that carry no
+  // edit-session ownership (begin_edit_session / sessionless reads). Calls
+  // pinned to an edit session stay strict — the session snapshot is the guard.
+  const current = editorBinding(binding.projectId);
+  if (allowAdopt
+    && current
+    && sameEditorIdentity(current, binding)
+    && editorBindingMatches(current)) {
+    return current;
+  }
   throw new ExternalEditorCallError(
     'stale',
     `MCP session binding for project ${binding.projectId} is stale. Re-initialize the MCP session.`,
@@ -333,16 +295,24 @@ export function invokeEditorTool(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<unknown> {
   const allowRevisionDrift = name === 'get_edit_session';
-  if (name !== 'begin_edit_session' && 'editSessionId' in args) {
-    requireOwnedEditSession(ownerId, binding, args);
-  }
-  requireCurrentBinding(binding, allowRevisionDrift);
+  const recoveryTool = name === 'list_edit_sessions' || name === 'recover_edit_session';
+  const ownsSession = name !== 'begin_edit_session' && !recoveryTool && 'editSessionId' in args;
+  if (ownsSession) requireOwnedEditSession(ownerId, binding, args);
+  const currentBinding = requireCurrentBinding(binding, allowRevisionDrift, !ownsSession);
+  const callId = randomUUID();
+  sessionOwnership.reserveRecovery({
+    id: callId,
+    ownerId,
+    binding: currentBinding,
+    name,
+    arguments: args,
+  });
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + Math.min(MAX_TIMEOUT_MS, Math.max(1_000, timeoutMs));
     const call: QueuedCall = {
-      id: randomUUID(),
+      id: callId,
       ownerId,
-      binding: { ...binding },
+      binding: { ...currentBinding },
       name,
       arguments: args,
       state: 'queued',
@@ -363,7 +333,7 @@ export function invokeEditorTool(
     queue.push(call);
     queues.set(binding.projectId, queue);
     pending.set(call.id, call);
-    wake(waiters, binding.projectId);
+    wakeBrokerWaiters(waiters, binding.projectId);
   });
 }
 
@@ -412,15 +382,29 @@ export async function nextEditorCall(
   let binding = editorBinding(projectId);
   let call = binding ? takeNextCall(projectId, binding) : undefined;
   if (!call) {
-    await waitForWake(waiters, projectId, signal, 25_000);
-    if (signal.aborted || !(await touchEditor(
-      projectId,
-      editorInstanceId,
-      baseRevision,
-      registrationCapability,
-    ))) return null;
-    binding = editorBinding(projectId);
-    call = binding ? takeNextCall(projectId, binding) : undefined;
+    // Keep the long-poll responsive while refreshing lastSeen. A single
+    // 25-second wait can let an actively-polling editor approach its online
+    // lease boundary on a slow link and appear offline during a read.
+    const startedAt = Date.now();
+    while (!signal.aborted) {
+      const remaining = EDITOR_POLL_BUDGET_MS - (Date.now() - startedAt);
+      if (remaining <= 0) break;
+      await waitForBrokerWake(
+        waiters,
+        projectId,
+        signal,
+        Math.min(EDITOR_POLL_REFRESH_MS, remaining),
+      );
+      if (signal.aborted || !(await touchEditor(
+        projectId,
+        editorInstanceId,
+        baseRevision,
+        registrationCapability,
+      ))) return null;
+      binding = editorBinding(projectId);
+      call = binding ? takeNextCall(projectId, binding) : undefined;
+      if (call) break;
+    }
   }
   if (!call) return null;
   return {
@@ -437,18 +421,27 @@ export async function nextEditorCancellation(
   signal: AbortSignal,
   registrationCapability?: string | null,
 ): Promise<ExternalEditorCancellation | null> {
+  // Refresh the editor online lease so an idle editor waiting for cancellations
+  // is not erroneously marked offline.
+  if (!(await touchEditor(projectId, editorInstanceId, undefined, registrationCapability))) return null;
   if (registrationCapability !== undefined
     && !editorRegistrationMatches(projectId, editorInstanceId, registrationCapability)) return null;
   const key = editorKey(projectId, editorInstanceId);
   let cancellation = cancellationQueues.get(key)?.shift();
   if (!cancellation) {
-    await waitForWake(cancellationWaiters, key, signal, 25_000);
+    await waitForBrokerWake(cancellationWaiters, key, signal, 25_000);
     if (registrationCapability !== undefined
       && !editorRegistrationMatches(projectId, editorInstanceId, registrationCapability)) return null;
     cancellation = cancellationQueues.get(key)?.shift();
   }
   if (!cancellationQueues.get(key)?.length) cancellationQueues.delete(key);
   return cancellation ?? null;
+}
+
+/** Binding of a pending editor call, read before settle for revision sync. */
+export function editorCallBinding(id: string): EditorBinding | null {
+  const call = pending.get(id);
+  return call ? { ...call.binding } : null;
 }
 
 export function settleEditorCall(
@@ -473,9 +466,7 @@ export function cancelEditorCallsForOwner(
   outcome: Extract<ExternalCallTerminalOutcome, 'cancelled' | 'stale' | 'failed'> = 'cancelled',
   message = 'MCP transport session closed before the editor call completed.',
 ): number {
-  for (const [sessionId, owner] of editSessionOwners) {
-    if (owner.ownerId === ownerId) editSessionOwners.delete(sessionId);
-  }
+  sessionOwnership.disconnectOwner(ownerId);
   return cancelCalls((call) => call.ownerId === ownerId, outcome, message);
 }
 
@@ -496,5 +487,5 @@ export function resetExternalAgentBrokerForTest(): void {
   waiters.clear();
   cancellationQueues.clear();
   cancellationWaiters.clear();
-  editSessionOwners.clear();
+  sessionOwnership.reset();
 }

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MobileUploadService } from './mobile-upload-service';
-import { isLoopbackAddress } from './plugins/mobile-upload';
+import { isLoopbackAddress } from './loopback-address';
 
 assert.equal(isLoopbackAddress('127.0.0.1'), true);
 assert.equal(isLoopbackAddress('::1'), true);
@@ -78,6 +78,10 @@ try {
 
   const englishSession = await service.createSession('en');
   assert.match(await (await fetch(englishSession.urls[0]!)).text(), /Send media to OpenChatCut/);
+  const italianSession = await service.createSession('it');
+  assert.match(await (await fetch(italianSession.urls[0]!)).text(), /Send media to OpenChatCut/);
+  const russianSession = await service.createSession('ru');
+  assert.match(await (await fetch(russianSession.urls[0]!)).text(), /Отправить медиафайлы в OpenChatCut/);
 
   const tooLarge = await fetch(`${session.urls[0]}/upload?name=large.mp4`, {
     method: 'POST',
@@ -93,6 +97,8 @@ try {
 
   await new Promise((resolve) => setTimeout(resolve, 2_030));
   assert.equal(service.getSession(englishSession.id), null);
+  assert.equal(service.getSession(italianSession.id), null);
+  assert.equal(service.getSession(russianSession.id), null);
 } finally {
   await service.stop();
   await rm(tempDir, { recursive: true, force: true });

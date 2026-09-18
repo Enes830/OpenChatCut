@@ -16,6 +16,7 @@ import {
   createExportJobStore,
   type ExportJobStore,
 } from '../export/backgroundExportStore';
+import { subscribeAgentExportJobs } from '../export/agentExportTracking';
 import { resumePersistedServerExports } from '../export/serverExportOperation';
 import { useEditorPanelLayout, type EditorPanelLayout } from '../hooks/useEditorPanelLayout';
 import { usePersistedState } from '../hooks/usePersistedState';
@@ -43,6 +44,11 @@ export interface EditorWorkspaceDialogs {
   setShowVersions: Dispatch<SetStateAction<boolean>>;
   showShortcuts: boolean;
   setShowShortcuts: Dispatch<SetStateAction<boolean>>;
+  showSettings: boolean;
+  setShowSettings: Dispatch<SetStateAction<boolean>>;
+  /** Settings vendor key to open on the next settings dialog mount (e.g. 'local/music/packs'). */
+  settingsRoute: string | undefined;
+  setSettingsRoute: Dispatch<SetStateAction<string | undefined>>;
   shortcutApiRef: RefObject<TimelineShortcutApi | null>;
   getPlayhead: () => number;
 }
@@ -60,8 +66,11 @@ export function useEditorWorkspaceDialogs({
 }: EditorWorkspaceDialogsInput): EditorWorkspaceDialogs {
   const [chatSeed, setChatSeed] = useState<EditorChatSeed | null>(null);
   const [showDesign, setShowDesign] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
+
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [settingsRoute, setSettingsRoute] = useState<string | undefined>(undefined);
   const shortcutApiRef = useRef<TimelineShortcutApi | null>(null);
   const getPlayhead = useCallback(() => playerRef.current?.getCurrentFrame() ?? 0, [playerRef]);
 
@@ -72,6 +81,10 @@ export function useEditorWorkspaceDialogs({
     setChatSeed,
     showDesign,
     setShowDesign,
+    showSettings,
+    setShowSettings,
+    settingsRoute,
+    setSettingsRoute,
     showVersions,
     setShowVersions,
     showShortcuts,
@@ -135,7 +148,12 @@ interface EditorWorkspaceExportActionsInput {
   selectAllTimelineContent: () => void;
 }
 
-function useExportJobs(projectId: string, t: typeof translate): [ExportJobStore, number] {
+function useExportJobs(
+  projectId: string,
+  t: typeof translate,
+  commands: EditorCommands,
+  docRef: RefObject<ProjectDoc>,
+): [ExportJobStore, number] {
   const exportJobs = useMemo(() => createExportJobStore(), []);
   const activeExportJobs = useSyncExternalStore(
     exportJobs.subscribeActive,
@@ -147,6 +165,13 @@ function useExportJobs(projectId: string, t: typeof translate): [ExportJobStore,
       console.warn('[export] failed to restore interrupted server exports', error);
     });
   }, [exportJobs, projectId, t]);
+  useEffect(
+    () => subscribeAgentExportJobs(projectId, exportJobs, t, {
+      commands,
+      getDoc: () => docRef.current,
+    }),
+    [commands, docRef, exportJobs, projectId, t],
+  );
   return [exportJobs, activeExportJobs];
 }
 
@@ -174,7 +199,12 @@ function relinkedAsset(current: MediaAsset, next: MediaAssetRelinkPatch): MediaA
 export function useEditorWorkspaceExportActions(
   input: EditorWorkspaceExportActionsInput,
 ): EditorWorkspaceExportActions {
-  const [exportJobs, activeExportJobs] = useExportJobs(input.projectId, input.t);
+  const [exportJobs, activeExportJobs] = useExportJobs(
+    input.projectId,
+    input.t,
+    input.commands,
+    input.docRef,
+  );
   const [exportOpen, setExportOpen] = useState(false);
   const onExport = useCallback(() => setExportOpen(true), []);
   useEditorActions({

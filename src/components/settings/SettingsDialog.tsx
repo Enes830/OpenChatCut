@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { theme, themeAlpha } from '../../theme';
+import { theme } from '../../theme';
 import { t, useT } from '../../i18n/locale';
 import { Icon } from '../icons';
 import { VendorIcon } from './vendorIcons';
@@ -11,9 +11,12 @@ import {
   setPreferredTranscriptionProvider,
 } from '../../transcript/provider';
 import { isTranscriptionProviderId } from '../../transcript/types';
+import { setAutoTranscribeIngest } from '../../transcript/provider';
 import { FieldRow, ON, VendorPane, WARN, type FieldCtx } from './settingsVendorPane';
 import { useCodexSettings } from './useCodexSettings';
 import type { CodexAgentStatus } from '../../../shared/codex-agent';
+import type { CopilotAgentStatus } from '../../../shared/copilot-agent';
+import { useCopilotSettings } from './useCopilotSettings';
 import { stageFieldValue } from './codexReasoning';
 import { SettingsVersionControl } from './SettingsVersionControl';
 import {
@@ -33,6 +36,11 @@ import {
   type KeyStatusResponse, type SettingsCategory, type SettingsField, type SettingsGroup,
   type SettingsVendorPage, type StagedValues as Values,
 } from './settingsSchema';
+import {
+  bodyRow, btnGhost, btnPrimary, catRow, chevronBox, code, dot, foot, footMsg,
+  head, iconBtn, licenseLink, navLabel, navRowStyle, overlay, panel, revealLabel,
+  routeBox, sidebar, sidebarNote, treeScroll, vendorCol,
+} from './SettingsDialog.styles';
 
 // Global settings modal, three columns: left = "Classification → Capability" two-level collapsible tree (capability row = status indicator + name);
 // Center = list of providers under the current capability (generating four capabilities with a "default provider" route select at the top);
@@ -46,8 +54,6 @@ import {
 // values are shared globally by field name and the switching tree nodes are not cleared (MINIMAX_* instant synchronization across capability pages).
 // The right column (vendor configuration page + field rendering + test connection) is in settingsVendorPane.tsx.
 const CLOSE_CONFIRM_MS = 2000;
-const TREE_WIDTH = 200;
-const VENDOR_COL_WIDTH = 185;
 
 // ── hooks ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +88,8 @@ function syncTranscriptionPreferences(models: Record<string, string>): void {
   }
   const provider = models.PREFERRED_TRANSCRIPTION_PROVIDER;
   setPreferredTranscriptionProvider(isTranscriptionProviderId(provider) ? provider : 'assemblyai');
+  const ingest = models.AUTO_TRANSCRIBE_INGEST;
+  if (ingest === 'off' || ingest === 'local' || ingest === 'all') setAutoTranscribeIngest(ingest);
 }
 
 /** Keep the runtime ASR model tier in sync with the saved setting ('' → auto). */
@@ -112,7 +120,9 @@ function useSaveKeys(values: Values, onSaved: (next: KeyStatusResponse) => void)
       const body = await res.json().catch(() => ({})) as Partial<KeyStatusResponse> & { error?: string };
       if (!res.ok) throw new Error(body.error || t('保存失败 ({n})', { n: res.status }));
       onSaved(body as KeyStatusResponse);
-      setMsg(savedMessage());
+      // A storage-folder change is copied immediately but only used on the next
+      // launch, so saying "saved" alone would look like nothing happened.
+      setMsg(body.restartRequired ? t('已保存 · 重启应用后新的工程存储目录才会生效') : savedMessage());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -154,20 +164,33 @@ function useHover(): [boolean, { onMouseEnter: () => void; onMouseLeave: () => v
 }
 
 /** The left tree capability is selected + the middle column provider is selected; when changing capabilities, the middle column is reset to the first provider with the capability. */
-function useTreeSelection(): {
+function useTreeSelection(initialVendor?: string): {
   group: SettingsGroup; page: SettingsVendorPage;
   selectGroup: (key: string) => void; selectVendor: (key: string) => void;
 } {
-  const first = SETTINGS_CATEGORIES[0].groups[0];
-  const [groupKey, setGroupKey] = useState<string>(first.key);
-  const [vendorKey, setVendorKey] = useState<string>(first.vendors[0].key);
+  const seeded = seedSelection(initialVendor);
+  const [groupKey, setGroupKey] = useState<string>(seeded.group.key);
+  const [vendorKey, setVendorKey] = useState<string>(seeded.vendor.key);
   const group = findGroup(groupKey);
   const page = group.vendors.find((v) => v.key === vendorKey) ?? group.vendors[0];
   const selectGroup = (key: string): void => {
+    const nextGroup = findGroup(key);
     setGroupKey(key);
-    setVendorKey(findGroup(key).vendors[0].key);
+    setVendorKey(nextGroup.vendors[0].key);
   };
   return { group, page, selectGroup, selectVendor: setVendorKey };
+}
+
+/** Open on a specific vendor page when the caller routed here (e.g. the chat's missing-model-pack button). */
+function seedSelection(initialVendor?: string): { group: SettingsGroup; vendor: SettingsVendorPage } {
+  for (const category of SETTINGS_CATEGORIES) {
+    for (const group of category.groups) {
+      const vendor = group.vendors.find((v) => v.key === initialVendor);
+      if (vendor) return { group, vendor };
+    }
+  }
+  const first = SETTINGS_CATEGORIES[0].groups[0];
+  return { group: first, vendor: first.vendors[0] };
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -186,6 +209,8 @@ function useFieldContext(
   values: Values,
   setValues: React.Dispatch<React.SetStateAction<Values>>,
   reveal: boolean,
+  refreshStatus: () => Promise<void>,
+  copilotEnabled: boolean,
 ): FieldCtx {
   const [modelOptions, setModelOptions] = useState<Record<string, readonly string[]>>({});
   const [autoClearedEffort, setAutoClearedEffort] = useState<string | null>(null);
@@ -193,6 +218,7 @@ function useFieldContext(
     modelValue(status, 'CODEX_MODEL'),
     modelValue(status, 'CODEX_REASONING_EFFORT'),
   );
+  const copilot = useCopilotSettings(copilotEnabled);
   const onStage = (field: SettingsField, raw: string): void => {
     const staged = stageFieldValue(values, field, raw, status, codex.models, autoClearedEffort);
     setValues(staged.values);
@@ -213,14 +239,14 @@ function useFieldContext(
       : { ...previous, [field.name]: '' });
   };
   return {
-    status, values, reveal, onStage, onToggleClear, modelOptions, codex,
+    status, values, reveal, onStage, onToggleClear, modelOptions, codex, copilot, refreshStatus,
     onModelsDiscovered: (name, models) => {
       setModelOptions((previous) => ({ ...previous, [name]: [...new Set(models)] }));
     },
   };
 }
 
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+export function SettingsDialog({ onClose, initialVendor }: { onClose: () => void; initialVendor?: string }) {
   const t = useT();
   const updateState = useSyncExternalStore(
     subscribeUpstreamUpdate,
@@ -229,9 +255,20 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   );
   const { status, setStatus, loadError } = useKeyStatus();
   const [values, setValues] = useState<Values>({});
-  const { group, page, selectGroup, selectVendor } = useTreeSelection();
+  const { group, page, selectGroup, selectVendor } = useTreeSelection(initialVendor);
   const [reveal, setReveal] = useState(false);
-  const ctx = useFieldContext(status, values, setValues, reveal);
+  const refreshStatus = async (): Promise<void> => {
+    try {
+      const response = await fetch('/api/keys');
+      const next = (await response.json()) as KeyStatusResponse;
+      setStatus(next);
+      applySavedToAgent(next);
+    } catch {
+      // Keep the stale snapshot; the next save or dialog open refreshes it.
+    }
+  };
+  const ctx = useFieldContext(status, values, setValues, reveal, refreshStatus,
+    page.connection === 'copilot');
   useEffect(() => {
     if (!status?.models) return;
     syncTranscriptionPreferences(status.models);
@@ -239,6 +276,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, [status]);
   const { save, saving, msg, error } = useSaveKeys(values, (next) => {
     setStatus(next);
+    // Desktop: the main process owns the zoom factor; re-apply after the
+    // saved UI_SCALE changed so the change is visible immediately.
+    void window.openChatCutDesktop?.windowAction('apply-ui-scale');
     applySavedToAgent(next);
     // The status effect synchronizes all transcription runtime preferences.
     setValues({});
@@ -250,6 +290,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const updateAction = resolveUpstreamUpdateAction(updateState, hasDesktopUpdateSupport());
 
   const codexStatus = ctx.codex.status;
+  const copilotStatus = ctx.copilot.status;
 
   const shownError = error ?? loadError;
   const message = shownError ? { text: shownError, color: WARN }
@@ -275,12 +316,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </div>
         </header>
         <div style={bodyRow}>
-          <CapabilityTree status={status} codexStatus={codexStatus} activeGroup={group.key} onSelect={selectGroup} />
+          <CapabilityTree status={status} codexStatus={codexStatus} copilotStatus={copilotStatus}
+            activeGroup={group.key} onSelect={selectGroup} />
           <VendorList group={group} activeVendor={page.key} onSelectVendor={selectVendor} ctx={ctx} />
           <VendorPane page={page} hint={group.hint} ctx={ctx} />
         </div>
         <FooterBar reveal={reveal} onReveal={setReveal} message={message}
-          dirty={dirty} saving={saving} onClose={onClose} onSave={() => { void save(); }} />
+          dirty={dirty} saving={saving} onClose={requestClose} onSave={() => { void save(); }} />
       </div>
     </div>
   );
@@ -288,8 +330,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
 // ── Left column (categories can be folded → capabilities can be selected) ──────────────────────────────────────
 
-function CapabilityTree({ status, codexStatus, activeGroup, onSelect }: {
+function CapabilityTree({ status, codexStatus, copilotStatus, activeGroup, onSelect }: {
   status: KeyStatusResponse | null; codexStatus: CodexAgentStatus | null;
+  copilotStatus: CopilotAgentStatus | null;
   activeGroup: string; onSelect: (key: string) => void;
 }) {
   const t = useT();
@@ -305,6 +348,7 @@ function CapabilityTree({ status, codexStatus, activeGroup, onSelect }: {
       <div style={treeScroll}>
         {SETTINGS_CATEGORIES.map((cat) => (
           <TreeCategory key={cat.key} category={cat} status={status} codexStatus={codexStatus}
+            copilotStatus={copilotStatus}
             open={!collapsed.has(cat.key)} activeGroup={activeGroup}
             onToggle={() => toggle(cat.key)} onSelect={onSelect} />
         ))}
@@ -318,12 +362,13 @@ function CapabilityTree({ status, codexStatus, activeGroup, onSelect }: {
 
 interface TreeCategoryProps {
   category: SettingsCategory; status: KeyStatusResponse | null; codexStatus: CodexAgentStatus | null;
+  copilotStatus: CopilotAgentStatus | null;
   open: boolean; activeGroup: string; onToggle: () => void; onSelect: (key: string) => void;
 }
 
-function TreeCategory({ category, status, codexStatus, open, activeGroup, onToggle, onSelect }: TreeCategoryProps) {
+function TreeCategory({ category, status, codexStatus, copilotStatus, open, activeGroup, onToggle, onSelect }: TreeCategoryProps) {
   const t = useT();
-  const { done, total } = categoryGroupStats(status, category, codexStatus);
+  const { done, total } = categoryGroupStats(status, category, codexStatus, copilotStatus);
   return (
     <div>
       <button type="button" onClick={onToggle} title={open ? t('收起') : t('展开')} style={catRow}>
@@ -337,7 +382,7 @@ function TreeCategory({ category, status, codexStatus, open, activeGroup, onTogg
         </span>
       </button>
       {open && category.groups.map((g) => (
-        <GroupRow key={g.key} title={g.title} on={groupConfigured(status, g, codexStatus)}
+        <GroupRow key={g.key} title={g.title} on={groupConfigured(status, g, codexStatus, copilotStatus)}
           active={g.key === activeGroup} onSelect={() => onSelect(g.key)} />
       ))}
     </div>
@@ -367,7 +412,7 @@ function VendorList({ group, activeVendor, onSelectVendor, ctx }: {
     <div style={vendorCol}>
       {group.route && <div style={routeBox}><FieldRow field={group.route} ctx={ctx} /></div>}
       {group.vendors.map((p) => (
-        <VendorRow key={p.key} page={p} on={vendorConfigured(ctx.status, p, ctx.codex.status)}
+        <VendorRow key={p.key} page={p} on={vendorConfigured(ctx.status, p, ctx.codex.status, ctx.copilot.status)}
           active={p.key === activeVendor} onSelect={() => onSelectVendor(p.key)} />
       ))}
     </div>
@@ -381,7 +426,7 @@ function VendorRow({ page, on, active, onSelect }: {
   const [hovered, hoverProps] = useHover();
   return (
     <button type="button" onClick={onSelect} {...hoverProps} style={navRowStyle(active, hovered)}>
-      <VendorIcon vendor={page.vendor} size={15} />
+      {page.icon ? <Icon name={page.icon} size={15} /> : <VendorIcon vendor={page.vendor} size={15} />}
       <span style={navLabel}>{t(page.title)}</span>
       <span style={dot(on)} />
     </button>
@@ -414,74 +459,3 @@ function FooterBar({ reveal, onReveal, message, dirty, saving, onClose, onSave }
     </footer>
   );
 }
-
-// ── style ───────────────────────────────────────────────────────────
-
-/** Shared by left tree capability row/middle column provider row: selected accent left bar + panelAlt bottom. */
-function navRowStyle(active: boolean, hovered: boolean): React.CSSProperties {
-  return {
-    font: 'inherit', fontSize: 12, display: 'flex', alignItems: 'center', gap: 7,
-    width: '100%', padding: '6px 9px', borderRadius: 6, cursor: 'pointer', textAlign: 'left',
-    border: 'none', borderLeft: `2px solid ${active ? theme.accent : 'transparent'}`,
-    background: active || hovered ? theme.panelAlt : 'transparent',
-    color: active ? theme.text : theme.textDim,
-  };
-}
-
-function dot(on: boolean): React.CSSProperties {
-  return { width: 7, height: 7, borderRadius: '50%', background: on ? ON : theme.borderLight, flex: '0 0 auto' };
-}
-
-const overlay: React.CSSProperties = {
-  position: 'fixed', inset: 0, background: themeAlpha.shadow(0.62), display: 'grid', placeItems: 'center',
-  zIndex: 200, padding: 24, fontFamily: 'Geist, system-ui, -apple-system, sans-serif',
-};
-const panel: React.CSSProperties = {
-  width: 'min(940px, 100%)', height: 'min(640px, 86vh)', display: 'flex', flexDirection: 'column',
-    background: theme.panel, color: theme.text, border: `0.5px solid ${theme.border}`, borderRadius: 6,
-  boxShadow: `0 24px 64px ${themeAlpha.shadow(0.5)}`, overflow: 'hidden',
-};
-const head: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 16px 13px 20px', borderBottom: `0.5px solid ${theme.border}`,
-};
-const bodyRow: React.CSSProperties = { display: 'flex', flex: 1, minHeight: 0 };
-const sidebar: React.CSSProperties = {
-  width: TREE_WIDTH, flex: '0 0 auto', display: 'flex', flexDirection: 'column',
-  borderRight: `0.5px solid ${theme.border}`, overflow: 'hidden',
-};
-const treeScroll: React.CSSProperties = {
-  flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 8px',
-};
-const catRow: React.CSSProperties = {
-  font: 'inherit', fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
-  width: '100%', padding: '7px 9px 7px 7px', borderRadius: 6, cursor: 'pointer',
-  border: 'none', background: 'transparent', color: theme.text,
-};
-const chevronBox: React.CSSProperties = { display: 'inline-flex', color: theme.textDim, transition: 'transform 0.15s', flex: '0 0 auto' };
-const navLabel: React.CSSProperties = {
-  flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-};
-const sidebarNote: React.CSSProperties = {
-  margin: 0, padding: '10px 12px', fontSize: 10.5, lineHeight: 1.6, color: theme.textDim, borderTop: `0.5px solid ${theme.border}`,
-};
-const vendorCol: React.CSSProperties = {
-  width: VENDOR_COL_WIDTH, flex: '0 0 auto', minHeight: 0, overflowY: 'auto',
-  display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 8px', borderRight: `0.5px solid ${theme.border}`,
-};
-const routeBox: React.CSSProperties = { padding: '0 2px 10px', marginBottom: 6, borderBottom: `0.5px solid ${theme.border}` };
-const foot: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px 12px 20px', borderTop: `0.5px solid ${theme.border}`, background: theme.panel,
-};
-const footMsg: React.CSSProperties = {
-  flex: 1, minWidth: 0, textAlign: 'right', fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-};
-const revealLabel: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: theme.textDim, cursor: 'pointer', userSelect: 'none',
-};
-const licenseLink: React.CSSProperties = {
-  color: theme.textDim, fontSize: 11.5, textDecoration: 'underline', textUnderlineOffset: 2,
-};
-const iconBtn: React.CSSProperties = { background: 'none', border: 'none', color: theme.textDim, cursor: 'pointer', padding: 4, borderRadius: 5, display: 'inline-flex' };
-  const btnGhost: React.CSSProperties = { font: 'inherit', fontSize: 12.5, background: 'transparent', color: theme.text, border: `0.5px solid ${theme.border}`, borderRadius: 4, padding: '6px 13px', cursor: 'pointer' };
-  const btnPrimary: React.CSSProperties = { font: 'inherit', fontSize: 12.5, fontWeight: 600, background: theme.accent, color: theme.onAccent, border: 'none', borderRadius: 4, padding: '6px 16px' };
-const code: React.CSSProperties = { fontFamily: 'ui-monospace, monospace', fontSize: 10, background: theme.panelAlt, padding: '1px 4px', borderRadius: 4 };

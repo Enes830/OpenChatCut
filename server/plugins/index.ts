@@ -1,9 +1,11 @@
 // Server-side plugin assembly (single source of truth): native shared storage + key-gated connect middleware and respective keystores
-// Getter configuration, extracted from vite.config.ts as is. The two hosts share the same assembly and ensure the same API:
-// - vite.config.ts → dev server(vite mount)
+// Getter configuration, extracted from config/vite.config.ts as is. The two hosts share the same assembly and ensure the same API:
+// - config/vite.config.ts → dev server(vite mount)
 // - desktop/embedded-server.ts → Electron production shell (stub mounting)
 // Getter reads keystore immediately - the next request will take effect after the setting panel is saved, no need to restart.
 import type { Plugin } from "vite";
+import { crossOriginIsolationPlugin } from "./cross-origin-isolation.ts";
+import { storageLifecyclePlugin } from './storage-lifecycle.ts';
 import { projectStorePlugin } from "./project-store-plugin.ts";
 import { extensionStorePlugin } from "./extension-store.ts";
 import { exportPlugin } from "./export.ts";
@@ -25,6 +27,7 @@ import { autoGradePlugin } from "./auto-grade.ts";
 import { mediaPreviewPlugin } from "./media-preview.ts";
 import { isolateVoicePlugin } from "./isolate-voice.ts";
 import { normalizeMediaPlugin } from "./normalize-media.ts";
+import { probeMediaPlugin } from "./probe-media.ts";
 import { imageGenerationPlugin } from "./image.ts";
 import { voiceGenerationPlugin } from "./voice.ts";
 import { aiVoiceOptions, transcriptionOptions } from "./media-provider-config.ts";
@@ -42,16 +45,25 @@ import { skillInstallPlugin } from "./skill-install.ts";
 import { skillExecPlugin } from "./skill-exec.ts";
 import { externalAgentPlugin } from "./external-agent.ts";
 import { codexAgentPlugin } from "./codex-agent.ts";
+import { copilotAgentPlugin } from "./copilot-agent.ts";
+import { xaiOauthPlugin } from "./xai-oauth.ts";
 import { llmProxyPlugin } from "./llm-proxy.ts";
+import { agentRunsPlugin } from "../agent-runs/routes.ts";
 import { resourcePreviewPlugin } from "./resource-preview.ts";
 import { getKey } from "../keystore.ts";
 
 import { installSystemProxy } from '../net.ts';
+import { requestShapeGatePlugin } from './request-shape-gate';
 
 export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plugin[] {
   installSystemProxy();
   return [
+    requestShapeGatePlugin(),
+    crossOriginIsolationPlugin(),
+    storageLifecyclePlugin(),
     llmProxyPlugin(),
+    xaiOauthPlugin(),
+    agentRunsPlugin(),
     skillFilesPlugin(),
     skillInstallPlugin(),
     skillExecPlugin(),
@@ -64,6 +76,7 @@ export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plu
     extensionStorePlugin(),
     externalAgentPlugin(),
     codexAgentPlugin(),
+    copilotAgentPlugin(),
     settingsPlugin(),
     exportStagePlugin(),
     exportPlugin(),
@@ -84,6 +97,7 @@ export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plu
     mediaPreviewPlugin(),
     isolateVoicePlugin(),
     normalizeMediaPlugin(),
+    probeMediaPlugin(),
     imageGenerationPlugin({
       get baseUrl() {
         return getKey("IMAGE_BASE_URL") || "https://api.openai.com";
@@ -129,6 +143,15 @@ export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plu
       },
       get byteplusModel() {
         return getKey("BYTEPLUS_IMAGE_MODEL") || "seedream-4-5-251128";
+      },
+      get xaiBaseUrl() {
+        return getKey("LLM_XAI_BASE_URL") || "https://api.x.ai/v1";
+      },
+      get xaiApiKey() {
+        return getKey("LLM_XAI_API_KEY");
+      },
+      get xaiImageModel() {
+        return getKey("XAI_IMAGE_MODEL") || "grok-imagine-image-2.0";
       },
     }),
     voiceGenerationPlugin({
@@ -203,6 +226,12 @@ export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plu
       get model() {
         return getKey("ELEVENLABS_SOUND_MODEL") || "eleven_text_to_sound_v2";
       },
+      get soniloBaseUrl() {
+        return getKey("SONILO_BASE_URL") || "https://api.sonilo.com";
+      },
+      get soniloApiKey() {
+        return getKey("SONILO_API_KEY");
+      },
     }),
     musicGenerationPlugin({
       get baseUrl() {
@@ -222,6 +251,21 @@ export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plu
       },
       get minimaxModel() {
         return getKey("MINIMAX_MUSIC_MODEL") || "music-2.6";
+      },
+      get atlasBaseUrl() {
+        return getKey("ATLASCLOUD_API_BASE") || "https://api.atlascloud.ai/api/v1";
+      },
+      get atlasApiKey() {
+        return getKey("ATLASCLOUD_API_KEY");
+      },
+      get atlasModel() {
+        return getKey("ATLASCLOUD_MUSIC_MODEL") || "minimax/music-2.6";
+      },
+      get soniloBaseUrl() {
+        return getKey("SONILO_BASE_URL") || "https://api.sonilo.com";
+      },
+      get soniloApiKey() {
+        return getKey("SONILO_API_KEY");
       },
     }),
     videoGenerationPlugin({
@@ -260,6 +304,24 @@ export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plu
       },
       get byteplusApiKey() {
         return getKey("BYTEPLUS_API_KEY");
+      },
+      get xaiBaseUrl() {
+        return getKey("LLM_XAI_BASE_URL") || "https://api.x.ai/v1";
+      },
+      get xaiApiKey() {
+        return getKey("LLM_XAI_API_KEY");
+      },
+      get xaiVideoModel() {
+        return getKey("XAI_VIDEO_MODEL") || "grok-imagine-video-1.5";
+      },
+      get ofoxBaseUrl() {
+        return getKey("LLM_OFOX_BASE_URL") || "https://api.ofox.ai/v1";
+      },
+      get ofoxApiKey() {
+        return getKey("LLM_OFOX_API_KEY");
+      },
+      get ofoxVideoModel() {
+        return getKey("OFOX_VIDEO_MODEL") || "bytedance/seedance-2.0-fast";
       },
       get byteplusModel() {
         return getKey("BYTEPLUS_VIDEO_MODEL") || "seedance-1-5-pro-251215";

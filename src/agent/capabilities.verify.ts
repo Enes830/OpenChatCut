@@ -38,6 +38,10 @@ const mm = capabilitiesPrompt({ ...ALL_OFF, video: true, image: true, voice: tru
 assert.ok(mm.includes('Hailuo(model=hailuo)') && mm.includes('MiniMax(model=image-01)')
   && mm.includes('MiniMax(provider=minimax)'), 'one minimax key lights all its vendor rows');
 
+applyLiveKeyStatus({ ATLASCLOUD_API_KEY: { configured: true } });
+const atlas = capabilitiesPrompt({ ...ALL_OFF, music: true });
+assert.ok(atlas.includes('Atlas Cloud(provider=atlas)'), 'Atlas key lights the Atlas music route');
+
 // AND-group: doubao needs both keys
 applyLiveKeyStatus({ DOUBAO_TTS_APP_ID: { configured: true } });
 const half = capabilitiesPrompt({ ...ALL_OFF, voice: true });
@@ -81,5 +85,13 @@ assert.ok(autoMode.includes('guide them to Settings'), 'unconfigured capability 
 // ── tsx (no vite define): CONFIGURED_CAPS falls back to all-false without throwing ──
 assert.equal(typeof CONFIGURED_CAPS.image, 'boolean', 'CONFIGURED_CAPS resolves under tsx (all-false fallback, no ReferenceError)');
 assert.equal(CONFIGURED_CAPS.image, false, 'fallback is all-false outside Vite');
+
+applyLiveKeyStatus({ LLM_OFOX_API_KEY: { configured: true }, IMAGE_API_KEY: { configured: true } });
+applyLiveModels({ PREFERRED_VIDEO_VENDOR: 'ofox' });
+const ofox = capabilitiesPrompt({ ...ALL_OFF, video: true, image: true });
+assert.ok(ofox.includes('Video generation(submit_video · user default: OFox(model=ofox)'));
+assert.ok(ofox.includes('Image generation(submit_image · available: gpt-image(model=gpt-image-2) — use it directly)'));
+applyLiveKeyStatus({});
+assert.ok(!capabilitiesPrompt({ ...ALL_OFF, video: true }).includes('OFox(model=ofox)'), 'unconfigured OFox stays hidden');
 
 console.log('capabilities.verify: ok');

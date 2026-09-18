@@ -1,17 +1,46 @@
-import type { AgentRuntimeModule, LLMMessage, RuntimeGuardRequest } from './runtime';
-import type { GuardDecision } from './skills/costGuard';
-import { getLocale } from '../i18n/locale';
+import type * as AgentRuntime from './runtime';
+import type { LLMMessage } from './runtime';
+import type { AgentReference } from './context';
+import { getLocale, localeLanguageName } from '../i18n/locale';
+
+export interface AgentRetryOptions {
+  readonly askOnly?: boolean;
+  readonly references?: AgentReference[];
+}
+
+export interface AgentRetry extends AgentRetryOptions {
+  readonly text: string;
+}
 
 export interface DisplayMessage {
-  role: 'user' | 'assistant' | 'tool' | 'error' | 'continue';
+  /** `note`: a muted system line (e.g. which tool calls failed in a completed run); never sent to the model. */
+  role: 'user' | 'assistant' | 'tool' | 'error' | 'continue' | 'note';
   text: string;
   thinking?: string;
+  retry?: AgentRetry;
   tool?: { name: string; args: unknown; result: unknown };
 }
 
-export interface PendingGuard extends RuntimeGuardRequest {
-  resolve: (decision: GuardDecision) => void;
+export function createAgentRetry(
+  text: string,
+  options: AgentRetryOptions = {},
+): AgentRetry | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  return {
+    text: trimmed,
+    ...(options.askOnly ? { askOnly: true } : {}),
+    ...(options.references?.length ? { references: [...options.references] } : {}),
+  };
 }
+
+/** Backfill retry metadata for chats persisted before retry support existed. */
+export function ensureAgentRetryMetadata(messages: readonly DisplayMessage[]): DisplayMessage[] {
+  return messages.map((message) => message.role !== 'user' || message.retry
+    ? message
+    : { ...message, retry: createAgentRetry(message.text) });
+}
+
 
 export interface LiveTool {
   name: string;
@@ -19,10 +48,10 @@ export interface LiveTool {
 }
 // Deliberate lazy boundary: loading the chat shell must not eagerly load the AI SDK/runtime.
 
-const importAgentRuntime = async (): Promise<AgentRuntimeModule> => import('./runtime');
-let agentRuntimePromise: Promise<AgentRuntimeModule> | null = null;
+const importAgentRuntime = async (): Promise<typeof AgentRuntime> => import('./runtime');
+let agentRuntimePromise: Promise<typeof AgentRuntime> | null = null;
 
-export function preloadAgentRuntime(): Promise<AgentRuntimeModule> {
+export function preloadAgentRuntime(): Promise<typeof AgentRuntime> {
   if (!agentRuntimePromise) {
     agentRuntimePromise = importAgentRuntime().catch((error: unknown) => {
       agentRuntimePromise = null;
@@ -42,7 +71,7 @@ export async function enhanceAgentPrompt(draft: string): Promise<string> {
   try {
     // Deliberate lazy boundary: the prompt enhancer must not load provider SDKs before first use.
     const { generateAgentText } = await import('./client');
-    const language = getLocale() === 'zh' ? 'Chinese' : 'English';
+    const language = localeLanguageName(getLocale());
     const output = (await generateAgentText({
       maxOutputTokens: 400,
       system: `You improve rough or conversational video-editing requests into one clear, specific, directly executable instruction. Write the instruction in ${language}, matching the selected interface language. Output only the rewritten instruction without explanation, quotation marks, or line breaks.`,

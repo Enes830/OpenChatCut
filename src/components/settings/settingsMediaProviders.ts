@@ -1,5 +1,5 @@
 import {
-  modelSelect,
+  modelPicker,
   modelText,
   routeSelect,
   secret,
@@ -20,11 +20,13 @@ const COMMON_TRANSCRIPTION_FIELDS: readonly SettingsField[] = [
     options: [
       { value: 'zh', label: '中文（zh）' },
       { value: 'en', label: '英语（en）' },
+      { value: 'it', label: '意大利语（it）' },
       { value: 'ja', label: '日语（ja）' },
       { value: 'ko', label: '韩语（ko）' },
       { value: 'es', label: '西班牙语（es）' },
       { value: 'fr', label: '法语（fr）' },
       { value: 'de', label: '德语（de）' },
+      { value: 'ru', label: '俄语（ru）' },
     ],
   },
   {
@@ -35,6 +37,18 @@ const COMMON_TRANSCRIPTION_FIELDS: readonly SettingsField[] = [
     options: [
       { value: '1', label: '启用' },
       { value: '0', label: '停用' },
+    ],
+  },
+  {
+    name: 'AUTO_TRANSCRIBE_INGEST',
+    label: '导入后自动转写',
+    kind: 'select',
+    defaultLabel: '仅本地引擎（免费）',
+    note: '素材进入媒体池后是否立即转写。本地 Whisper 免费且在本机运行；云端付费供应商建议保持关闭或手动转写。',
+    options: [
+      { value: 'off', label: '关闭（手动转写）' },
+      { value: 'local', label: '仅本地引擎（免费）' },
+      { value: 'all', label: '全部引擎（含云端付费）' },
     ],
   },
 ];
@@ -53,7 +67,7 @@ const transcriptionPage = (
   fields: [...fields, ...COMMON_TRANSCRIPTION_FIELDS],
 });
 
-const localAsrPage = transcriptionPage('local', 'localasr', '本地模型（whisper）', [
+export const localAsrPage = transcriptionPage('local', 'localasr', '本地模型（whisper）', [
   {
     name: 'LOCAL_ASR_MODEL',
     label: '默认模型',
@@ -65,6 +79,7 @@ const localAsrPage = transcriptionPage('local', 'localasr', '本地模型（whis
       { value: 'base', label: 'Whisper Base（约 80MB · 均衡）' },
       { value: 'small', label: 'Whisper Small（约 250MB · 推荐）' },
       { value: 'medium', label: 'Whisper Medium（约 1.1GB · 精度最高）' },
+      { value: 'large-v3-turbo', label: 'Whisper Large v3 Turbo（约 1.1GB · 多语言最强）' },
     ],
   },
 ], '转写在本机完成：免费、离线、素材不出本机。模型按需下载（见下方列表），自动选择设备优势后端：WebGPU 不可用时回退 CPU。本地转写不含说话人分离（全部归为同一位说话人）。');
@@ -92,7 +107,7 @@ export const VOICE_SETTINGS_GROUP: SettingsGroup = {
       fields: [
         secret('ELEVENLABS_API_KEY', 'API Key'),
         text('ELEVENLABS_BASE_URL', 'Base URL', '默认 https://api.elevenlabs.io'),
-        modelSelect('ELEVENLABS_TTS_MODEL', '配音模型', 'eleven_multilingual_v2',
+        modelPicker('ELEVENLABS_TTS_MODEL', '配音模型', 'eleven_multilingual_v2',
           ['eleven_multilingual_v2', 'eleven_turbo_v2_5', 'eleven_flash_v2_5']),
         modelText('ELEVENLABS_SOUND_MODEL', '音效模型', 'eleven_text_to_sound_v2'),
       ],
@@ -109,7 +124,7 @@ export const VOICE_SETTINGS_GROUP: SettingsGroup = {
       key: 'voice/minimax', vendor: 'minimax', title: 'MiniMax', note: MINIMAX_NOTE, fields: [
         secret('MINIMAX_API_KEY', 'API Key'),
         text('MINIMAX_BASE_URL', 'Base URL', '默认 https://api.minimaxi.com'),
-        modelSelect('MINIMAX_TTS_MODEL', '配音模型', 'speech-2.6-hd',
+        modelPicker('MINIMAX_TTS_MODEL', '配音模型', 'speech-2.6-hd',
           ['speech-2.6-hd', 'speech-2.8-hd', 'speech-2.8-turbo', 'speech-2.6-turbo', 'speech-02-hd', 'speech-02-turbo']),
       ],
     },
@@ -131,7 +146,7 @@ export const VOICE_SETTINGS_GROUP: SettingsGroup = {
       key: 'voice/speechify', vendor: 'speechify', title: 'Speechify', fields: [
         secret('SPEECHIFY_TTS_API_KEY', 'API Key'),
         text('SPEECHIFY_TTS_BASE_URL', 'Base URL', '默认 https://api.sws.speechify.com'),
-        modelSelect('SPEECHIFY_TTS_MODEL', '配音模型', 'simba-multilingual',
+        modelPicker('SPEECHIFY_TTS_MODEL', '配音模型', 'simba-multilingual',
           ['simba-multilingual', 'simba-english', 'simba-3.2']),
       ],
     },
@@ -216,6 +231,9 @@ export const ROUTE_NEEDS: Record<string, readonly (readonly string[])[]> = {
   'gpt-image-2': [['IMAGE_API_KEY'], ['OPENAI_API_KEY']],
   'nano-banana': [['GEMINI_API_KEY']],
   'image-01': [['MINIMAX_API_KEY']],
+  'grok-imagine': [['LLM_XAI_OAUTH_API_KEY'], ['LLM_XAI_API_KEY']],
+  'grok-imagine-video': [['LLM_XAI_OAUTH_API_KEY'], ['LLM_XAI_API_KEY']],
+  ofox: [['LLM_OFOX_API_KEY']],
   elevenlabs: [['ELEVENLABS_API_KEY']],
   doubao: [['DOUBAO_TTS_APP_ID', 'DOUBAO_TTS_ACCESS_KEY']],
   minimax: [['MINIMAX_API_KEY']],
@@ -231,4 +249,6 @@ export const ROUTE_NEEDS: Record<string, readonly (readonly string[])[]> = {
   kling: [['KLING_API_KEY']],
   hailuo: [['MINIMAX_API_KEY']],
   mureka: [['MUREKA_API_KEY']],
+  atlas: [['ATLASCLOUD_API_KEY']],
+  sonilo: [['SONILO_API_KEY']],
 };

@@ -4,6 +4,7 @@
 // Security invariant: The result only contains ok / message / status / latencyMs, and never echoes any key value;
 // The provider's error copy is flattened and truncated before entering the message. Align the endpoints and authentication headers of each vite-plugin-* one by one
 // Real call writing method (beanbao three header / MiniMax base_resp / Gemini x-goog-api-key...).
+import { proxyDispatcher } from './outbound-proxy.ts';
 import { getKey, KEY_NAMES, type KeyName } from './keystore.ts';
 import { r2Probe } from './r2.ts';
 import { mediaDirProbe, mediaDirPostCheck, mediaDirOkText } from './media-dir.ts';
@@ -19,14 +20,49 @@ import {
   type LlmProvider,
 } from '../shared/llm-providers.ts';
 import { versionedApiBaseUrl } from './plugins/media-provider-config.ts';
+import { xaiOauthAccessToken } from './xai-oauth-session.ts';
+import {
+  classifyStatus,
+  networkMessage,
+  sanitizeProbeText,
+  type ProbeResult,
+} from './key-probe-result.ts';
+import { PROBE_TIMEOUT_MS, runDataDirProbe, runProxyProbe } from './key-probe-local.ts';
+export { classifyStatus, networkMessage, type ProbeResult } from './key-probe-result.ts';
+export { runDataDirProbe, runProxyProbe } from './key-probe-local.ts';
+// Proxy-aware fetch: attaches the configured outbound proxy (keystore
+// PROXY_URL or HTTPS_PROXY/HTTP_PROXY env) via undici dispatcher.
+type FetchInit = Parameters<typeof fetch>[1] & { dispatcher?: unknown };
 
-export interface ProbeResult {
-  ok: boolean;
-  message: string;
-  status?: number;
-  latencyMs?: number;
-  models?: string[];
+// Probes send REAL stored credentials to a user/agent-settable base URL.
+// Loopback and private hosts stay allowed (local models and LAN gateways are
+// legitimate), but cloud metadata / link-local targets and credential-bearing
+// or non-http(s) URLs never are — those only appear in SSRF exfil attempts.
+export function probeUrlError(url: RequestInfo | URL): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(String(url));
+  } catch {
+    return '探测地址不是合法 URL';
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return `探测地址协议不支持:${parsed.protocol}`;
+  }
+  if (parsed.username || parsed.password) return '探测地址不允许携带内嵌凭据';
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(host) || host.startsWith('fe80:')
+    || host === 'metadata.google.internal') {
+    return '探测地址指向云元数据/链路本地网段,已拒绝';
+  }
+  return null;
 }
+
+const fetchWithProxy = (url: RequestInfo | URL, init?: FetchInit): Promise<Response> => {
+  const unsafe = probeUrlError(url);
+  if (unsafe) return Promise.reject(new Error(unsafe));
+  return fetch(url, { ...init, dispatcher: proxyDispatcher() } as RequestInit);
+};
+
 
 type Get = (name: KeyName) => string;
 
@@ -42,8 +78,7 @@ interface ProbeDef {
   readonly models?: (bodyText: string) => string[];
 }
 
-const TIMEOUT_MS = 12_000;
-const t = (): AbortSignal => AbortSignal.timeout(TIMEOUT_MS);
+const t = (): AbortSignal => AbortSignal.timeout(PROBE_TIMEOUT_MS);
 const base = (get: Get, name: KeyName, def: string): string => (get(name) || def).replace(/\/+$/, '');
 const bearer = (key: string): Record<string, string> => ({ Authorization: `Bearer ${key}` });
 function llmProbe(provider: LlmProvider): ProbeDef {
@@ -62,7 +97,7 @@ function llmProbe(provider: LlmProvider): ProbeDef {
           ? { 'x-goog-api-key': key }
           : key ? bearer(key) : {};
       const root = resolveLlmBaseUrl(provider, get(baseUrlName), AI_SDK_BASE_URL_FORMAT);
-      return fetch(`${root}/models`, { signal: t(), headers });
+      return fetchWithProxy(`${root}/models`, { signal: t(), headers });
     },
     models: parseModelCatalog,
   };
@@ -87,7 +122,7 @@ export function parseModelCatalog(bodyText: string): string[] {
 
 /** The provider's error copy is flattened before entering the results: line breaks and truncation are removed. Never splice any key values.*/
 export function sanitize(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().slice(0, 140);
+  return sanitizeProbeText(text);
 }
 
 /** MiniMax: HTTP 200 may also cause authentication failure, the truth is in base_resp.status_code(0 = success).*/
@@ -114,6 +149,27 @@ const minimaxProbe: ProbeDef = {
     body: JSON.stringify({ voice_type: 'voice_cloning' }),
   }),
   postCheck: minimaxPostCheck,
+};
+
+const atlasMusicProbe: ProbeDef = {
+  needs: [['ATLASCLOUD_API_KEY']],
+  run: async (get) => {
+    const root = base(get, 'ATLASCLOUD_API_BASE', 'https://api.atlascloud.ai/api/v1');
+    const response = await fetchWithProxy(`${root}/model/prediction/openchatcut-credential-probe`, {
+      signal: t(), headers: bearer(get('ATLASCLOUD_API_KEY')),
+    });
+    if (response.status !== 404) return response;
+    const body = await response.text().catch(() => '');
+    try {
+      const payload = JSON.parse(body) as { code?: number; message?: string };
+      if (payload.code === 404 && payload.message === 'not found') {
+        return new Response('{"authenticated":true}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+    } catch {
+      // Preserve an unrecognized 404 so the common classifier reports a bad Base URL.
+    }
+    return new Response(body, { status: 404, headers: response.headers });
+  },
 };
 
 // BytePlus ModelArk: one account/key serves image (Seedream) and video (Seedance) alike —
@@ -161,6 +217,19 @@ const groqProbe: ProbeDef = {
   }),
 };
 
+/** xAI media pages: one probe for image and video; the subscription session
+ * token takes priority over the configured LLM API key. */
+const xaiMediaProbe: ProbeDef = {
+  needs: [['LLM_XAI_OAUTH_API_KEY'], ['LLM_XAI_API_KEY']],
+  run: (get) => {
+    const token = xaiOauthAccessToken() || get('LLM_XAI_API_KEY');
+    return fetchWithProxy(`${base(get, 'LLM_XAI_BASE_URL', 'https://api.x.ai/v1')}/models`, {
+      signal: t(), headers: token ? bearer(token) : {},
+    });
+  },
+  models: parseModelCatalog,
+};
+
 const elevenLabsProbe: ProbeDef = {
   needs: [['ELEVENLABS_API_KEY']],
   run: (get) => fetch(`${base(get, 'ELEVENLABS_BASE_URL', 'https://api.elevenlabs.io')}/v1/models`, {
@@ -195,6 +264,7 @@ export const PROBES: Record<string, ProbeDef> = {
   'image/gemini': geminiMediaProbe,
   'image/minimax': minimaxProbe,
   'image/byteplus': byteplusProbe,
+  'image/xai': xaiMediaProbe,
   'image/wavespeed': {
     needs: [['WAVESPEED_API_KEY']],
     run: (get) => fetch(`${base(get, 'WAVESPEED_BASE_URL', 'https://api.wavespeed.ai')}/api/v3/balance`, {
@@ -259,6 +329,14 @@ export const PROBES: Record<string, ProbeDef> = {
   },
   'video/hailuo': minimaxProbe,
   'video/byteplus': byteplusProbe,
+  'video/xai': xaiMediaProbe,
+  'video/ofox': {
+    needs: [['LLM_OFOX_API_KEY']],
+    run: (get) => fetch(`${base(get, 'LLM_OFOX_BASE_URL', 'https://api.ofox.ai/v1')}/models`, {
+      signal: t(), headers: bearer(get('LLM_OFOX_API_KEY')),
+    }),
+    models: parseModelCatalog,
+  },
   'music/mureka': {
     needs: [['MUREKA_API_KEY']],
     run: (get) => fetch(`${base(get, 'MUREKA_BASE_URL', 'https://api.mureka.ai')}/v1/account/billing`, {
@@ -266,6 +344,15 @@ export const PROBES: Record<string, ProbeDef> = {
     }),
   },
   'music/minimax': minimaxProbe,
+  'music/atlas': atlasMusicProbe,
+  // Read-only account endpoint; fake key → 401. The same key also serves
+  // /generate/sound (video-to-SFX), so one probe covers both capabilities.
+  'music/sonilo': {
+    needs: [['SONILO_API_KEY']],
+    run: (get) => fetch(`${base(get, 'SONILO_BASE_URL', 'https://api.sonilo.com')}/v1/account/services`, {
+      signal: t(), headers: bearer(get('SONILO_API_KEY')),
+    }),
+  },
   // /v1/search has been opened to anonymous users (the measured number is 200 without key), and the key; collections cannot be detected
   // It is the account binding endpoint, and the fake key is stable 401.
   'stock/pexels': {
@@ -279,7 +366,7 @@ export const PROBES: Record<string, ProbeDef> = {
     needs: [['PIXABAY_API_KEY']],
     run: (get) => {
       const params = new URLSearchParams({ key: get('PIXABAY_API_KEY'), q: 'sky', per_page: '3' });
-      return fetch(`https://pixabay.com/api/?${params.toString()}`, { signal: t() });
+      return fetchWithProxy(`https://pixabay.com/api/?${params.toString()}`, { signal: t() });
     },
   },
   // Unsplash: The search endpoint requires Client-ID, fake key 401.
@@ -294,7 +381,7 @@ export const PROBES: Record<string, ProbeDef> = {
     needs: [['FREESOUND_API_KEY']],
     run: (get) => {
       const params = new URLSearchParams({ query: 'wind', page_size: '1', fields: 'id', token: get('FREESOUND_API_KEY') });
-      return fetch('https://freesound.org/apiv2/search/text/?' + params.toString(), { signal: t() });
+      return fetchWithProxy('https://freesound.org/apiv2/search/text/?' + params.toString(), { signal: t() });
     },
   },
   'transcription/assemblyai': {
@@ -337,33 +424,6 @@ export const PROBES: Record<string, ProbeDef> = {
   },
 };
 
-/** Non-2xx status → Conclusion that users can understand (authentication/address/current limiting/others). */
-export function classifyStatus(status: number, bodyText: string): ProbeResult {
-  if (status === 401 || status === 403) {
-    return { ok: false, status, message: `鉴权失败（HTTP ${status}）· Key 无效、过期或无此接口权限` };
-  }
-  if (status === 404) {
-    return { ok: false, status, message: '探测端点 404 · Base URL 可能填错（或该服务不认此探测路径）' };
-  }
-  if (status === 429) {
-    return { ok: true, status, message: '鉴权通过（HTTP 429 限流，说明 Key 有效）' };
-  }
-  const detail = sanitize(bodyText);
-  return { ok: false, status, message: `HTTP ${status}${detail ? ` · ${detail}` : ''}` };
-}
-
-/** Network layer failure (unable to connect/timeout) ≠ Key error, the text clearly distinguishes it, and prompts that a proxy may be required. */
-export function networkMessage(error: unknown): string {
-  const raw = error instanceof Error
-    ? `${error.name}: ${error.message}${error.cause instanceof Error ? `（${error.cause.message}）` : ''}`
-    : String(error);
-  // Note: undici comes with a 10s connection timeout, which is often triggered before our 12s overall gate, and does not write a dead number of seconds.
-  if (/timeout|abort/i.test(raw)) {
-    return '连接超时 · 服务不可达或网络受限（可能需代理），不代表 Key 错误';
-  }
-  return `网络不可达 · ${sanitize(raw)} · 本机连不上该服务（可能需代理），不代表 Key 错误`;
-}
-
 /** Temporarily stored overrides (in the whitelist, the empty string represents clearing for this test) overwrite the stored value.*/
 export function makeGetter(overrides: Record<string, unknown>): Get {
   const clean = new Map<string, string>();
@@ -379,6 +439,10 @@ export function makeGetter(overrides: Record<string, unknown>): Get {
 
 /** Run a connectivity probe of the provider's page. Unconfigured/unknown pages are returned before sending a request and do not hit the network.*/
 export async function runProbe(page: string, overrides: Record<string, unknown>): Promise<ProbeResult> {
+  if (page === 'agent/proxy') return runProxyProbe(overrides);
+  // The storage root is not a keystore key (makeGetter would drop it), so its
+  // writability check reads the panel's raw value directly.
+  if (page === 'storage/projects') return runDataDirProbe(overrides);
   const probe = PROBES[page];
   if (!probe) return { ok: false, message: '该厂商暂不支持连接测试' };
   const get = makeGetter(overrides);

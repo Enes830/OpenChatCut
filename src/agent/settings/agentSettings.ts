@@ -1,13 +1,19 @@
+import {
+  isTranscriptionProviderId,
+  type TranscriptionProviderId,
+} from '../../transcript/types';
 // Agent settings that actually change code paths (not soft prompt hints).
-// Cost guard: high-cost tools (generation/export/transcription/web/sandbox)
-// confirm before execution in Ask mode; YOLO/auto mode skips confirmation
-// (the user opted into unapproved paid execution).
+// Ask/YOLO controls proposal application and prompt behavior; built-in tools
+// execute directly in both modes.
 
 /** MG generates three levels of quality. */
 export type MgTier = 'speed' | 'balance' | 'quality';
 export const MG_TIERS: readonly MgTier[] = ['speed', 'balance', 'quality'];
 export type AgentCacheMode = 'short' | 'long';
 export const AGENT_CACHE_MODES: readonly AgentCacheMode[] = ['short', 'long'];
+export const DEFAULT_ACCEPTANCE_ITERATIONS = 3;
+export const MIN_ACCEPTANCE_ITERATIONS = 1;
+export const MAX_ACCEPTANCE_ITERATIONS = 10;
 
 
 export interface AgentSettings {
@@ -17,6 +23,12 @@ export interface AgentSettings {
   planMode: boolean;
   /** Provider prompt-cache duration: short sessions favor the default TTL; long sessions request 1h where supported. */
   cacheMode: AgentCacheMode;
+  /** Opt-in: run the Agent loop on the local server so browser refreshes do not interrupt it. */
+  serverRun: boolean;
+  /** Opt-in settled-turn verification after the Agent changes project state. */
+  autonomousAcceptance: boolean;
+  /** Maximum verification passes before the run reports an unverified result. */
+  maxAcceptanceIterations: number;
 }
 
 const KEY = 'cc.agentSettings.v1';
@@ -25,7 +37,19 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   mgTier: 'balance',
   planMode: false,
   cacheMode: 'short',
+  serverRun: true,
+  autonomousAcceptance: false,
+  maxAcceptanceIterations: DEFAULT_ACCEPTANCE_ITERATIONS,
 };
+
+export function normalizeAcceptanceIterations(value: unknown): number {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= MIN_ACCEPTANCE_ITERATIONS
+    && value <= MAX_ACCEPTANCE_ITERATIONS
+    ? value
+    : DEFAULT_ACCEPTANCE_ITERATIONS;
+}
 
 export function loadAgentSettings(): AgentSettings {
   try {
@@ -38,6 +62,9 @@ export function loadAgentSettings(): AgentSettings {
       cacheMode: AGENT_CACHE_MODES.includes(parsed.cacheMode as AgentCacheMode)
         ? parsed.cacheMode as AgentCacheMode
         : DEFAULT_AGENT_SETTINGS.cacheMode,
+      serverRun: true, // server-side execution is the only Agent path (issue-less refactor); stored/old false is ignored.
+      autonomousAcceptance: parsed.autonomousAcceptance === true,
+      maxAcceptanceIterations: normalizeAcceptanceIterations(parsed.maxAcceptanceIterations),
     };
   } catch {
     return { ...DEFAULT_AGENT_SETTINGS };
@@ -160,95 +187,18 @@ export function createInlineThinkingExtractor(): {
   };
 }
 
-/** Tools that cost money / long GPU / irreversible export (gated at runtime).
- * Names match live TOOL_SCHEMAS plus persisted legacy aliases.
- * Keep this list exhaustive: every paid API surface must be here —
- * generation (image/video/music/sound/voice/MG), shaders, export, reruns,
- * paid transcription (AssemblyAI), paid web scraping (Firecrawl), and the
- * paid sandbox (E2B). costGuard.verify.ts guards this invariant. */
-export const HIGH_COST_TOOLS: Readonly<Record<string, true>> = {
-  submit_image: true,
-  submit_video: true,
-  submit_music: true,
-  submit_sound: true,
-  submit_voice: true,
-  submit_motion_graphic: true,
-  create_motion_graphic: true,
-  create_motion_graphic_from_code: true,
-  submit_shader: true,
-  rerun_generation: true,
-  submit_export: true,
-  submit_render_job: true,
-  export_timeline: true,
-  export_motion_graphic_prores: true,
-  convert_motion_graphic_to_video: true,
-  submit_image_generation: true,
-  submit_video_generation: true,
-  submit_music_generation: true,
-  submit_sound_generation: true,
-  submit_voice_generation: true,
-  generate_image: true,
-  generate_video: true,
-  generate_music: true,
-  generate_voice: true,
-  generate_sound: true,
-  // paid transcription (AssemblyAI, per-minute)
-  transcribe_track: true,
-  // paid web scraping (Firecrawl, per-page)
-  web_browser: true,
-  web_search: true,
-  web_map: true,
-  web_crawl: true,
-  web_batch_scrape: true,
-  // paid sandbox (E2B, per-second)
-  run_code: true,
-};
-
-export function isHighCostTool(name: string): boolean {
-  return HIGH_COST_TOOLS[name] === true;
-}
-
-/**
- * Local (on-device) transcription is free; only the cloud AssemblyAI path makes
- * transcribe_track a paid tool. Reads the same flag the provider router uses
- * (cc.transcriptionProvider); missing/unknown storage falls back to paid.
- */
-export function transcriptionIsPaid(): boolean {
-  try {
-    return (globalThis.localStorage?.getItem('cc.transcriptionProvider') ?? 'assemblyai') !== 'local';
-  } catch {
-    return true;
+/** Resolve the transcription provider that will actually receive this invocation.
+ * Tool arguments have precedence over the saved setting. */
+export function effectiveTranscriptionProvider(
+  args?: Readonly<Record<string, unknown>>,
+): TranscriptionProviderId {
+  if (args?.provider !== undefined) {
+    return isTranscriptionProviderId(args.provider) ? args.provider : 'assemblyai';
   }
-}
-
-export type CostGuardCategory =
-  | 'image-gen'
-  | 'motion-graphic-gen'
-  | 'video-gen'
-  | 'audio-gen'
-  | 'gpu-operation'
-  | 'irreversible-export'
-  | 'high-cost-operation';
-
-/** Every HIGH_COST_TOOLS entry has a runtime guard; known categories retain tailored copy. */
-export function costCategoryForTool(tool: string): CostGuardCategory | null {
-  if (tool === 'submit_image' || tool === 'generate_image' || tool === 'submit_image_generation') return 'image-gen';
-  if (
-    tool === 'submit_motion_graphic' || tool === 'create_motion_graphic'
-    || tool === 'create_motion_graphic_from_code'
-  ) return 'motion-graphic-gen';
-  if (tool === 'submit_video' || tool === 'generate_video' || tool === 'submit_video_generation') return 'video-gen';
-  if (
-    tool === 'submit_music' || tool === 'submit_sound' || tool === 'submit_voice'
-    || tool === 'generate_music' || tool === 'generate_sound' || tool === 'generate_voice'
-    || tool === 'submit_music_generation' || tool === 'submit_sound_generation' || tool === 'submit_voice_generation'
-  ) return 'audio-gen';
-  if (tool === 'submit_shader') return 'gpu-operation';
-  if (
-    tool === 'submit_export' || tool === 'submit_render_job' || tool === 'export_timeline'
-    || tool === 'export_motion_graphic_prores' || tool === 'convert_motion_graphic_to_video'
-  ) return 'irreversible-export';
-  // Local transcription is free — no confirmation card when the on-device model is active.
-  if (tool === 'transcribe_track' && !transcriptionIsPaid()) return null;
-  return isHighCostTool(tool) ? 'high-cost-operation' : null;
+  try {
+    const saved = globalThis.localStorage?.getItem('cc.transcriptionProvider');
+    return isTranscriptionProviderId(saved) ? saved : 'assemblyai';
+  } catch {
+    return 'assemblyai';
+  }
 }

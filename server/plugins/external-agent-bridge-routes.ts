@@ -1,19 +1,29 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import {
+  EXTERNAL_AGENT_CONTROL_BODY_LIMIT_BYTES,
+  EXTERNAL_AGENT_RESULT_BODY_LIMIT_BYTES,
+} from '../../shared/external-agent-limits.ts';
 import type {
   nextEditorCall,
   nextEditorCancellation,
+  editorCallBinding,
   editorRegistrationMatches,
   registerEditor,
   settleEditorCall,
+  touchEditor,
   unregisterEditor,
   ExternalCallTerminalOutcome,
   ExternalToolSchema,
 } from '../external-agent/broker.ts';
 import type { mcpTools } from '../external-agent/mcp.ts';
-import { consumeUploadReceipt, mintImportUpload } from '../external-agent/import-token.ts';
+import {
+  abortUploadReceipt,
+  claimUploadReceipt,
+  commitUploadReceipt,
+  mintImportUpload,
+} from '../external-agent/import-token.ts';
 import type { claimBrowserProjectOwnership } from '../external-agent/project-edit-ownership.ts';
 
-const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REGISTRATION_CAPABILITY_HEADER = 'x-openchatcut-editor-registration';
 
 function registrationCapability(req: IncomingMessage, required: boolean): string | null {
@@ -37,16 +47,24 @@ export interface BridgeOperations {
   nextEditorCall: typeof nextEditorCall;
   nextEditorCancellation: typeof nextEditorCancellation;
   settleEditorCall: typeof settleEditorCall;
+  editorCallBinding: typeof editorCallBinding;
+  touchEditor: typeof touchEditor;
   mcpTools: typeof mcpTools;
 }
 
-export async function readBridgeJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+export async function readBridgeJson(
+  req: IncomingMessage,
+  options: { resultBody?: boolean } = {},
+): Promise<Record<string, unknown>> {
+  const maxBodyBytes = options.resultBody
+    ? EXTERNAL_AGENT_RESULT_BODY_LIMIT_BYTES
+    : EXTERNAL_AGENT_CONTROL_BODY_LIMIT_BYTES;
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
-    if (total > MAX_BODY_BYTES) throw new Error('request body too large');
+    if (total > maxBodyBytes) throw new Error('request body too large');
     chunks.push(buffer);
   }
   const text = Buffer.concat(chunks).toString('utf8') || '{}';
@@ -113,29 +131,32 @@ async function registerBridgeEditor(
 ): Promise<void> {
   const input = registrationInput(await readBridgeJson(req));
   const capability = registrationCapability(req, false);
+  // A matching registration capability marks a legitimate renewal from the
+  // currently connected runtime. A reload or different window with a
+  // missing/mismatched capability is no longer blocked —
+  // that window simply takes over (single-window desktop has no cross-window
+  // exclusivity). Stale-revision protection below still prevents clobbering.
   const renewing = capability !== null && operations.editorRegistrationMatches(
     input.projectId,
     input.editorId,
     capability,
   );
-  if (capability && !renewing) {
-    sendBridgeJson(res, 409, { error: 'editor registration is stale or owned by another session' });
-    return;
-  }
   const claimed = await operations.claimBrowserOwnership(
     input.projectId,
     input.editorId,
     input.baseRevision,
     renewing,
   );
+  if (claimed.status === 'stale') {
+    sendBridgeJson(res, 409, {
+      error: 'project changed after the browser loaded it',
+      currentRevision: claimed.currentRevision,
+      reloadRequired: true,
+    });
+    return;
+  }
   if (claimed.status !== 'claimed') {
-    sendBridgeJson(res, 409, claimed.status === 'stale'
-      ? {
-        error: 'project changed after the browser loaded it',
-        currentRevision: claimed.currentRevision,
-        reloadRequired: true,
-      }
-      : { error: 'project is already owned or its ownership record is invalid' });
+    sendBridgeJson(res, 409, { error: 'project is already owned or its ownership record is invalid' });
     return;
   }
   const issuedCapability = operations.registerEditor(
@@ -236,7 +257,7 @@ async function settleBridgeCall(
   res: ServerResponse,
   operations: BridgeOperations,
 ): Promise<void> {
-  const body = await readBridgeJson(req);
+  const body = await readBridgeJson(req, { resultBody: true });
   if (typeof body.id !== 'string') throw new Error('invalid tool result');
   const outcome = validOutcome(body.outcome)
     ? body.outcome
@@ -246,25 +267,64 @@ async function settleBridgeCall(
         ? 'failed'
         : null;
   if (!outcome) throw new Error('invalid tool result outcome');
+  const capability = registrationCapability(req, true);
+  const binding = operations.editorCallBinding(body.id);
   const settled = operations.settleEditorCall(
     body.id,
     outcome,
     body.value,
-    registrationCapability(req, true),
+    capability,
   );
+  if (settled && binding && typeof body.baseRevision === 'string' && body.baseRevision) {
+    // The editor just committed the tool's mutation; sync the registry to the
+    // post-tool revision so a follow-up MCP session binds to the current
+    // snapshot instead of being rejected as stale by the previous one.
+    await operations.touchEditor(
+      binding.projectId,
+      binding.editorInstanceId,
+      body.baseRevision,
+      capability,
+    ).catch(() => undefined);
+  }
   sendBridgeJson(res, settled ? 200 : 404, settled
     ? { ok: true }
     : { error: 'editor call is unavailable' });
 }
 
-async function consumeBridgeReceipt(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleBridgeReceipt(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readBridgeJson(req);
-  const receipt = consumeUploadReceipt(body.receipt, body.projectId);
-  if (!receipt) {
-    sendBridgeJson(res, 409, { error: 'upload receipt is invalid, expired, consumed, or outside this project' });
+  if (body.action === 'claim') {
+    const claimed = claimUploadReceipt(body.receipt, body.projectId, body.claimId);
+    if (claimed.status !== 'accepted') {
+      sendBridgeJson(res, 409, {
+        error: claimed.status === 'claimed'
+          ? 'upload receipt is already being finalized'
+          : 'upload receipt is invalid, expired, consumed, or outside this project',
+      });
+      return;
+    }
+    sendBridgeJson(res, 200, {
+      ...claimed.value,
+      claimId: claimed.claimId,
+      claimExpiresAt: claimed.claimExpiresAt,
+    });
     return;
   }
-  sendBridgeJson(res, 200, receipt);
+  if (body.action === 'commit') {
+    const committed = commitUploadReceipt(body.receipt, body.projectId, body.claimId);
+    sendBridgeJson(res, committed ? 200 : 409, committed
+      ? { ok: true, state: 'committed' }
+      : { error: 'upload receipt claim is invalid, expired, or no longer current' });
+    return;
+  }
+  if (body.action === 'abort') {
+    const aborted = abortUploadReceipt(body.receipt, body.projectId, body.claimId);
+    sendBridgeJson(res, aborted ? 200 : 409, aborted
+      ? { ok: true, state: 'available' }
+      : { error: 'upload receipt claim is invalid, expired, or no longer current' });
+    return;
+  }
+  sendBridgeJson(res, 400, { error: 'upload receipt action must be claim, commit, or abort' });
 }
 
 export async function routeExternalAgentBridge(
@@ -276,7 +336,7 @@ export async function routeExternalAgentBridge(
   if (req.method === 'POST' && url.pathname === '/import-token') {
     sendBridgeJson(res, 201, mintImportUpload(await readBridgeJson(req)));
   } else if (req.method === 'POST' && url.pathname === '/upload-receipt') {
-    await consumeBridgeReceipt(req, res);
+    await handleBridgeReceipt(req, res);
   } else if (req.method === 'POST' && url.pathname === '/register') {
     await registerBridgeEditor(req, res, operations);
   } else if (req.method === 'POST' && url.pathname === '/unregister') {

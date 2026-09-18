@@ -9,6 +9,7 @@ Short map of cloud generation tools → providers. Use this when guiding setup o
 | `seedance2` | Volcengine Seedance | T2V / I2V / first+last / multi-ref; 2–15s; **480p–4k**; audio/seed/camera/watermark/last-frame/expiry/priority |
 | `kling` | Kling Omni | T2V / I2V / first+last; images ≤7 (≤4 with video); **1× refVideo** `feature`\|`base`; multi-shot customize/intelligence; 3–15s; std/pro |
 | `hailuo` | MiniMax | T2V / I2V / first+last; **6\|10s**; 512P (Hailuo-02), 720p→768P, 1080P→6s; optimizer controls; **S2V-01** subject |
+| `grok-imagine-video` | xAI Grok Imagine | T2V only; **1–15s**; 480p/720p/1080p; audio track included; no refs/frames/edit |
 
 **Not wired:** Kling element library / voice bind; provider callback URLs; arbitrary third-party generation endpoints.
 
@@ -19,6 +20,7 @@ Short map of cloud generation tools → providers. Use this when guiding setup o
 | `gpt-image-2` | Text + refs (≤16); custom dimensions, mask, background, moderation, fidelity, PNG/JPEG/WebP/compression |
 | `nano-banana` | Gemini; best multi-ref (≤14) |
 | `image-01` | MiniMax; one subject ref via R2; custom dimensions, count ≤9, prompt ≤1500, seed, optimizer default false |
+| `grok-imagine` | xAI Grok Imagine; text-to-image; ≤4 outputs; aspect set 1:1/16:9/9:16/4:3/3:4/3:2/2:3; 1k/2k |
 
 ## Voice · `submit_voice`
 
@@ -62,6 +64,7 @@ with word/speaker detail preserved when the provider supplies it.
 | --- | --- |
 | `mureka` | Instrumental, lyrics-song, prompt-song, soundtrack from image/video, track/stem; count 1–3 and all official controls |
 | `minimax` | t2m plus cover via project audio or `coverFeatureId`; official audio settings |
+| `atlas` | Async t2m through Atlas Cloud; prompt/lyrics, instrumental mode, and schema-backed audio settings |
 
 ## Sound · `submit_sound`
 

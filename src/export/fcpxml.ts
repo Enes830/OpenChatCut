@@ -12,7 +12,7 @@ import {
 } from '../editor/types';
 import { itemEditOpts, itemWindow, keptSegments } from '../transcript/edit';
 import { hasOperationalTranscript } from '../transcript/types';
-import { sourceWindowForTimelineRange } from '../editor/sourceLimit';
+import { sourceWindowForTimelineRange, timelineFramesToSourceFrames } from '../editor/sourceLimit';
 import { motionGraphicRenderFilename, motionGraphicRenderKey } from './motionGraphicRefs';
 import { safeSourceFilename, stripInvalidXml10Characters } from '../media/sourceFilename';
 import { backgroundFillStrengthOf, isBackgroundFillActive } from '../editor/backgroundFill';
@@ -35,6 +35,39 @@ function toFileUrl(absPath: string): string {
     .join('/');
   return `file://${encoded}`;
 }
+/**
+ * Absolute disk path → FCPXML <pathurl>. DaVinci Resolve reads this element
+ * per the FCPXML spec, and on macOS it resolves native UTF-8 path segments but
+ * NOT percent-encoded non-ASCII. Keep every segment byte-identical to the
+ * on-disk name; encode only URL-breaking characters (space/#/?).
+ */
+export function toPathUrl(absPath: string): string {
+  const slashed = absPath.replace(/\\/g, '/');
+  const rooted = slashed.startsWith('//') || /^[A-Za-z]:/.test(slashed)
+    ? `/${slashed}`.replace(/^\/\//, '//')
+    : slashed;
+  const encoded = rooted
+    .split('/')
+    .map((seg) => seg.replace(/ /g, '%20').replace(/#/g, '%23').replace(/\?/g, '%3F'))
+    .join('/');
+  return `file://${encoded}`;
+}
+
+/**
+ * Fragment src → absolute disk path when the fragment names a local file.
+ * /media/uploads/<name> resolves against mediaDir (MEDIA_DIR can change);
+ * Windows/POSIX absolute sources pass through; remote/inline sources return
+ * null so callers never fabricate a local address for them.
+ */
+export function resolveAssetAbsPath(src: string, mediaDir?: string): string | null {
+  if (/^(?:https?|file|data|blob):/i.test(src)) return null;
+  if (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(src)) return src;
+  if (mediaDir && src.startsWith(UPLOAD_PREFIX)) {
+    const name = decodeURIComponent(src.slice(UPLOAD_PREFIX.length));
+    return `${mediaDir.replace(/[/\\]+$/, '')}/${name}`;
+  }
+  return src.startsWith('/') ? src : null;
+}
 
 /**
  * Fragment src → NLE address that can be relinked. `/media/uploads/<name>` is the same origin URL, the physical location is
@@ -43,12 +76,9 @@ function toFileUrl(absPath: string): string {
  */
 export function resolveAssetSrc(src: string, mediaDir?: string): string {
   if (/^(?:https?|file|data|blob):/i.test(src)) return src;
-  if (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(src)) return toFileUrl(src);
-  if (mediaDir && src.startsWith(UPLOAD_PREFIX)) {
-    const name = decodeURIComponent(src.slice(UPLOAD_PREFIX.length));
-    return toFileUrl(`${mediaDir.replace(/[/\\]+$/, '')}/${name}`);
-  }
-  return src.startsWith('/') ? toFileUrl(src) : `file://${src}`;
+  const abs = resolveAssetAbsPath(src, mediaDir);
+  if (abs) return toFileUrl(abs);
+  return `file://${src}`;
 }
 
 /**
@@ -167,6 +197,11 @@ function collectAssets(state: TimelineState): Map<string, AssetInfo> {
     const existing = bySrc.get(item.src);
     if (existing) {
       existing.durationFrames = Math.max(existing.durationFrames, full);
+      // hasVideo/hasAudio are derived from `kind` downstream. The FIRST item
+      // referencing a src used to fix it, so a src placed as audio and also as
+      // video exported an audio-only asset — the video clip then imported as
+      // black. Prefer the visual kind when the same file is used both ways.
+      if (existing.kind === 'audio' && item.kind !== 'audio') existing.kind = item.kind;
     } else {
       const sourceFilename = safeSourceFilename(libraryAsset?.sourceFilename)
         ?? safeSourceFilename(item.sourceFilename);
@@ -204,10 +239,12 @@ function mediaRepXml(
   kind: 'original-media' | 'proxy-media',
   src: string,
   filename: string,
+  pathUrl?: string,
 ): string {
   const suggested = finalExtensionStem(filename);
   const suggestedAttr = suggested ? ` suggestedFilename="${escapeXml(suggested)}"` : '';
-  return `<media-rep kind="${kind}" src="${escapeXml(src)}"${suggestedAttr}/>`;
+  const inner = pathUrl ? `<pathurl>${escapeXml(pathUrl)}</pathurl>` : '';
+  return `<media-rep kind="${kind}" src="${escapeXml(src)}"${suggestedAttr}>${inner}</media-rep>`;
 }
 
 function assetResourceXml(
@@ -221,18 +258,21 @@ function assetResourceXml(
   const hasAudio = info.kind === 'audio' || info.kind === 'video';
   const name = escapeXml(info.name || decodedBasename(src));
   const formatAttr = hasVideo ? ` format="${formatId}"` : '';
+  const internalAbs = resolveAssetAbsPath(src, mediaDir);
   const internalHref = resolveAssetSrc(src, mediaDir);
-  const originalHref = typeof info.originalFilePath === 'string' && info.originalFilePath
-    ? toFileUrl(info.originalFilePath)
+  const originalAbs = typeof info.originalFilePath === 'string' && info.originalFilePath
+    ? info.originalFilePath
     : undefined;
+  const originalHref = originalAbs ? toFileUrl(originalAbs) : undefined;
+  const filename = info.sourceFilename ?? info.name;
   const representations = originalHref
     ? [
-        mediaRepXml('original-media', originalHref, info.sourceFilename ?? info.name),
+        mediaRepXml('original-media', originalHref, filename, toPathUrl(originalAbs!)),
         ...(originalHref === internalHref
           ? []
-          : [mediaRepXml('proxy-media', internalHref, info.sourceFilename ?? info.name)]),
+          : [mediaRepXml('proxy-media', internalHref, filename, internalAbs ? toPathUrl(internalAbs) : undefined)]),
       ]
-    : [mediaRepXml('original-media', internalHref, info.sourceFilename ?? info.name)];
+    : [mediaRepXml('original-media', internalHref, filename, internalAbs ? toPathUrl(internalAbs) : undefined)];
   return `<asset id="${info.id}" name="${name}" start="0s" duration="${rationalTime(info.durationFrames, fps)}" hasVideo="${hasVideo ? 1 : 0}" hasAudio="${hasAudio ? 1 : 0}"${formatAttr}>\n      ${representations.join('\n      ')}\n    </asset>`;
 }
 
@@ -281,6 +321,37 @@ function backgroundFillMetadataXml(item: TimelineItem): string {
 /** Entries with src (video/audio/image/gif) → asset-clip; entries without src
  * (motion-graphic/text, MG does not have real media files) → placeholder gap with name + annotation,
  * The integrator can use export_motion_graphic_prores to render the transparent video and replace this gap.*/
+/** Source frames consumed by a rate-stretched clip: timeline frames × rate. */
+export function retimeSourceFrames(item: TimelineItem): number {
+  return timelineFramesToSourceFrames(item, item.durationInFrames);
+}
+
+/**
+ * `<timeMap>` for a constant speed change. The clip's rate was previously
+ * dropped entirely, so a 2× clip imported at 1× and showed only the first half
+ * of its source span.
+ *
+ * Mapping: `time` is the retimed (timeline) position, `value` the media
+ * position it samples — a 2× clip covers `duration × 2` of source over its
+ * timeline duration. Both are expressed relative to the clip's `start`
+ * in-point. NOTE: the emitted XML has not been round-tripped through Final Cut
+ * or Resolve here, so the intended rate is also written as a comment for the
+ * integrator to sanity-check.
+ */
+function retimeXml(item: TimelineItem, fps: number): string {
+  const rate = item.playbackRate ?? 1;
+  if (!Number.isFinite(rate) || rate === 1 || rate <= 0) return '';
+  const sourceFrames = retimeSourceFrames(item);
+  if (!Number.isFinite(sourceFrames) || sourceFrames <= 0) return '';
+  return [
+    xmlComment(`speed change ${rate}x: ${item.durationInFrames} timeline frames consume ${Math.round(sourceFrames)} source frames`),
+    '<timeMap>',
+    '  <timept time="0s" value="0s" interp="linear"/>',
+    `  <timept time="${rationalTime(item.durationInFrames, fps)}" value="${rationalTime(Math.round(sourceFrames), fps)}" interp="linear"/>`,
+    '</timeMap>',
+  ].join('\n        ');
+}
+
 function itemToSpineElement(
   item: TimelineItem,
   fps: number,
@@ -302,9 +373,13 @@ function itemToSpineElement(
         .join('\n        ');
     }
     const attributes = `ref="${ref}" lane="${lane}" offset="${offset}" duration="${duration}" start="${rationalTime(item.srcInFrame ?? 0, fps)}" name="${name}"`;
-    return backgroundFillActive
+    const retime = retimeXml(item, fps);
+    const children = [retime, backgroundFillActive ? backgroundFillMetadataXml(item) : '']
+      .filter(Boolean)
+      .join('\n        ');
+    return children
       ? `<asset-clip ${attributes}>
-        ${backgroundFillMetadataXml(item)}
+        ${children}
       </asset-clip>`
       : `<asset-clip ${attributes}/>`;
   }

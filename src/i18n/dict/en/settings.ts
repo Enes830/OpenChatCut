@@ -33,7 +33,6 @@ export default {
   '在线图库': 'Stock Media',
   '转写 / 口播剪辑': 'Transcription / Script Editing',
   '存储': 'Storage',
-  '媒体存储': 'Media Storage',
   '增强工具': 'Power Tools',
   '沙箱执行': 'Sandbox Execution',
   '网页抓取': 'Web Scraping',
@@ -51,7 +50,7 @@ export default {
   'submit_image · 文生图 / 图生图，任一厂商即可。': 'submit_image · Text-to-image / image-to-image; any one vendor works.',
   'submit_voice · 文字转配音，任一厂商即可。': 'submit_voice · Text to voiceover; any one vendor works.',
   'submit_video · 文 / 图生视频，任一厂商即可。': 'submit_video · Text / image to video; any one vendor works.',
-  'submit_music · 文字生成配乐，任一厂商即可。': 'submit_music · Text to soundtrack; any one vendor works.',
+  'submit_music · 文字 / 成片生成配乐，任一厂商即可。': 'submit_music · Text or finished cut to soundtrack; any one vendor works.',
   'search_stock_media · 搜索可商用图片 / 视频素材。': 'search_stock_media · Search commercially usable photos / videos.',
   'transcribe_track · 词级字幕、清口水、删词。': 'transcribe_track · Word-level captions, filler cleanup, word deletion.',
   '素材的本地保存目录，与可选的 R2 云备份。': 'Local save directory for media, plus optional R2 cloud backup.',
@@ -90,7 +89,6 @@ export default {
   '音色资源 ID': 'Voice resource ID',
   '视频模型': 'Video model',
   '音乐模型': 'Music model',
-  '素材保存目录': 'Media storage directory',
   '云同步': 'Cloud sync',
   'Bucket 名': 'Bucket name',
   '模板 ID（可选）': 'Template ID (optional)',
@@ -115,11 +113,13 @@ export default {
   'Cartesia（云端）': 'Cartesia (cloud)',
   '中文（zh）': 'Chinese (zh)',
   '英语（en）': 'English (en)',
+  '意大利语（it）': 'Italian (it)',
   '日语（ja）': 'Japanese (ja)',
   '韩语（ko）': 'Korean (ko)',
   '西班牙语（es）': 'Spanish (es)',
   '法语（fr）': 'French (fr)',
   '德语（de）': 'German (de)',
+  '俄语（ru）': 'Russian (ru)',
   '启用': 'On',
   '停用': 'Off',
   '本地模型（whisper）': 'Local model (Whisper)',
@@ -129,30 +129,60 @@ export default {
   // ──Page Note/Field Note──
   'MiniMax 同一个 Key，配置一次全能力（生图 / 配音 / 视频 / 音乐）通用。': 'One MiniMax key covers every capability (image / voice / video / music) — configure once.',
   'Key 同时用于音效生成（submit_sound）。': 'The key is also used for sound-effect generation (submit_sound).',
+  '按成片生成：把渲染好的视频交给 Sonilo，配乐跟着画面节奏走（可选一句风格提示，不填也行）。配乐自带授权、可商用（以条款为准）；每条音轨附 license_id 留档。同一个 Key 也用于按成片生成音效（submit_sound，免版税）。':
+    'Generates from the finished cut: hand Sonilo the rendered video and the music follows its pacing (one optional style hint; works without one). Music is licensed, safe for commercial use (terms apply); each track comes with a license_id record. The same key also powers video-matched sound effects (submit_sound, royalty-free).',
   '可直接使用 Anthropic 官方 API Key；如使用兼容服务，再修改 Base URL 和模型。': 'Use an official Anthropic API key directly, or change the Base URL and model for a compatible service.',
   '默认使用 Claude Fable 5；自定义兼容地址时，也可填写该服务支持的模型 ID。': 'Claude Fable 5 is the default. With a compatible endpoint, enter any model ID supported by that service.',
   '每个厂商独立保存地址、密钥与模型。先测试连接，成功后可从接口返回的模型中选择。': 'Each provider keeps its own endpoint, key, and model. Test the connection, then choose from the models returned by that API.',
   '填写完整 API 前缀；可使用官方地址、自建网关或兼容中转。': 'Enter the complete API prefix. You can use the official endpoint, your own gateway, or a compatible relay.',
   '测试连接后可直接选择接口返回的模型，也可以手动填写模型 ID。': 'After testing, choose a returned model or enter a model ID manually.',
+  '也可以手动填写厂商的其它模型 ID，建议列表仅为常用模型。': 'You can also enter any other model ID from this vendor; the suggestion list covers common models only.',
   '选择服务实际支持的协议；OpenAI 使用 Responses API，兼容服务使用 Chat Completions API。': 'Choose the protocol your service actually supports. OpenAI uses the Responses API; compatible services use Chat Completions.',
   '选择厂商后会自动使用官方 API 地址、接口格式和推荐模型，也可以在下方覆盖。': 'Choose a provider to use its official endpoint, protocol, and recommended model automatically, or override them below.',
   '填写完整 API 前缀（可含 /v1、/v1beta/openai 等路径）；切换厂商会重置地址与模型，并立即生效。': 'Enter the full API prefix, including paths such as /v1 or /v1beta/openai. Switching providers resets the Base URL and model and takes effect immediately.',
   '默认值仅对内置模型准确；自定义、OpenRouter 或本地模型请填写模型实际上限（4,096–4,000,000）。':
     'The default is exact only for the built-in model. For custom, OpenRouter, or local models, enter the model’s actual limit (4,096–4,000,000).',
-  '桌面端默认把素材存入系统应用数据目录，浏览器开发版默认使用 public/media/uploads/。可选择任意本机目录或外置硬盘；保存后旧目录中的素材会复制到新目录（原文件保留），工程里的素材地址不变，预览与渲染导出都会跟随新目录。':
-    'The desktop app stores media in its system application-data directory by default; browser development uses public/media/uploads/. Choose any local folder or external drive. Saving copies media from the old directory to the new one (originals kept); project URLs stay unchanged, and preview, render, and export follow the new directory.',
-  '桌面端点击“选择目录”；浏览器中也可手动输入绝对路径。清除后回到当前运行环境的默认目录。':
-    'On desktop, click “Choose Folder”; in a browser, you can also enter an absolute path manually. Clearing returns to the current environment’s default directory.',
   '未配置时素材只存本机（「本地磁盘」页的目录）。配置后：每次上传同步写入 R2（桶保持私有，读取经本地服务回源，src 路径不变）；本机缺文件时自动从云端取回。改动即时生效。R2 控制台建桶 → R2 API Token（Object Read & Write）即可拿到下面四个值。':
     'Without this, media lives only on this machine (the Local Disk directory). Once configured: every upload also writes to R2 (bucket stays private, reads go through the local server, src paths unchanged); missing local files are fetched from the cloud automatically. Changes apply immediately. Create a bucket in the R2 console, then an R2 API Token (Object Read & Write) to get the four values below.',
   '停用后新上传只存本地（密钥保留、已上云文件不受影响）；重新启用即恢复写穿。': 'When off, new uploads stay local only (keys kept, files already in the cloud unaffected); re-enable to resume write-through.',
   '云端隔离 Linux 沙箱，不触碰本机文件。Agent 用它跑 run_code：ffprobe 探测素材时长 / 尺寸编码、ffmpeg 转码 / 抽帧 / 加工音视频、执行 node / python 技能脚本，结果回传后由本地工具应用到时间线。未配置只影响这些工具，剪辑与预览不受影响。':
     'An isolated Linux sandbox in the cloud — never touches local files. The Agent uses it for run_code: ffprobe to probe media duration / dimensions / codecs, ffmpeg to transcode / extract frames / process AV, and node / python skill scripts; results come back and local tools apply them to the timeline. Leaving it unset only affects these tools — editing and preview are unaffected.',
   '默认模板不带 ffmpeg；转码 / 抽帧类任务需自建含 ffmpeg 的模板并填其 ID。': 'The default template has no ffmpeg; for transcode / frame-extraction tasks, build a template with ffmpeg and enter its ID.',
+  '素材进入媒体池后是否立即转写。本地 Whisper 免费且在本机运行；云端付费供应商建议保持关闭或手动转写。':
+    'Whether media should be transcribed as soon as it enters the media pool. Local Whisper is free and runs on this machine; paid cloud providers are best kept off or used manually.',
+  '导入后自动转写': 'Auto-transcribe after import',
+  '关闭（手动转写）': 'Off (manual transcription)',
+  '仅本地引擎（免费）': 'Local engine only (free)',
+  '全部引擎（含云端付费）': 'All engines (including paid cloud)',
+  'BytePlus ModelArk 同一个 Key，图生 / 视频生成通用；与「Agent 大脑」的 BytePlus 配置各自独立。':
+    'One BytePlus ModelArk key covers image and video generation; it is separate from the BytePlus configuration under Agent Brain.',
+  '国内网络访问海外模型（Gemini / OpenAI / Anthropic / Mistral 等）失败时，可在此填写本地代理地址（如 http://127.0.0.1:7890）。留空则使用系统环境变量（HTTPS_PROXY / HTTP_PROXY）。生效范围：Agent 模型、AI 生成、模型下载、R2 云同步。':
+    'If your network cannot reach overseas model APIs (Gemini / OpenAI / Anthropic / Mistral, etc.), enter a local proxy URL here, such as http://127.0.0.1:7890. Leave empty to use system environment variables (HTTPS_PROXY / HTTP_PROXY). Applies to Agent models, AI generation, model downloads, and R2 cloud sync.',
+  '统一配置服务端访问海外 API 使用的代理地址。': 'Configure the proxy URL used by the server to access overseas APIs.',
+  '网络代理': 'Network proxy',
+  '界面': 'Interface',
+  '界面缩放与显示相关设置。': 'Interface scale and display settings.',
+  '界面缩放': 'Interface scale',
+  '调整整个编辑器的缩放比例（80%–150%）。桌面版保存后立即生效，也可用 Ctrl/Cmd + +/- 快速调整、Ctrl/Cmd + 0 复位。浏览器版请使用浏览器自带缩放。':
+    'Adjust the entire editor scale (80%–150%). Desktop changes apply immediately after saving; Ctrl/Cmd + +/- adjusts quickly, and Ctrl/Cmd + 0 resets. In the browser, use the browser zoom controls.',
+  '本地模型': 'Local models',
+  '本地转写、节拍与音乐分析、画面语义搜索。模型按需安装，数据不出本机。':
+    'Local transcription, beat/music analysis, and visual semantic search. Models are installed on demand and data stays on this machine.',
+  '默认 https://api.fish.audio': 'Default https://api.fish.audio',
+  '默认 https://api.inworld.ai': 'Default https://api.inworld.ai',
+  '默认 https://api.sws.speechify.com': 'Default https://api.sws.speechify.com',
+  '默认 https://api.wavespeed.ai': 'Default https://api.wavespeed.ai',
+  '默认 https://ark.ap-southeast.bytepluses.com/api/v3': 'Default https://ark.ap-southeast.bytepluses.com/api/v3',
 
 
   // ── OpenAI Codex account ──
   'Codex 模型': 'Codex model',
+  'Copilot 模型': 'Copilot model',
+  'Copilot 默认模型': 'Copilot default model',
+  '使用 GitHub Copilot 订阅：官方 Copilot CLI 管理登录与凭据（终端运行 copilot login），OpenChatCut 通过 Copilot SDK 直接驱动编辑工具，不会读取或显示凭据。会话状态隔离在 ~/.openchatcut/copilot，不影响你自己的 ~/.copilot。':
+    'Use a GitHub Copilot subscription: the official Copilot CLI manages sign-in and credentials (run `copilot login` in a terminal). OpenChatCut drives the editing tools directly through the Copilot SDK and never reads or displays credentials. Session state is isolated in ~/.openchatcut/copilot and does not affect your own ~/.copilot.',
+  '登录后可读取当前订阅可用的模型，也可以手动填写模型 ID。仅支持工具调用的模型可用于编辑。':
+    'After signing in, load the models available to this subscription or enter a model ID manually. Only tool-calling models can be used for editing.',
   'Codex 默认模型': 'Codex default model',
   '推理强度': 'Reasoning effort',
   '模型默认': 'Model default',
@@ -187,6 +217,28 @@ export default {
   '请在登录页面完成授权，完成后会自动刷新。': 'Finish authorization on the sign-in page. This status will refresh automatically.',
   '已登录 ChatGPT': 'Signed in to ChatGPT',
   '凭据与续期均由 Codex CLI 管理。': 'Credentials and renewal are managed by the Codex CLI.',
+  // ── GitHub Copilot ──
+  '版本过低': 'Version too old',
+  '正在检查 Copilot CLI…': 'Checking Copilot CLI…',
+  '正在读取本机 Copilot 运行时状态。': 'Reading the local Copilot runtime status.',
+  '未检测到 Copilot CLI': 'Copilot CLI was not found',
+  '安装后重试：npm i -g @github/copilot（或 brew install copilot）。':
+    'Install it and retry: npm i -g @github/copilot (or brew install copilot).',
+  'Copilot CLI 版本过低': 'Copilot CLI is out of date',
+  '在终端运行 copilot update 后重试。': 'Run `copilot update` in a terminal, then retry.',
+  '尚未登录 Copilot': 'Not signed in to Copilot',
+  '在终端运行 copilot login 完成登录后点击刷新。':
+    'Run `copilot login` in a terminal, then refresh.',
+  '已登录 GitHub Copilot': 'Signed in to GitHub Copilot',
+  '凭据与续期均由 Copilot CLI 管理。': 'Credentials and renewal are managed by the Copilot CLI.',
+  '无法连接 Copilot': 'Could not reach Copilot',
+  '请确认开发服务正在运行后重试。': 'Make sure the development server is running, then retry.',
+  '账号': 'Account',
+  '登录方式': 'Sign-in method',
+  '主机': 'Host',
+  '无法连接 Copilot 服务，请确认开发服务正在运行。':
+    'Could not reach the Copilot service. Make sure the development server is running.',
+  '无法读取 Copilot 模型列表，请稍后重试。': 'Could not load Copilot models. Please try again.',
   'Codex CLI 正在使用 API Key': 'Codex CLI is using an API key',
   '此页面仅启用 ChatGPT 订阅；API Key 请使用 OpenAI 厂商页。':
     'This page enables ChatGPT subscriptions only. Use the OpenAI provider page for API keys.',
@@ -220,12 +272,35 @@ export default {
   '未配置': 'Not configured',
   '测试中…': 'Testing…',
   '测试连接': 'Test connection',
+  '测试代理连接': 'Test proxy connection',
   '测试并读取模型': 'Test & load models',
+  '会话有效期至': 'Session valid until',
+  '导入登录状态': 'Import login',
+  '重新导入': 'Re-import',
+  '注销': 'Sign out',
+  '请先在终端运行官方 Grok CLI 登录，再回到这里导入登录状态：':
+    'Sign in with the official Grok CLI in a terminal first, then import the login here:',
+  '订阅（SuperGrok 或 X Premium+）登录成功后，grok login 会把会话写入本机。':
+    'After signing in with your subscription (SuperGrok or X Premium+), grok login stores the session locally.',
+  '使用 SuperGrok 或 X Premium+ 订阅登录：官方 Grok CLI 管理登录与凭据（终端运行 grok login），OpenChatCut 导入会话并自动续期，不会读取或显示 OAuth 凭据。':
+    'Sign in with your SuperGrok or X Premium+ subscription: the official Grok CLI owns login and credentials (run grok login in a terminal); OpenChatCut imports the session and refreshes it automatically, and never reads or displays OAuth credentials.',
+  'xAI · Grok (订阅登录)': 'xAI · Grok (Subscription sign-in)',
+  '使用 xAI 订阅会话（SuperGrok / X Premium+，优先）或 LLM_XAI_API_KEY 生成图片。文生图：最多 4 张，1K / 2K。':
+    'Generates images with your xAI subscription session (SuperGrok / X Premium+, preferred) or LLM_XAI_API_KEY. Text-to-image: up to 4 images, 1K / 2K.',
+  '使用 xAI 订阅会话（SuperGrok / X Premium+，优先）或 LLM_XAI_API_KEY 生成视频。文生视频：1–15 秒，自带音轨，480p / 720p / 1080p。':
+    'Generates videos with your xAI subscription session (SuperGrok / X Premium+, preferred) or LLM_XAI_API_KEY. Text-to-video: 1–15s, audio track included, 480p / 720p / 1080p.',
+  'OFox · 多模型': 'OFox · Multi-model',
+  'OFox · 多模型网关': 'OFox · Multi-model Gateway',
+  '使用 LLM_OFOX_API_KEY（在 Agent 供应商里配置 OFox）生成视频。一个 Key 覆盖 Seedance、Wan 等视频模型；支持文生视频、首帧/首尾帧图生视频与图片参考（最多 9 张）；时长/分辨率按模型由 API 校验，2–30 秒。':
+    'Generates videos with LLM_OFOX_API_KEY (configure OFox under Agent providers). One key covers Seedance, Wan and other video models; supports text-to-video, first-frame / first-and-last-frame image-to-video, and up to 9 reference images; duration/resolution are validated per model by the API, 2–30 seconds.',
+  'xAI · Grok Imagine (视频)': 'xAI · Grok Imagine (Video)',
   '验证地址与密钥，并读取该接口可用的模型': 'Verifies the endpoint and key, then loads the models available from that API',
   '选择模型': 'Choose model',
   '测试请求失败 ({n})': 'Test request failed ({n})',
+  '该厂商暂不支持连接测试': 'This provider does not support connection testing yet',
   '（按当前输入测试，记得保存）': ' (tested with current input — remember to save)',
   '发一条最小请求验证 Key 与地址可用': 'Sends one minimal request to verify the key and endpoint',
+  '使用当前代理地址访问外网探测端点': 'Uses the current proxy address to reach an external connectivity endpoint',
   '本次设置': 'This session',
   '取消清除': 'Undo clear',
   '清除': 'Clear',
@@ -240,6 +315,9 @@ export default {
   '已自定义 · 留空保持不变': 'Customized · Leave empty to keep',
   '已配置 · 留空保持不变': 'Configured · Leave empty to keep',
   '未配置 · 粘贴以启用': 'Not configured · Paste to enable',
+  'API Key（可选）': 'API Key (optional)',
+  '代理地址': 'Proxy URL',
+  '例如 http://127.0.0.1:7890': 'Example: http://127.0.0.1:7890',
   '系统默认素材目录': 'system default media directory',
   '选择目录': 'Choose Folder',
   '选择中…': 'Choosing…',
@@ -260,7 +338,9 @@ export default {
   '默认 https://ark.cn-beijing.volces.com/api/v3': 'Default https://ark.cn-beijing.volces.com/api/v3',
   '默认 https://api-singapore.klingai.com': 'Default https://api-singapore.klingai.com',
   '默认 https://api.mureka.ai': 'Default https://api.mureka.ai',
+  '默认 https://api.sonilo.com': 'Default https://api.sonilo.com',
   '默认 https://api.minimaxi.com': 'Default https://api.minimaxi.com',
+  '默认 https://api.atlascloud.ai/api/v1': 'Default https://api.atlascloud.ai/api/v1',
   '默认 https://api.mistral.ai/v1': 'Default https://api.mistral.ai/v1',
   '默认 https://api.groq.com/openai/v1': 'Default https://api.groq.com/openai/v1',
 
@@ -339,6 +419,27 @@ export default {
   '删除所选': 'Delete selected',
   // External Agent Access Guide (McpGuide)
   '外部 Agent 接入 (MCP)': 'External agents (MCP)',
+  'Streamable HTTP · 与内置 Agent 共享编辑工具': 'Streamable HTTP · shares the editing tools with the built-in Agent',
+  '所有客户端共用一个端点': 'One endpoint shared by every client',
+  'Anthropic 官方 CLI，Claude 订阅用户直连。': 'Official Anthropic CLI, for Claude subscribers.',
+  'OpenAI CLI，通过环境变量携带令牌。': 'Official OpenAI CLI, carries the token via environment variable.',
+  '写入 ~/.cursor/mcp.json 的全局配置。': 'Writes a global config to ~/.cursor/mcp.json.',
+  '写入 ~/.gemini/antigravity/mcp_config.json。': 'Writes a global config to ~/.gemini/antigravity/mcp_config.json.',
+  '写入 ~/.qoder/settings.json，国内版同时写 ~/.qoder-cn。': 'Writes ~/.qoder/settings.json, plus ~/.qoder-cn for the China build.',
+  '千问办公': 'Qwen Work',
+  '自定义 MCP 只存在应用内，复制 JSON 后在连接器里粘贴。': 'Custom MCP servers live inside the app: copy this JSON and paste it into its connector.',
+  '复制配置': 'Copy config',
+  '配置已复制，粘贴到客户端的自定义 MCP 输入框。': 'Config copied; paste it into the client’s custom MCP input.',
+  '复制失败，请手动选择配置文本。': 'Copy failed; select the config text manually.',
+  '连接': 'Connect',
+  '连接中…': 'Connecting…',
+  '已连接': 'Connected',
+  '连接失败': 'Connect failed',
+  '已写入 {paths}': 'Wrote {paths}',
+  '连接后重启对应客户端生效；Codex 需新开终端使环境变量生效。': 'Restart the client after connecting; Codex needs a new terminal for the env var.',
+  '目标配置文件不是有效 JSON，为避免覆盖未写入。': 'Target config file is not valid JSON; nothing was written to avoid overwriting it.',
+  '写入配置文件失败。': 'Failed to write the config file.',
+  '执行 codex mcp add 失败。': 'Running codex mcp add failed.',
   'OpenChatCut 暴露一个 Streamable HTTP MCP 端点。Claude Code / Codex / Cursor 等外部 Agent 接入后,与内置 Agent 共用同一套编辑工具,可直接读写当前工程。':
     'OpenChatCut exposes a Streamable HTTP MCP endpoint. External agents such as Claude Code, Codex, and Cursor share the same editing tools as the built-in agent and can read and edit the current project directly.',
   '端点地址': 'Endpoint',
@@ -375,13 +476,27 @@ export default {
   '正在读取 MCP 连接令牌…': 'Loading the MCP connection token…',
   '无法读取 MCP 连接令牌，请从受信任的编辑器窗口重试。':
     'Could not load the MCP connection token. Retry from a trusted editor window.',
-  'MCP 端点始终要求 Bearer 令牌。令牌只在当前受信任编辑器会话中显示，不写入工程、聊天或浏览器存储；服务重启后自动生成的令牌会变化，需要重新复制配置。OPENCHATCUT_MCP_TOKEN 可覆盖自动令牌。':
-    'The MCP endpoint always requires a bearer token. The token is shown only in the current trusted editor session and is never written to the project, chat, or browser storage. An automatically generated token changes after a server restart, so copy the configuration again. OPENCHATCUT_MCP_TOKEN overrides the generated token.',
+  'MCP 端点始终要求 Bearer 令牌。令牌在首次启动时生成并保存在本机，重启后保持不变，配置一次即可持续使用；OPENCHATCUT_MCP_TOKEN 环境变量可覆盖。令牌只在当前受信任编辑器会话中显示，不写入工程、聊天或浏览器存储。':
+    'The MCP endpoint always requires a bearer token. The token is generated on first launch and kept on this machine, so it stays the same across restarts: registering once keeps working; the OPENCHATCUT_MCP_TOKEN environment variable overrides it. The token is shown only in the current trusted editor session and is never written to the project, chat, or browser storage.',
   '设置 → 连接器 → 添加自定义连接器,粘贴上面的端点地址即可。':
     'Settings → Connectors → Add custom connector, then paste the endpoint above.',
   '端点默认仅监听本机;对外暴露时请配置 OPENCHATCUT_MCP_TOKEN 鉴权。桌面端 5199 端口被占用时会回退随机端口,以启动日志与本页地址为准。':
     'The endpoint listens on localhost only by default; configure OPENCHATCUT_MCP_TOKEN before exposing it. If port 5199 is taken, the desktop app falls back to a random port — trust the startup log and the address shown here.',
   // Local ASR model management (Settings → 转写 → 本地模型)
+  '本地转写': 'Local transcription',
+  '节拍与音乐分析': 'Beat and music analysis',
+  '画面语义搜索': 'Visual semantic search',
+  '本地模型按需安装，索引、转写和分析都在本机完成。':
+    'Local models install on demand. Indexing, transcription, and analysis all run on this device.',
+  '节拍与音乐分析模型': 'Beat and music analysis models',
+  '画面语义搜索模型包': 'Visual semantic search model pack',
+  '按画面内容搜索素材的本地向量模型（约 178MB）。模型在本机运行，素材不会上传。':
+    'A local vector model for searching media by visual content (~178 MB). It runs on this device and never uploads your media.',
+  '操作失败：{err}': 'Operation failed: {err}',
+  '未检测到模型包服务。': 'The model-pack service is unavailable.',
+  '下载中…': 'Downloading…',
+  '已安装。打开媒体池 → 语义搜索面板即可索引素材并按画面搜索。':
+    'Installed. Open Media Pool → Semantic Search to index media and search by visual content.',
   '下载中 {pct}%': 'Downloading {pct}%',
   '下载失败': 'Download failed',
   '已下载': 'Downloaded',
@@ -390,9 +505,13 @@ export default {
   '下载': 'Download',
   '模型按需下载到本机，不随应用打包。首次使用或下载模型时自动加速下载。':
     'Models are downloaded to this machine on demand — they are not bundled with the app. Downloads use the accelerated pipeline automatically.',
-  '桌面原生推理加速（实验）': 'Native desktop inference acceleration (experimental)',
-  '启用后，转写、画面语义、节拍与音乐语义模型自动选择 Windows DirectML 或 macOS CoreML/原生 CPU；转写模型在编辑器打开后后台预热，其他模型首次使用时按需加载；失败时回退浏览器引擎。':
-    'When enabled, transcription, visual-semantic, rhythm, and music-semantic models automatically use Windows DirectML or macOS CoreML/native CPU. Transcription preloads after the editor opens; other models load on first use. Failures fall back to the browser engine.',
+  '桌面原生推理加速': 'Native desktop inference acceleration',
+  '启用后，转写使用 macOS Metal 或原生 CPU；画面语义、节拍与音乐语义模型自动选择 Windows DirectML、Linux CUDA、macOS CoreML 或浏览器 WebGPU；失败时回退 CPU 或浏览器引擎。':
+    'When enabled, transcription uses macOS Metal or native CPU. Visual-semantic, rhythm, and music-semantic models select Windows DirectML, Linux CUDA, macOS CoreML, or browser WebGPU. Failures fall back to CPU or the browser engine.',
+  'WebGPU 转写加速': 'WebGPU transcription acceleration',
+  '删除静音（本地 VAD）': 'Remove silence (local VAD)',
+  '启用后，Agent 的删除静音用本机 Silero VAD 判定语音区间，只删除确认无人说话的片段；关闭时不执行删除。模型随应用内置，无需下载。':
+    'When enabled, the agent\'s silence removal uses the on-device Silero VAD to locate speech and only deletes spans confirmed to contain none; when disabled it deletes nothing. The model ships with the app, so there is no download.',
   '无法读取模型列表：{err}': 'Cannot load the model list: {err}',
   '默认模型': 'Default model',
   '自动（按设备内存选择）': 'Auto (by device memory)',
@@ -402,8 +521,9 @@ export default {
   'Whisper Base（约 80MB · 均衡）': 'Whisper Base (~80MB · balanced)',
   'Whisper Small（约 250MB · 推荐）': 'Whisper Small (~250MB · recommended)',
   'Whisper Medium（约 1.1GB · 精度最高）': 'Whisper Medium (~1.1GB · highest accuracy)',
+  'Whisper Large v3 Turbo（约 1.1GB · 多语言最强）': 'Whisper Large v3 Turbo (~1.1GB · best multilingual)',
   // Downloadable music intelligence model packs
-  '本地音乐智能模型': 'Local music intelligence models',
+  '本地智能模型': 'Local intelligence models',
   '模型不会自动安装。安装后，节拍与音乐语义分析只在本机运行。':
     'Models are never installed automatically. Once installed, beat and music-semantic analysis runs locally.',
   '无法读取模型包列表：{err}': 'Cannot load model packs: {err}',
@@ -427,4 +547,53 @@ export default {
   '未安装': 'Not installed',
   '重新安装': 'Reinstall',
   '安装': 'Install',
+  // ── Storage migration dialog ──
+  '数据存储': 'Data storage',
+  '当前存储': 'Current storage',
+  'SQLite 数据库': 'SQLite database',
+  'JSON 文件目录': 'JSON file directory',
+  '本地数据键': 'Local data entries',
+  '迁移时间': 'Migrated at',
+  'SQLite 键数': 'SQLite entries',
+  '迁移到 SQLite': 'Migrate to SQLite',
+  '迁移中…': 'Migrating…',
+  '迁移失败': 'Migration failed',
+  '迁移尚未完成，仍在使用 JSON 文件目录': 'Migration is not complete; the JSON file directory remains active',
+  '已迁移 {imported} 个数据键，跳过 {skipped} 个': 'Migrated {imported} entries, skipped {skipped}',
+  '，今后项目将默认使用 SQLite 存储工程数据': ', and new projects will now use SQLite by default',
+  '迁移后，工程数据保存到单一 SQLite 数据库文件：写入更可靠（事务）、加载更快、支持全文搜索。原始 JSON 文件将【只读保留】，旧版本、回滚与数据救援始终可用。': 'After migration, project data lives in a single SQLite database: transactional writes, faster loads and full-text search. The original JSON files stay read-only, so older versions, rollbacks and data rescue always work.',
+  '迁移后新编辑写入 SQLite；如需回滚到旧版本，迁移后新增的编辑不会出现在旧版本中。': 'New edits go to SQLite after migration; if you roll back to an older version, edits made after migration will not appear there.',
+  '可将工程数据迁移到 SQLite：写入更可靠、加载更快、支持全文搜索。原始 JSON 文件只读保留，随时可回滚。': 'Migrate project data to SQLite: more reliable writes, faster loading, full-text search. Original JSON files stay read-only, so you can always roll back.',
+  '忽略': 'Dismiss',
+  '不描述图片，一律剥离。': 'Do not describe images; always strip them.',
+  '主模型不支持图片时维持现状（图片剥离为文本）。': 'Keep current behavior when the main model cannot see images (images stripped to text).',
+  '厂商（已配置 API Key）': 'Provider (API key configured)',
+  '图片与时间线帧由所选视觉模型理解后以文本注入。': 'Images and timeline frames are understood by the selected vision model and injected as text.',
+  '图片会发送给所选视觉模型厂商用于描述；视觉调用失败时自动回退为剥离文本，不阻塞对话。': 'Images are sent to the selected vision provider for description; on vision failure it falls back to stripping text and never blocks the conversation.',
+  '基底模型不支持图片输入时（如 DeepSeek 系），图片由所选视觉模型理解后以文本注入。': 'When the base model cannot accept images (e.g. DeepSeek family), the chosen vision model understands them and injects text.',
+  '工程数据存储方式': 'Project data storage',
+  '已指定': 'Custom',
+  '已禁用': 'Disabled',
+  '指定视觉模型': 'Use a specific vision model',
+  '无可用厂商（请先配置 API Key）': 'No provider available (configure an API key first)',
+  '禁用': 'Disable',
+  '视觉模型': 'Vision model',
+  '视觉理解': 'Vision understanding',
+  '跟随主模型': 'Follow main model',
+  '清理旧 JSON 数据（{n} 个文件）': 'Clean up old JSON data ({n} files)',
+  '我确认已迁移完成，且不需要回滚到旧版本（删除后旧版本软件将看到空数据）': 'I confirm the migration is complete and I do not need to roll back to the old version (old versions will see empty data after deletion)',
+  '确认清理': 'Confirm cleanup',
+  '清理中…': 'Cleaning up…',
+  '已清理 {removed} 个旧 JSON 文件': 'Removed {removed} old JSON files',
+  '默认工程位置': 'Default project location',
+  '应用默认数据目录': 'Default app data folder',
+  '新工程和生成素材的默认保存位置，以及可选的 R2 云备份。':
+    'The default location for new projects and generated media, plus optional R2 cloud backup.',
+  '新建工程、历史版本和应用生成的素材保存在这里。桌面端从外部拖入的文件和文件夹保留在原位置，工程只建立引用；浏览器运行时会上传托管副本。修改后重启应用生效。':
+    'New projects, version history, and app-generated media are stored here. In the desktop app, external files and folders stay in place and are referenced; browser sessions upload a managed copy. Changes take effect after restarting the app.',
+  '未配置时素材只存本机。配置后：每次上传同步写入 R2（桶保持私有，读取经本地服务回源，src 路径不变）；本机缺文件时自动从云端取回。改动即时生效。R2 控制台建桶 → R2 API Token（Object Read & Write）即可拿到下面四个值。':
+    'Without this, media stays on this machine. Once configured, uploads are also written to R2; missing local files are restored through the local service while source URLs stay unchanged. Changes apply immediately. Create a bucket and an Object Read & Write API token in R2 to get the four values below.',
+  '桌面端点击“选择目录”；也可手动输入绝对路径（可用 ~/ 开头）。清除后回到默认目录。': 'On desktop, click "Choose folder"; you can also type an absolute path (~/ accepted). Clear it to return to the default folder.',
+  '已保存 · 重启应用后新的工程存储目录才会生效': 'Saved · the new project storage folder takes effect after a restart',
+  '该模型不在内置目录，以上数值为估算（上下文 {context} / 输出 {output}）。若与实际不符，点「展开」手动修改。': 'This model is not in the built-in catalog, so these values are estimates (context {context} / output {output}). If they do not match the real model, expand and adjust them manually.',
 } as Record<string, string>;

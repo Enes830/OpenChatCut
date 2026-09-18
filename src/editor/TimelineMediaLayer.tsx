@@ -5,7 +5,7 @@ import {
   type AudioProps as BrowserAudioProps,
   type VideoProps as BrowserVideoProps,
 } from '@remotion/media';
-import { AbsoluteFill, Audio as ServerAudio, Img, OffthreadVideo, Sequence, useCurrentFrame } from 'remotion';
+import { AbsoluteFill, Audio as ServerAudio, Img, Sequence, useCurrentFrame } from 'remotion';
 import { ClipFx } from '../gl/ClipFx';
 import { firstGlEffect } from '../gl/clipEffects';
 import { selectEffectPreviewAdapter, type SelectedPreviewStatusListener } from '../gl/previewAdapter';
@@ -13,12 +13,14 @@ import { itemEditOpts, itemWindow, keptSegments } from '../transcript/edit';
 import { hasOperationalTranscript } from '../transcript/types';
 import { voiceIsolationMix } from '../audio/voiceMix';
 import { backgroundFillAppearanceFor, backgroundFillFilter } from './backgroundFill';
+import { appearanceAt } from './clipFade';
+import { zoomAt } from './zoom';
 import { clipFadeFactor, clipOpacityAt } from './clipFade';
 import { volumeAtFrame } from './keyframes';
 import { sourceFrameAt } from './sourceLimit';
 import type { AspectFit, TimelineItem, TransitionItem } from './types';
 import { isAudioTransition } from './types';
-import { clampVisualBorderRadius, visibleVisualFrameRect } from './visualFrameGeometry';
+import { clampVisualBorderRadius, objectFitInsideVisualFrame, visibleVisualFrameRect } from './visualFrameGeometry';
 
 type RuntimeVideoProps = Pick<BrowserVideoProps, 'src' | 'trimBefore' | 'trimAfter' | 'playbackRate' | 'volume' | 'style' | 'muted'> & {
   browserRenderer: boolean;
@@ -30,10 +32,10 @@ function RuntimeAudio({ browserRenderer, ...props }: BrowserAudioProps & { brows
     : <ServerAudio {...props} preservePitch />;
 }
 
-function RuntimeVideo({ browserRenderer, ...props }: RuntimeVideoProps) {
-  return browserRenderer
-    ? <BrowserVideo {...props} />
-    : <OffthreadVideo {...props} preservePitch />;
+function RuntimeVideo({ browserRenderer, style, ...props }: RuntimeVideoProps) {
+  void browserRenderer;
+  const { objectFit, ...browserStyle } = style ?? {};
+  return <BrowserVideo {...props} style={browserStyle} objectFit={objectFit as BrowserVideoProps['objectFit']} />;
 }
 
 function MixedRuntimeAudio({ item, browserRenderer, volume, ...props }: Omit<BrowserAudioProps, 'src'> & {
@@ -74,12 +76,13 @@ export function VisualClipSurface({ item, fit, canvasW, canvasH, borderRadius, c
     );
   const resolvedRadius = clampVisualBorderRadius(borderRadius, frame);
   return (
-    <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+    <AbsoluteFill>
       <div style={{
-        position: 'relative',
+        position: 'absolute',
+        left: frame.x,
+        top: frame.y,
         width: frame.width,
         height: frame.height,
-        flexShrink: 0,
         overflow: resolvedRadius ? 'hidden' : undefined,
         borderRadius: resolvedRadius ? `${resolvedRadius}px` : undefined,
       }}>
@@ -125,6 +128,7 @@ export function AudioClip({ item, fps, muted, gainAt, transitions, premountFor, 
       <Sequence key={`${item.id}_${index}`} from={segment.fromFrame} durationInFrames={segment.durFrames} premountFor={premountFor} name={item.name}>
         <MixedRuntimeAudio item={item} browserRenderer={browserRenderer} trimBefore={segment.srcStartFrame} trimAfter={segment.srcEndFrame}
           volume={(frame) => volumeAt(segment.fromFrame - item.startFrame + frame) * gainAt(segment.fromFrame + frame)
+            * clipFadeFactor(segment.fromFrame - item.startFrame + frame, item.durationInFrames, item.fadeInFrames, item.fadeOutFrames)
             * audioCrossfadeMultiplier(item, segment.fromFrame - item.startFrame + frame, transitions)} />
       </Sequence>
     ))}</>;
@@ -163,6 +167,78 @@ export function ContinuousVideoAudio({ items, muted, gainAt, premountFor, browse
     <Sequence from={first.startFrame} durationInFrames={duration} premountFor={premountFor} name={`${first.name}:audio`}>
       <MixedRuntimeAudio item={first} browserRenderer={browserRenderer} trimBefore={first.srcInFrame ?? 0}
         playbackRate={first.playbackRate ?? 1} volume={volume} />
+    </Sequence>
+  );
+}
+
+export function SharedVideoVisualGroup({ group, fit, muted, canvasW, canvasH, premountFor, browserRenderer }: {
+  group: TimelineItem[];
+  fit: AspectFit;
+  muted: boolean;
+  canvasW: number;
+  canvasH: number;
+  premountFor: number;
+  browserRenderer: boolean;
+}) {
+  const frame = useCurrentFrame();
+  const first = group[0];
+  const last = group.at(-1);
+  if (!first || !last || !first.src) return null;
+  const duration = last.startFrame + last.durationInFrames - first.startFrame;
+  const timelineFrame = first.startFrame + frame;
+  const item = group.find((candidate) => timelineFrame >= candidate.startFrame
+    && timelineFrame < candidate.startFrame + candidate.durationInFrames) ?? first;
+  const localFrame = timelineFrame - item.startFrame;
+  const appearance = appearanceAt(item, localFrame, false, { width: canvasW, height: canvasH });
+  const sourceWidth = item.width ?? canvasW;
+  const sourceHeight = item.height ?? canvasH;
+  const rect = visibleVisualFrameRect(
+    { width: canvasW, height: canvasH },
+    { width: sourceWidth, height: sourceHeight },
+    fit,
+  );
+  const resolvedRadius = clampVisualBorderRadius(appearance.borderRadius, rect);
+  const style: CSSProperties = {
+    width: '100%',
+    height: '100%',
+    objectFit: objectFitInsideVisualFrame(fit),
+  };
+  let visual = (
+    <RuntimeVideo browserRenderer={browserRenderer} src={first.src} trimBefore={first.srcInFrame ?? 0}
+      playbackRate={first.playbackRate ?? 1} volume={0} muted={muted} style={style} />
+  );
+  if (item.zoom) {
+    const zoom = zoomAt(item.zoom, localFrame, item.durationInFrames);
+    visual = (
+      <AbsoluteFill style={{ transform: `scale(${zoom.magnification})`, transformOrigin: `${zoom.focalX * 100}% ${zoom.focalY * 100}%` }}>
+        {visual}
+      </AbsoluteFill>
+    );
+  }
+  return (
+    <Sequence from={first.startFrame} durationInFrames={duration} premountFor={premountFor} name={`${first.name}:visual`}>
+      <AbsoluteFill style={{
+        opacity: appearance.opacity,
+        transform: appearance.foregroundStyle.transform,
+        transformOrigin: appearance.foregroundStyle.transformOrigin,
+        transformBox: appearance.foregroundStyle.transformBox,
+        filter: appearance.foregroundStyle.filter,
+        clipPath: appearance.foregroundStyle.clipPath,
+      }}>
+        <AbsoluteFill>
+          <div style={{
+            position: 'absolute',
+            left: rect.x,
+            top: rect.y,
+            width: rect.width,
+            height: rect.height,
+            overflow: resolvedRadius ? 'hidden' : undefined,
+            borderRadius: resolvedRadius,
+          }}>
+            {visual}
+          </div>
+        </AbsoluteFill>
+      </AbsoluteFill>
     </Sequence>
   );
 }
@@ -245,7 +321,7 @@ function PlainMediaFill({ props, trimBefore, volume }: {
   volume: MediaVolume;
 }) {
   const { item, fit, canvasW, canvasH, borderRadius, groupedAudio, browserRenderer, muted } = props;
-  const style: CSSProperties = { width: '100%', height: '100%', objectFit: fit === 'cover' ? 'cover' : 'contain' };
+  const style: CSSProperties = { width: '100%', height: '100%', objectFit: objectFitInsideVisualFrame(fit) };
   const still = item.kind === 'image' || item.kind === 'gif' || item.kind === 'svg';
   return (
     <VisualClipSurface item={item} fit={fit} canvasW={canvasW} canvasH={canvasH} borderRadius={borderRadius}>

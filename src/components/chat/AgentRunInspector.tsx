@@ -20,6 +20,14 @@ import {
   type AgentRunRecord,
   type AgentRuntimeSidecar,
 } from '../../persist/agentRuntimeStore';
+import {
+  isServerRunRecord,
+  serverEventsForRun,
+  serverRunAcceptance,
+  serverRunTerminalReason,
+  serverRunToolFailures,
+} from './serverRunInspector';
+import { toolFailureNoteText } from '../../agent/toolFailureNote';
 import { theme, themeAlpha } from '../../theme';
 import { Icon } from '../icons';
 
@@ -29,7 +37,7 @@ type PopoverBox = { left: number; top: number; width: number; maxHeight: number 
 const compactNumber = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 const mono: CSSProperties = { fontFamily: 'Geist Mono, ui-monospace, SFMono-Regular, Menlo, monospace' };
 
-function useRuntimeSidecar(projectId: string) {
+function useRuntimeSidecar(projectId: string, refreshKey: boolean) {
   const [sidecar, setSidecar] = useState<AgentRuntimeSidecar | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -51,7 +59,7 @@ function useRuntimeSidecar(projectId: string) {
     void refresh();
     const unsubscribe = subscribeAgentRuntime(projectId, () => { void refresh(); });
     return () => { alive = false; unsubscribe(); };
-  }, [projectId]);
+  }, [projectId, refreshKey]);
   return { sidecar, loading, failed };
 }
 
@@ -149,47 +157,64 @@ function validToolOutcomes(events: unknown): AgentRunEvent[] {
     !!event && typeof event === 'object' && 'type' in event && event.type === 'tool_outcome');
 }
 
-function Metric({ label, value }: { label: string; value: string | number | undefined }) {
-  return <span style={metric}><span style={{ color: theme.textDim }}>{label}</span> {value ?? '—'}</span>;
+function Metric({ label, value, title }: { label: string; value: string | number | undefined; title?: string }) {
+  return <span style={metric} title={title ?? label}><span style={{ color: theme.textDim }}>{label}</span> {value ?? '—'}</span>;
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return <section style={section}><h4 style={sectionTitle}>{title}</h4>{children}</section>;
+function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  return <section style={section}>
+    <h4 style={sectionTitle} title={hint}>{title}{hint && <Icon name="info" size={11} />}</h4>
+    {children}
+  </section>;
 }
 
 function ContextSection({ run, t }: { run: AgentRunRecord; t: Translate }) {
   const context = run.context;
-  return <Section title={t('上下文与工具')}>
-    <div style={subtle}>{t('最近一次模型请求')}</div>
+  // 缓存写仅对支持「显式写缓存」的 provider（如 Anthropic）有意义；DeepSeek 等
+  // 只有服务器端 prompt 缓存，从不回报缓存写。无值时隐藏，避免显示无意义的 —。
+  const cacheWriteTokens = numberText(contextMetric(context, 'cacheWriteTokens'));
+  return <Section title={t('上下文与工具')} hint={t('本次运行与最近一次模型请求的 token 用量、缓存与工具面信息')}>
+    <div style={subheadInSection}>{t('最近一次模型请求')}</div>
     <div style={metrics}>
-      <Metric label={t('输入')} value={numberText(contextMetric(context, 'inputTokens'))} />
-      <Metric label={t('输出')} value={numberText(contextMetric(context, 'outputTokens'))} />
-      <Metric label={t('系统')} value={numberText(contextMetric(context, 'systemTokens'))} />
-      <Metric label={t('历史')} value={numberText(contextMetric(context, 'historyTokens'))} />
-      <Metric label={t('缓存读')} value={numberText(contextMetric(context, 'cacheReadTokens'))} />
-      <Metric label={t('缓存写')} value={numberText(contextMetric(context, 'cacheWriteTokens'))} />
-      <Metric label={t('未缓存')} value={numberText(contextMetric(context, 'noCacheTokens'))} />
-      <Metric label={t('活跃工具')} value={numberText(contextMetric(context, 'activeToolCount'))} />
-      <Metric label={t('工具 Schema')} value={numberText(contextMetric(context, 'toolSchemaCount'))} />
-      <Metric label={t('Schema 字符')} value={numberText(contextMetric(context, 'toolSchemaChars'))} />
+      <Metric label={t('输入')} title={t('输入 token：最近一次模型请求的输入量（提示词+工具结果）')} value={numberText(contextMetric(context, 'inputTokens'))} />
+      <Metric label={t('输出')} title={t('输出 token：最近一次模型请求返回的文本量')} value={numberText(contextMetric(context, 'outputTokens'))} />
+      <Metric label={t('系统')} title={t('系统提示词占用的输入 token')} value={numberText(contextMetric(context, 'systemTokens'))} />
+      <Metric label={t('历史')} title={t('对话历史占用的输入 token')} value={numberText(contextMetric(context, 'historyTokens'))} />
     </div>
-    <div style={subtle}>{t('本次运行累计')}</div>
+    <div style={subheadInSection}>{t('缓存')}</div>
     <div style={metrics}>
-      <Metric label={t('模型请求')} value={numberText(contextMetric(context, 'modelRequestCount'))} />
-      <Metric label={t('累计输入')} value={numberText(contextMetric(context, 'totalInputTokens'))} />
-      <Metric label={t('新鲜输入')} value={numberText(contextMetric(context, 'totalFreshInputTokens'))} />
-      <Metric label={t('累计输出')} value={numberText(contextMetric(context, 'totalOutputTokens'))} />
-      <Metric label={t('缓存命中率')} value={percentText(contextMetric(context, 'cacheHitRatio'))} />
-      <Metric label={t('累计重试')} value={numberText(contextMetric(context, 'totalRetryCount'))} />
-      <Metric label={t('图片输入')} value={numberText(contextMetric(context, 'totalMediaInputs'))} />
-      <Metric label={t('缓存诊断')} value={cacheMissLabel(contextMetric(context, 'cacheMissReason'), t)} />
+      <Metric label={t('缓存读')} title={t('缓存读：本次命中缓存的输入 token 数；命中越多越省')} value={numberText(contextMetric(context, 'cacheReadTokens'))} />
+      {cacheWriteTokens !== undefined && (
+        <Metric label={t('缓存写')} title={t('缓存写：本次写入缓存的 token 数（仅部分模型支持）')} value={cacheWriteTokens} />
+      )}
+      <Metric label={t('未缓存')} title={t('未缓存：本次未命中缓存、需重新计算的输入 token')} value={numberText(contextMetric(context, 'noCacheTokens'))} />
+      <Metric label={t('命中率')} title={t('本次运行累计的缓存命中比例')} value={percentText(contextMetric(context, 'cacheHitRatio'))} />
+      <Metric label={t('诊断')} title={t('上次缓存未命中的原因，用于判断为何没省到缓存')} value={cacheMissLabel(contextMetric(context, 'cacheMissReason'), t)} />
+    </div>
+    <div style={subheadInSection}>{t('工具')}</div>
+    <div style={metrics}>
+      <Metric label={t('活跃工具')} title={t('本次请求向模型开放可调用的工具数量')} value={numberText(contextMetric(context, 'activeToolCount'))} />
+      <Metric label={t('工具定义')} title={t('随请求一起发送给模型的工具 Schema 数量')} value={numberText(contextMetric(context, 'toolSchemaCount'))} />
+      <Metric label={t('Schema 字符')} title={t('全部工具 Schema 的字符数，衡量工具面大小')} value={numberText(contextMetric(context, 'toolSchemaChars'))} />
+    </div>
+    <div style={subheadInSection}>{t('本次运行累计')}</div>
+    <div style={metrics}>
+      <Metric label={t('模型请求')} title={t('本次运行累计发起的模型请求次数')} value={numberText(contextMetric(context, 'modelRequestCount'))} />
+      <Metric label={t('累计输入')} title={t('本次运行所有模型请求的输入 token 之和')} value={numberText(contextMetric(context, 'totalInputTokens'))} />
+      <Metric label={t('新鲜输入')} title={t('未命中任何缓存、真正新计算的输入 token 之和')} value={numberText(contextMetric(context, 'totalFreshInputTokens'))} />
+      <Metric label={t('累计输出')} title={t('本次运行所有模型请求的输出 token 之和')} value={numberText(contextMetric(context, 'totalOutputTokens'))} />
+      <Metric label={t('累计重试')} title={t('本次运行因临时错误自动重试的次数')} value={numberText(contextMetric(context, 'totalRetryCount'))} />
+      <Metric label={t('图片输入')} title={t('本次发送给模型的图片数量')} value={numberText(contextMetric(context, 'totalMediaInputs'))} />
     </div>
   </Section>;
 }
 
 function CheckpointSection({ checkpoint, t }: { checkpoint?: AgentCheckpointRecord; t: Translate }) {
-  if (!checkpoint) return <Section title={t('上下文检查点')}><div style={emptyLine}>{t('本次运行没有检查点')}</div></Section>;
-  return <Section title={t('上下文检查点')}>
+  // Same treatment as the archived-results block: hide the section entirely when
+  // this run made no context checkpoint, since "no checkpoint on this run" is the
+  // normal state and an always-visible empty block is not helpful.
+  if (!checkpoint) return null;
+  return <Section title={t('上下文检查点')} hint={t('长对话被压缩后的摘要检查点，用于追溯上下文如何被裁剪')}>
     <div style={detailLine}>{checkpoint.summary || t('无摘要')}</div>
     <div style={subtle}>{t('源消息 {count} 条', { count: numberText(checkpoint.sourceMessageCount) ?? '—' })}</div>
     <code title={checkpoint.sourceDigest} style={digest}>{checkpoint.sourceDigest}</code>
@@ -215,7 +240,7 @@ function outcomeLabel(event: AgentRunEvent, t: Translate): string {
 
 function ToolOutcomeSection({ events, t }: { events: unknown; t: Translate }) {
   const outcomes = validToolOutcomes(events).slice(-8).reverse();
-  return <Section title={t('工具结果')}>
+  return <Section title={t('工具结果')} hint={t('最近调用的工具及其执行结果（只列最近 8 条）')}>
     {outcomes.length === 0 ? <div style={emptyLine}>{t('没有工具结果')}</div> : outcomes.map((event) => {
       const detail = firstText(event.outcome?.summary, event.outcome?.code, event.operationId);
       return <div key={event.eventId} style={row}>
@@ -237,7 +262,7 @@ function approvalLabel(status: string, t: Translate): string {
 }
 
 function ApprovalSection({ approvals, t }: { approvals: readonly AgentApprovalRecord[]; t: Translate }) {
-  return <Section title={t('审批')}>
+  return <Section title={t('审批')} hint={t('本次运行涉及的确认/审批记录（只列前 6 条）')}>
     {approvals.length === 0 ? <div style={emptyLine}>{t('没有审批记录')}</div> : approvals.slice(0, 6).map((approval) => {
       const detail = firstText(approval.summary, approval.operationId);
       return <div key={approval.approvalId} style={row}>
@@ -253,14 +278,15 @@ function ApprovalSection({ approvals, t }: { approvals: readonly AgentApprovalRe
 }
 
 function ArtifactSection({ artifacts, t }: { artifacts: readonly AgentArtifactIndexEntry[]; t: Translate }) {
-  return <Section title={t('归档结果')}>
-    {artifacts.length === 0 ? <div style={emptyLine}>{t('没有归档结果')}</div> : artifacts.slice(0, 6).map((artifact) => (
+  // Hide the section entirely when there is nothing archived: the "归档结果"
+  // block is an internal token-optimization diagnostic that is empty for most
+  // runs and confusing as an always-visible empty block.
+  if (artifacts.length === 0) return null;
+  return <Section title={t('归档结果')} hint={t('本次运行归档的产物记录（只列前 6 条）')}>
+    {artifacts.slice(0, 6).map((artifact) => (
       <div key={artifact.artifactId} style={artifactRow}>
         <div style={rowTitle}><code title={artifact.artifactId} style={mono}>{artifact.artifactId}</code><span>{textValue(artifact.toolName) ?? artifact.kind}</span></div>
-        <div style={subtle}>
-          {numberText(artifact.originalChars) ?? '—'} {t('字符')} · {numberText(artifact.originalBytes) ?? '—'} {t('字节')}
-          {artifact.redacted ? ` · ${t('已脱敏')}` : ''}{artifact.binaryOmitted ? ` · ${t('已省略二进制')}` : ''}
-        </div>
+        <div style={subtle}>{numberText(artifact.originalChars) ?? '—'} {t('字符')} · {numberText(artifact.originalBytes) ?? '—'} {t('字节')}{artifact.redacted ? ` · ${t('已脱敏')}` : ''}{artifact.binaryOmitted ? ` · ${t('已省略二进制')}` : ''}</div>
         <code title={artifact.bodySha256} style={digest}>SHA-256 {artifact.bodySha256}</code>
       </div>
     ))}
@@ -280,17 +306,38 @@ function InspectorContent({ sidecar, loading, failed, t }: {
   const checkpoint = sidecar.checkpoints.find((item) => item.runId === run.runId);
   const approvals = sidecar.approvals.filter((item) => item.runId === run.runId);
   const artifacts = sidecar.artifacts.filter((item) => item.runId === run.runId);
+  // Cumulative totals across every run in this project: the inspector shows the
+  // latest run's details, but "几步对话/多少次模型请求" is a project-wide figure.
+  const runCount = sidecar.runs.length;
+  const totalModelRequests = sidecar.runs.reduce((sum, item) => {
+    const value = contextMetric(item.context, 'modelRequestCount');
+    return sum + (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+  }, 0);
+  const serverRun = isServerRunRecord(run);
+  const serverEvents = serverRun ? serverEventsForRun(run) : [];
+  const terminalReason = serverRun ? serverRunTerminalReason(run, serverEvents) : undefined;
+  const acceptance = serverRun ? serverRunAcceptance(serverEvents) : undefined;
+  const toolFailureNote = serverRun ? toolFailureNoteText(serverRunToolFailures(serverEvents)) : '';
   return <>
     <div style={runSummary}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <span style={{ ...statusDot, background: statusColor(run.status) }} />
         <strong style={{ color: theme.text, fontSize: 12.5 }}>{statusLabel(run.status, t)}</strong>
+        {serverRun && <span style={serverBadge}>{t('服务端')}</span>}
         <span style={{ marginLeft: 'auto', color: theme.textDim, fontSize: 10.5 }}>{validTime(run.updatedAt)}</span>
       </div>
       <div style={backend}>{textValue(run.backend) ?? t('未知后端')} · {textValue(run.modelId) ?? t('未知模型')}</div>
+      <div style={subtle}>{t('全部对话：{runs} 轮 · 累计 {requests} 次模型请求', { runs: numberText(runCount) ?? '0', requests: numberText(totalModelRequests) ?? '0' })}</div>
       <div style={{ ...subtle, marginTop: 4 }}>{run.userInputPreview || t('未记录请求摘要')}</div>
     </div>
-    {run.status === 'interrupted' && <div role="note" style={interrupted}>{t('这次运行被意外中断，系统不会自动继续或重放副作用。请先检查外部任务状态，再决定是否重试。')}</div>}
+    {run.status === 'interrupted' && <div role="note" style={interrupted}>{t('这次运行被意外中断，系统不会自动继续或重放副作用。请先检查外部任务状态，再决定是否重试。')}{terminalReason && <div style={reason}>{terminalReason}</div>}</div>}
+    {serverRun && run.status !== 'interrupted' && terminalReason && <div role="note" style={serverReason}>{terminalReason}</div>}
+    {acceptance && <div role="status" style={serverReason}>{t('自主验收：{status} · 第 {iteration}/{max} 轮', {
+      status: t({ checking: '检查中', paused: '等待补充信息', passed: '已通过', failed: '未通过' }[acceptance.status]),
+      iteration: acceptance.iteration,
+      max: acceptance.maxIterations,
+    })}</div>}
+    {toolFailureNote && <div role="note" style={serverReason}>{toolFailureNote}</div>}
     <ContextSection run={run} t={t} />
     <CheckpointSection checkpoint={checkpoint} t={t} />
     <ToolOutcomeSection events={run.events} t={t} />
@@ -301,8 +348,8 @@ function InspectorContent({ sidecar, loading, failed, t }: {
 
 export function AgentRunInspector({ projectId }: { projectId: string }) {
   const t = useT();
-  const { sidecar, loading, failed } = useRuntimeSidecar(projectId);
   const [open, setOpen] = useState(false);
+  const { sidecar, loading, failed } = useRuntimeSidecar(projectId, open);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const box = usePopoverBox(open, triggerRef.current);
@@ -351,8 +398,12 @@ const runSummary: CSSProperties = { padding: '10px 12px 9px' };
 const statusDot: CSSProperties = { width: 7, height: 7, flex: '0 0 auto', borderRadius: '50%' };
 const backend: CSSProperties = { marginTop: 6, color: theme.text, fontSize: 11.5, ...mono };
 const interrupted: CSSProperties = { margin: '0 12px 8px', padding: 8, border: `0.5px solid ${theme.gold}`, borderRadius: 4, color: theme.text, background: themeAlpha.ink(0.04), fontSize: 11, lineHeight: 1.45 };
+const serverBadge: CSSProperties = { padding: '1px 4px', borderRadius: 3, color: theme.accent, background: themeAlpha.accent(0.12), fontSize: 9.5 };
+const reason: CSSProperties = { marginTop: 5, color: theme.textDim, fontSize: 10.5 };
+const serverReason: CSSProperties = { margin: '0 12px 8px', padding: 8, border: `0.5px solid ${theme.border}`, borderRadius: 4, color: theme.text, background: themeAlpha.ink(0.03), fontSize: 11, lineHeight: 1.45 };
 const section: CSSProperties = { padding: '9px 12px', borderTop: `0.5px solid ${theme.border}` };
-const sectionTitle: CSSProperties = { margin: '0 0 7px', color: theme.textMuted, fontSize: 10.5, fontWeight: 650 };
+const sectionTitle: CSSProperties = { margin: '0 0 7px', color: theme.textMuted, fontSize: 10.5, fontWeight: 650, display: 'flex', alignItems: 'center', gap: 4 };
+const subheadInSection: CSSProperties = { margin: '6px 0 4px', color: theme.textMuted, fontSize: 9.5, fontWeight: 650, textTransform: 'uppercase', letterSpacing: 0.3 };
 const metrics: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: '5px 10px' };
 const metric: CSSProperties = { color: theme.text, fontSize: 10.5, fontVariantNumeric: 'tabular-nums' };
 const row: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 0' };

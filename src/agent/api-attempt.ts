@@ -27,6 +27,20 @@ import {
 } from './api-retry';
 import { ToolFailureTracker } from './toolFailure';
 
+/**
+ * AI SDK tool-execution timeout. `toolMs` remains the fail-fast default for
+ * every tool, while the SDK's per-tool override grants only on-device
+ * transcription enough time for model load and inference. wasm base runs at
+ * RTF ~0.35 (a 15-min clip ≈ 5 min), small at RTF ~0.9 (15-min clip ≈ 13
+ * min); 15 minutes covers both while still bounding a stuck worker.
+ */
+export const AGENT_TOOL_TIMEOUTS = {
+  toolMs: 30_000,
+  tools: {
+    transcribe_trackMs: 900_000,
+  },
+} as const;
+
 export interface ApiAttemptOptions {
   readonly model: LanguageModel;
   readonly system: string;
@@ -212,7 +226,11 @@ class ApiRequestAttempt {
         maxOutputTokens: this.options.maxOutputTokens,
         maxRetries: 0,
         abortSignal: this.options.signal,
-        timeout: { stepMs: 120_000, firstChunkMs: 30_000, toolMs: 30_000 },
+        timeout: {
+          stepMs: 120_000,
+          firstChunkMs: 30_000,
+          ...AGENT_TOOL_TIMEOUTS,
+        },
         ...(this.options.providerOptions ? { providerOptions: this.options.providerOptions } : {}),
       }));
       if (!started.ok) {

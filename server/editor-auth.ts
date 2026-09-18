@@ -1,14 +1,31 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { TLSSocket } from 'node:tls';
 import type { EditorBootstrapInfo } from '../shared/editor-auth-transport.ts';
-import { projectStoreHttpAuthorized } from './project-store-http-auth.ts';
+import { isLoopbackAddress } from './loopback-address.ts';
+import { loadOrCreateMcpToken } from './mcp-token.ts';
+import { runtimeProfile } from './runtime-profile.ts';
 
-export const EDITOR_CREDENTIAL_HEADER = 'x-openchatcut-editor-credential';
 export const EDITOR_BOOTSTRAP_HEADER = 'x-openchatcut-editor-bootstrap';
 
-const editorCredential = randomBytes(32).toString('base64url');
-const generatedMcpToken = randomBytes(32).toString('base64url');
+/** Lazy so tests and the env override never touch the filesystem. */
+let persistentMcpToken: string | undefined;
+
+function resolvePersistentMcpToken(): string {
+  if (persistentMcpToken === undefined) {
+    const profile = runtimeProfile();
+    const result = loadOrCreateMcpToken(
+      profile.mode === 'isolated-dev' ? { profileId: profile.id } : {},
+    );
+    if (!result.persisted) {
+      // The MCP guide promises a stable token; when the filesystem breaks that
+      // promise the user deserves one line saying so and how to pin it.
+      console.warn('[mcp] token could not be persisted and will change on restart; set OPENCHATCUT_MCP_TOKEN to pin it');
+    }
+    persistentMcpToken = result.token;
+  }
+  return persistentMcpToken;
+}
 const LOCAL_EDITOR_HOSTS: Readonly<Record<string, true>> = {
   localhost: true,
   '127.0.0.1': true,
@@ -16,7 +33,7 @@ const LOCAL_EDITOR_HOSTS: Readonly<Record<string, true>> = {
 };
 
 export function externalMcpToken(): string {
-  return process.env.OPENCHATCUT_MCP_TOKEN?.trim() || generatedMcpToken;
+  return process.env.OPENCHATCUT_MCP_TOKEN?.trim() || resolvePersistentMcpToken();
 }
 
 function secretMatches(actual: string | undefined, expected: string): boolean {
@@ -66,6 +83,7 @@ function requestEditorOrigin(req: IncomingMessage): string | null {
 }
 
 export function trustedEditorRequest(req: IncomingMessage, requireOrigin: boolean): boolean {
+  if (!isLoopbackAddress(req.socket.remoteAddress)) return false;
   const expected = requestEditorOrigin(req);
   if (!expected) return false;
   const origin = headerValue(req, 'origin');
@@ -77,12 +95,13 @@ export function trustedEditorRequest(req: IncomingMessage, requireOrigin: boolea
   }
 }
 
+/** Editor-capable endpoints (uploads, model packs, external-agent bridge) are
+ *  authorized purely by the loopback + Origin request shape: any page served
+ *  from the local editor may call them. No credential handshake is needed. */
 export function editorCredentialAuthorized(req: IncomingMessage, requireOrigin: boolean): boolean {
-  if (!trustedEditorRequest(req, requireOrigin)) return false;
-  const credential = headerValue(req, EDITOR_CREDENTIAL_HEADER) ?? undefined;
-  return secretMatches(credential, editorCredential) || projectStoreHttpAuthorized(req);
+  return trustedEditorRequest(req, requireOrigin);
 }
 
 export function editorBootstrapPayload(): EditorBootstrapInfo {
-  return { credential: editorCredential, mcpToken: externalMcpToken() };
+  return { mcpToken: externalMcpToken() };
 }

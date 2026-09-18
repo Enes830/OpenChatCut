@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { access, mkdir, open, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
+import { access, mkdir, open, rename, rm, stat, unlink, type FileHandle } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -17,10 +17,13 @@ import {
   isSafeUploadName,
   resolveOrHydrateUploadFile,
   resolveUploadFile,
+  resolveUploadReference,
   uploadDir,
   type ResolvedUploadFile,
 } from '../media-dir.ts';
+import { resolveProductAsset } from '../product-assets.ts';
 import { safePublicFetch } from '../safe-public-fetch.ts';
+import { materializeExportReferences } from './export-reference-materialization.ts';
 
 const MAX_MATERIALIZED_MEDIA_BYTES = 10 * 1024 * 1024 * 1024;
 const MIME_EXTENSIONS: Readonly<Record<string, string>> = {
@@ -52,6 +55,7 @@ export interface ServerExportMediaOptions {
   uploadDirectory?: string;
   fetcher?: typeof safePublicFetch;
   resolveUpload?: (name: string) => string | null;
+  resolveUploadReference?: (name: string) => string | null;
   hydrateUpload?: (name: string, signal?: AbortSignal) => Promise<ResolvedUploadFile | null>;
   maxMaterializedBytes?: number;
   signal?: AbortSignal;
@@ -66,7 +70,7 @@ export interface MaterializedServerExportMedia<Value> {
 
 type ResolvedServerExportMediaOptions = Required<Pick<
   ServerExportMediaOptions,
-  'publicDirectory' | 'uploadDirectory' | 'fetcher' | 'resolveUpload' | 'hydrateUpload' | 'maxMaterializedBytes'
+  'publicDirectory' | 'uploadDirectory' | 'fetcher' | 'resolveUpload' | 'resolveUploadReference' | 'hydrateUpload' | 'maxMaterializedBytes'
 >> & Pick<ServerExportMediaOptions, 'signal'>;
 
 async function readableFile(path: string): Promise<boolean> {
@@ -105,7 +109,7 @@ async function cleanupPaths(paths: readonly string[]): Promise<void> {
   await Promise.all(paths.map(async (path) => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
-        await unlink(path);
+        await rm(path, { recursive: true, force: true });
         return;
       } catch (error) {
         if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
@@ -224,13 +228,33 @@ async function checkLocalReference(
   if (reference.source.startsWith('blob:')) {
     return issueFor(reference, 'unsupported_source', `Blob URL is not readable by the export server: ${reference.source}`);
   }
-  if (reference.source.startsWith('file:') || isAbsolute(reference.source) && !reference.source.startsWith('/')) {
-    return issueFor(reference, 'unsupported_source', `Local file source is not mapped for export: ${reference.source}`);
+  // Local filesystem paths are NOT renderable media sources.
+  //
+  // node:path.isAbsolute is platform-scoped, so a single window can't classify
+  // both a Windows drive path ("D:\Music\a.mp3") and a POSIX absolute path
+  // ("/Users/me/a.mp3") — on macOS `isAbsolute("D:\\...")` is false and on
+  // Windows `isAbsolute("/Users/...")` is true. Detect each form explicitly so
+  // a project authored on one OS fails identically on the other (issue #55).
+  // "/media/uploads/..." is the library-mapped source we DO render; all other
+  // absolute paths are treated as local files that were never imported/mapped.
+  const isLocalFileUrl = reference.source.startsWith('file:');
+  const isWindowsDrivePath = /^[A-Za-z]:[\\/]/.test(reference.source); // C:\… | D:/…
+  const productAssetPath = resolveProductAsset(reference.source.split(/[?#]/, 1)[0] ?? '');
+  const isOtherPosixAbsolute = reference.source.startsWith('/')
+    && !reference.source.startsWith('/media/uploads/')
+    && !productAssetPath;
+  if (isLocalFileUrl || isWindowsDrivePath || isOtherPosixAbsolute) {
+    return issueFor(
+      reference,
+      'unsupported_source',
+      `Local file source is not mapped for export: ${reference.source}. This is a file path on disk, not a library media reference — render and export only accept the media pool (/media/uploads/…) or a materialized same-origin URL. Please re-import the asset into the media pool or relink the clip to its pool asset so the src is a /media/uploads/… path.`,
+    );
   }
 
+  const rawPathname = reference.source.split(/[?#]/, 1)[0] ?? '';
   let pathname: string;
   try {
-    pathname = decodeURIComponent(reference.source.split(/[?#]/, 1)[0] ?? '');
+    pathname = decodeURIComponent(rawPathname);
   } catch {
     return issueFor(reference, 'unsupported_source', `Media source has invalid path encoding: ${reference.source}`);
   }
@@ -280,9 +304,17 @@ async function checkLocalReference(
   }
   const readable = await readableFile(candidate);
   options.signal?.throwIfAborted();
-  return readable
+  if (readable) return null;
+
+  // Product-bundled media is served at the same root-absolute URL paths as
+  // public media by productAssetsPlugin. Keep this lookup behind the same
+  // resolver so export preflight and the static renderer agree on disk layout.
+  const productAsset = resolveProductAsset(rawPathname);
+  const productReadable = productAsset ? await readableFile(productAsset) : false;
+  options.signal?.throwIfAborted();
+  return productReadable
     ? null
-    : issueFor(reference, 'missing_source', `Public media source is missing or unreadable: ${reference.source}`);
+    : issueFor(reference, 'missing_source', `Public or product media source is missing or unreadable: ${reference.source}`);
 }
 
 
@@ -325,6 +357,7 @@ function resolvedOptions(options: ServerExportMediaOptions): ResolvedServerExpor
     uploadDirectory: resolve(options.uploadDirectory ?? uploadDir()),
     fetcher: options.fetcher ?? safePublicFetch,
     resolveUpload: options.resolveUpload ?? resolveUploadFile,
+    resolveUploadReference: options.resolveUploadReference ?? resolveUploadReference,
     hydrateUpload: options.hydrateUpload
       ?? ((name, signal) => resolveOrHydrateUploadFile(name, undefined, signal)),
     maxMaterializedBytes,
@@ -367,6 +400,15 @@ export async function materializeServerExportMedia<Value>(
     )).filter((issue): issue is ExportMediaIssue => issue !== null);
     resolved.signal?.throwIfAborted();
     if (localIssues.length > 0) throw preflightFailure(localIssues);
+
+    const referenced = await materializeExportReferences(
+      localReferences,
+      resolved.uploadDirectory,
+      resolved.resolveUploadReference,
+      resolved.signal,
+    );
+    for (const [source, publicPath] of referenced.replacements) replacements.set(source, publicPath);
+    localPaths.push(...referenced.localPaths);
 
     const remoteIssues: ExportMediaIssue[] = [];
     const attemptedRemoteSources = new Set<string>();

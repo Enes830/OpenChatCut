@@ -1,11 +1,12 @@
 // Provider marks are vendored from official brand assets where available, plus
-// @lobehub/icons-static-svg v1.93.0 (MIT) and simple-icons (CC0). Static SVGs
+// @lobehub/icons-static-svg v1.93.0 (MIT), simple-icons (CC0) and @primer/octicons (MIT). Static SVGs
 // render inline for consistent sizing; monochrome marks inherit the active skin.
 // Mureka/E2B/local disk remain monograms because they have no suitable provider mark here.
 import type { CSSProperties } from 'react';
 import { theme } from '../../theme';
 import claudeSvg from '../../../assets/vendor-icons/claude-color.svg?raw';
 import openaiSvg from '../../../assets/vendor-icons/openai.svg?raw';
+import copilotSvg from '../../../assets/vendor-icons/copilot.svg?raw';
 import geminiSvg from '../../../assets/vendor-icons/gemini-color.svg?raw';
 import kimiSvg from '../../../assets/vendor-icons/kimi-color.svg?raw';
 import qwenSvg from '../../../assets/vendor-icons/qwen-color.svg?raw';
@@ -38,12 +39,12 @@ import lmstudioSvg from '../../../assets/vendor-icons/lmstudio-color.svg?raw';
 import visionSvg from '../../../assets/vendor-icons/vision.svg?raw';
 
 export type VendorId =
-  | 'llm' | 'anthropic' | 'openai' | 'gemini' | 'kimi' | 'qwen' | 'glm' | 'deepseek' | 'mistral' | 'openrouter'
+  | 'llm' | 'anthropic' | 'openai' | 'gemini' | 'kimi' | 'qwen' | 'glm' | 'deepseek' | 'mistral' | 'openrouter' | 'orcarouter'
   | 'ollama' | 'lmstudio' | 'xiaomi' | 'minimax' | 'hailuo' | 'elevenlabs' | 'doubao'
-  | 'seedance' | 'kling' | 'mureka' | 'pexels' | 'pixabay' | 'unsplash' | 'freesound'
+  | 'seedance' | 'kling' | 'mureka' | 'sonilo' | 'pexels' | 'pixabay' | 'unsplash' | 'freesound'
   | 'assemblyai' | 'deepgram' | 'groq' | 'cartesia' | 'e2b' | 'firecrawl' | 'r2' | 'localdisk' | 'localasr'
   | 'stepfun' | 'byteplus' | 'inworld' | 'fishaudio' | 'speechify' | 'wavespeed'
-  | 'vision';
+  | 'vision' | 'proxy' | 'atlas' | 'xai' | 'xai-oauth' | 'copilot' | 'ofox';
 
 interface SvgIcon {
   readonly svg: string;
@@ -51,9 +52,12 @@ interface SvgIcon {
   readonly tint?: string;
 }
 
+const PROXY_ICON = '<svg viewBox="0 0 24 24"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm-9-9h18M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9S9.5 5.6 12 3z"/></svg>';
+
 const SVG_ICONS: Partial<Record<VendorId, SvgIcon>> = {
   anthropic: { svg: claudeSvg },                    // Agent brain uses Claude starburst (official orange)
   openai: { svg: openaiSvg, tint: theme.text },     // The official ring is a single color, which will match the skin color (dark skin is nearly white/light skin is nearly black)
+  copilot: { svg: copilotSvg, tint: theme.text },   // Octicon copilot mark (MIT); monochrome, follows the skin
   gemini: { svg: geminiSvg },
   kimi: { svg: kimiSvg },
   qwen: { svg: qwenSvg },
@@ -83,6 +87,7 @@ const SVG_ICONS: Partial<Record<VendorId, SvgIcon>> = {
   openrouter: { svg: openrouterSvg, tint: '#7624F4' }, // Official OpenRouter mark + primary purple
   ollama: { svg: ollamaSvg, tint: theme.text },        // Official llama mark, adapted for skin contrast
   lmstudio: { svg: lmstudioSvg },                      // Official LM Studio color app icon
+  proxy: { svg: PROXY_ICON }, // network proxy
   vision: { svg: visionSvg },                          // Vision bypass feature mark (generated)
 };
 
@@ -96,6 +101,12 @@ const MONOGRAMS: Partial<Record<VendorId, { bg: string; mono: string; fg?: strin
   inworld: { bg: '#7A5CFF', mono: 'IW' }, // Inworld TTS, no official SVG vendored yet
   speechify: { bg: '#FF6A3D', mono: 'SP' }, // Speechify, no official SVG vendored yet
   wavespeed: { bg: '#00B8D9', mono: 'WS' }, // WaveSpeed AI, no official SVG vendored yet
+  atlas: { bg: '#147D64', mono: 'AC' }, // Atlas Cloud, neutral monogram keeps the provider list asset-free
+  sonilo: { bg: '#101828', mono: 'SO', fg: '#e8f6f2' }, // Sonilo, no official SVG vendored yet
+  ofox: { bg: '#FF6A00', mono: 'OF', fg: '#2b1602' }, // OFox, neutral monogram keeps the provider list asset-free
+  xai: { bg: '#101010', mono: 'x', fg: '#f7f7f8' }, // xAI Grok, no official SVG vendored yet
+  'xai-oauth': { bg: '#101010', mono: 'x', fg: '#f7f7f8' }, // xAI subscription login, shares the Grok monogram
+  orcarouter: { bg: '#0F172A', mono: 'OR', fg: '#38BDF8' }, // OrcaRouter gateway, no official SVG vendored yet
 };
 
 interface VendorIconProps {

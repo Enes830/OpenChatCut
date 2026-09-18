@@ -6,7 +6,6 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ASR_MODELS, asrModelEntry, asrModelFile, type AsrModelEntry } from '../../shared/asr-models';
-import { EDITOR_CREDENTIAL_HEADER, editorBootstrapPayload } from '../editor-auth';
 import { __resetAsrTasks, handleAsrModelsRequest, inspectAsrModel } from './asr-models';
 
 const server = createServer((req, res) => {
@@ -21,7 +20,6 @@ await once(server, 'listening');
 const address = server.address();
 assert(address && typeof address === 'object');
 const origin = `http://127.0.0.1:${address.port}`;
-const credential = editorBootstrapPayload().credential;
 const mutationPaths = ['/api/asr-models/download', '/api/asr-models/delete'] as const;
 
 async function post(path: string, headers: HeadersInit, id = 'not-in-fixed-catalog'): Promise<Response> {
@@ -35,22 +33,19 @@ async function post(path: string, headers: HeadersInit, id = 'not-in-fixed-catal
 try {
   for (const path of mutationPaths) {
     assert.equal((await post(path, {
-      Origin: origin,
       'Content-Type': 'application/json',
-    })).status, 401, `${path} must reject missing editor credentials`);
+    })).status, 401, `${path} must reject a request without Origin`);
     assert.equal((await post(path, {
+      Origin: 'http://evil.example',
       'Content-Type': 'application/json',
-      [EDITOR_CREDENTIAL_HEADER]: credential,
     })).status, 401, `${path} must require a trusted same-origin request`);
     assert.equal((await post(path, {
       Origin: origin,
       'Content-Type': 'text/plain',
-      [EDITOR_CREDENTIAL_HEADER]: credential,
     })).status, 415, `${path} must reject non-JSON content`);
     assert.equal((await post(path, {
       Origin: origin,
       'Content-Type': 'application/json',
-      [EDITOR_CREDENTIAL_HEADER]: credential,
     })).status, 400, `${path} must pass authorization and reject IDs outside the fixed catalog`);
   }
 } finally {
@@ -60,12 +55,17 @@ try {
 
 assert.deepEqual(ASR_MODELS.map((entry) => entry.revision), [
   '5332fcc35e32a33b86612b9a57a89be7906102b1',
-  '64da57285918e20ea79ea5c88eed7197933abaa8',
+  '608c49e61301901684bc36cac8f74b95ff6b5a8e',
   '2d67713f236afa48a18992566e7647f6ca848e13',
   '8c5b90880ab9f79487ab33613413431bf661d595',
+  'b3f77bf9a8c4d5ea3415827033d1ffea7955fd9a',
 ]);
 for (const model of ASR_MODELS) {
-  assert.equal(model.files.length, 7);
+  // tiny/base/small carry WebGPU fp16/fp32 variants (7 q8 files + encoder
+  // fp16 + decoder fp16 + encoder fp32); medium and large-v3-turbo stay at
+  // the plain q8 set (their fp32 encoders are 1.2GB / 2.5GB).
+  const expectedFiles = model.id === 'medium' || model.id === 'large-v3-turbo' ? 7 : 10;
+  assert.equal(model.files.length, expectedFiles);
   for (const file of model.files) {
     assert(file.sizeBytes > 0);
     assert.match(file.sha256, /^[a-f0-9]{64}$/);
@@ -108,8 +108,40 @@ try {
   await writeFile(join(modelRoot, entry.files[0]!.path), expectedContent);
   __resetAsrTasks();
   assert.deepEqual(await inspectAsrModel(entry, root), { downloaded: true, bytes: expectedContent.length });
+  const canceledInspection = new AbortController();  canceledInspection.abort(new DOMException('canceled', 'AbortError'));
+  await assert.rejects(
+    inspectAsrModel(entry, root, canceledInspection.signal),
+    (error: unknown) => error instanceof DOMException && error.name === 'AbortError',
+    'an aborted inspection must reject even when an integrity result is cached',
+  );
 } finally {
   await rm(root, { recursive: true, force: true });
+}
+
+// GGML companion files participate in the downloaded state: missing ggml
+// keeps the tier not-downloaded even when every ONNX file is present.
+{
+  const ggmlRoot = join(root, 'ggml');
+  const ggmlBytes = Buffer.from('ggml');
+  const ggmlEntry: AsrModelEntry = {
+    ...entry,
+    ggmlFile: {
+      fileName: 'ggml-test.bin',
+      sizeBytes: ggmlBytes.length,
+      sha256: createHash('sha256').update(ggmlBytes).digest('hex'),
+      revision: 'b'.repeat(40),
+    },
+  };
+  // The previous block removed the temp root; restore the ONNX file.
+  await mkdir(join(root, ggmlEntry.modelId), { recursive: true });
+  await writeFile(join(root, ggmlEntry.modelId, ggmlEntry.files[0]!.path), expectedContent);
+  const onnxOnly = await inspectAsrModel(ggmlEntry, root);
+  assert.equal(onnxOnly.downloaded, false, 'missing ggml file keeps the tier not downloaded');
+  await mkdir(ggmlRoot, { recursive: true });
+  await writeFile(join(ggmlRoot, ggmlEntry.ggmlFile!.fileName), ggmlBytes);
+  const complete = await inspectAsrModel(ggmlEntry, root);
+  assert.equal(complete.downloaded, true, 'onnx + ggml present counts as downloaded');
+  assert.equal(complete.bytes, expectedContent.length + ggmlBytes.length, 'bytes include the ggml file');
 }
 
 console.log('asr-models.verify: mutation authorization and JSON contract OK');

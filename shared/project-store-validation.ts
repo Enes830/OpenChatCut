@@ -1,12 +1,13 @@
 import { parseAgentSessionGenerationRecord } from './agent-session-generation.ts';
 import type { ProjectStoreRequest } from './project-store-transport.ts';
 
-const VALID_KEY = /^(?!__proto__$)(?!prototype$)(?!constructor$)[a-zA-Z0-9:_-]{1,300}$/;
-const VALID_AGENT_PROJECT_ID = /^[a-zA-Z0-9_-]{1,160}$/;
+const VALID_KEY = /^(?!__proto__$)(?!prototype$)(?!constructor$)[a-zA-Z0-9:_-]{1,300}$/;const VALID_AGENT_PROJECT_ID = /^[a-zA-Z0-9_-]{1,160}$/;
+const SEMANTIC_EMBEDDING_DIMENSION = 512;
 const VALID_AGENT_ARTIFACT_ID = /^[a-zA-Z0-9_-]{1,20}$/;
 const VALID_SESSION_GENERATION = /^[a-zA-Z0-9_-]{1,80}$/;
+const VALID_UPLOAD_FINALIZE_HASH = /^[a-f0-9]{64}$/;
 const STRICT_PROJECT_SCOPED_KEY = /^(?:agent-runtime|agent-session-generation|external-proposal|offline-edit-session|project-edit-ownership|review):([a-zA-Z0-9_-]{1,160})$/;
-const STRICT_PROJECT_SCOPED_PREFIX = /^(?:agent-runtime|agent-artifact|agent-session-generation|agent-session-chat|agent-session-proposal|agent-session-runtime|agent-session-artifact|external-proposal|offline-edit-session|project-edit-ownership|review):/;
+const STRICT_PROJECT_SCOPED_PREFIX = /^(?:agent-runtime|agent-artifact|agent-session-generation|agent-session-chat|agent-session-proposal|agent-session-runtime|agent-session-artifact|external-proposal|offline-edit-session|project-edit-ownership|review|upload-finalize):/;
 const LEGACY_PROJECT_SCOPED_KEY = /^(?:project|chat|creative-mode|thumb|proposal|versions|jobs):(.+)$/;
 
 function sessionProjectId(key: string, namespace: string, trailingParts: number): string | undefined {
@@ -15,6 +16,16 @@ function sessionProjectId(key: string, namespace: string, trailingParts: number)
   return parts.length === trailingParts + 2
     && VALID_AGENT_PROJECT_ID.test(parts[0]!)
     && VALID_SESSION_GENERATION.test(parts[1]!)
+    ? parts[0]
+    : undefined;
+}
+
+function uploadFinalizeProjectId(key: string): string | undefined {
+  if (!key.startsWith('upload-finalize:')) return undefined;
+  const parts = key.slice('upload-finalize:'.length).split(':');
+  return parts.length === 2
+    && VALID_AGENT_PROJECT_ID.test(parts[0]!)
+    && VALID_UPLOAD_FINALIZE_HASH.test(parts[1]!)
     ? parts[0]
     : undefined;
 }
@@ -38,6 +49,8 @@ export function projectIdFromProjectStoreKey(key: string): string | undefined {
       ? sessionArtifactProject
       : undefined;
   }
+  const uploadFinalizeProject = uploadFinalizeProjectId(key);
+  if (uploadFinalizeProject) return uploadFinalizeProject;
   return sessionProjectId(key, 'agent-session-chat', 0)
     ?? sessionProjectId(key, 'agent-session-proposal', 0)
     ?? sessionProjectId(key, 'agent-session-runtime', 0)
@@ -219,8 +232,19 @@ const AGENT_RUN_LEASE_KEYS: Record<string, true> = {
   leaseToken: true,
   leaseMs: true,
 };
+const EXPORT_RECOVERY_LEASE_KEYS: Record<string, true> = {
+  operation: true,
+  key: true,
+  renderId: true,
+  action: true,
+  ownerInstanceId: true,
+  leaseToken: true,
+  leaseMs: true,
+  value: true,
+  authorityEstablished: true,
+};
 
-function isAgentRuntimeCasRequest(value: Record<string, unknown>): boolean {
+function isAgentRuntimeWriteRequest(value: Record<string, unknown>): boolean {
   const expectedRevision = value.expectedRevision;
   const validRevision = expectedRevision === null
     || (typeof expectedRevision === 'number'
@@ -233,7 +257,7 @@ function isAgentRuntimeCasRequest(value: Record<string, unknown>): boolean {
     && isAgentRuntimeStoreValue(value.key, value.value);
 }
 
-function isProjectDocumentCasRequest(value: Record<string, unknown>): boolean {
+function isProjectDocumentWriteRequest(value: Record<string, unknown>): boolean {
   if (typeof value.key !== 'string'
     || !PROJECT_DOCUMENT_CAS_KEY.test(value.key)
     || !Object.hasOwn(value, 'value')) return false;
@@ -280,6 +304,32 @@ function isAgentRunLeaseRequest(value: Record<string, unknown>): boolean {
     && validLeaseToken
     && validLeaseMs;
 }
+function isExportRecoveryLeaseRequest(value: Record<string, unknown>): boolean {
+  const keys = Object.keys(value);
+  const renderId = typeof value.renderId === 'string' ? value.renderId : '';
+  const validToken = value.leaseToken === undefined
+    || (typeof value.leaseToken === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(value.leaseToken));
+  const validDuration = value.leaseMs === undefined
+    || (typeof value.leaseMs === 'number' && Number.isSafeInteger(value.leaseMs)
+      && value.leaseMs >= 1_000 && value.leaseMs <= 300_000);
+  return keys.length >= 5 && keys.length <= 9
+    && keys.every((key) => Object.hasOwn(EXPORT_RECOVERY_LEASE_KEYS, key))
+    && /^[a-zA-Z0-9_-]{1,200}$/.test(renderId)
+    && value.key === `export-recovery:${renderId}`
+    && (value.action === 'claim' || value.action === 'renew'
+      || value.action === 'release' || value.action === 'check' || value.action === 'retire'
+      || value.action === 'ready' || value.action === 'ambiguous'
+      || value.action === 'commit' || value.action === 'rebind'
+      || value.action === 'reconcile')
+    && typeof value.ownerInstanceId === 'string'
+    && /^[a-zA-Z0-9_-]{1,200}$/.test(value.ownerInstanceId)
+    && validToken && validDuration
+    && (value.action !== 'rebind'
+      || (Object.hasOwn(value, 'value') && isProjectStoreRecord(value.value)))
+    && (value.action !== 'reconcile'
+      || (Object.hasOwn(value, 'value') && isProjectStoreRecord(value.value)
+        && typeof value.authorityEstablished === 'boolean'));
+}
 
 export function isProjectStoreRequest(value: unknown): value is ProjectStoreRequest {
   if (!isProjectStoreRecord(value) || typeof value.operation !== 'string') return false;
@@ -290,7 +340,8 @@ export function isProjectStoreRequest(value: unknown): value is ProjectStoreRequ
   if (value.operation === 'delete') {
     return Object.keys(value).length === 2
       && isProjectStoreKey(value.key)
-      && !value.key.startsWith('agent-session-generation:');
+      && !value.key.startsWith('agent-session-generation:')
+      && !value.key.startsWith('export-recovery:');
   }
   if (value.operation === 'purge-project' || value.operation === 'agent-session-rotate') {
     return Object.keys(value).length === 2
@@ -298,16 +349,58 @@ export function isProjectStoreRequest(value: unknown): value is ProjectStoreRequ
       && VALID_AGENT_PROJECT_ID.test(value.projectId);
   }
   if (value.operation === 'merge') {
-    return Object.keys(value).length === 2 && isProjectStoreEntries(value.entries);
+    return Object.keys(value).length === 2
+      && isProjectStoreEntries(value.entries)
+      && !Object.keys(value.entries).some((key) => key.startsWith('export-recovery:'));
   }
   if (value.operation === 'set') {
     return Object.keys(value).length === 3
       && isProjectStoreKey(value.key)
       && !value.key.startsWith('agent-session-generation:')
+      && !value.key.startsWith('export-recovery:')
       && Object.hasOwn(value, 'value');
   }
-  if (value.operation === 'agent-runtime-cas') return isAgentRuntimeCasRequest(value);
-  if (value.operation === 'project-document-cas') return isProjectDocumentCasRequest(value);
+  if (value.operation === 'agent-runtime-write') return isAgentRuntimeWriteRequest(value);
+  if (value.operation === 'project-document-write') return isProjectDocumentWriteRequest(value);
   if (value.operation === 'agent-run-lease') return isAgentRunLeaseRequest(value);
+  if (value.operation === 'export-recovery-lease') return isExportRecoveryLeaseRequest(value);
+  if (value.operation === 'semantic-vectors-upsert') {
+    return Object.keys(value).length === 3
+      && typeof value.scopeId === 'string' && VALID_AGENT_PROJECT_ID.test(value.scopeId)
+      && typeof value.assetId === 'string' && VALID_AGENT_PROJECT_ID.test(value.assetId)
+      && Array.isArray(value.samples)
+      && value.samples.length <= 512
+      && value.samples.every((sample) => (
+        sample !== null
+        && typeof sample === 'object'
+        && !Array.isArray(sample)
+        && typeof (sample as { assetId?: unknown }).assetId === 'string'
+        && VALID_AGENT_PROJECT_ID.test((sample as { assetId: string }).assetId)
+        && typeof (sample as { sampleTime?: unknown }).sampleTime === 'number'
+        && Array.isArray((sample as { vector?: unknown }).vector)
+        && ((sample as { vector: unknown[] }).vector.length === SEMANTIC_EMBEDDING_DIMENSION)
+      ));
+  }
+  if (value.operation === 'semantic-vectors-search') {
+    return Object.keys(value).length === 3
+      && typeof value.scopeId === 'string' && VALID_AGENT_PROJECT_ID.test(value.scopeId)
+      && Array.isArray(value.queryVector)
+      && value.queryVector.length === SEMANTIC_EMBEDDING_DIMENSION
+      && typeof value.limit === 'number';
+  }
+  if (value.operation === 'semantic-vectors-prune') {
+    return Object.keys(value).length >= 2
+      && typeof value.scopeId === 'string' && VALID_AGENT_PROJECT_ID.test(value.scopeId)
+      && Array.isArray(value.validAssetIds)
+      && value.validAssetIds.every((id) => typeof id === 'string' && VALID_AGENT_PROJECT_ID.test(id))
+      && (value.validSourceRevisions === undefined
+        || (value.validSourceRevisions !== null
+          && typeof value.validSourceRevisions === 'object'
+          && !Array.isArray(value.validSourceRevisions)));
+  }
+  if (value.operation === 'semantic-vectors-clear') {
+    return Object.keys(value).length === 2
+      && typeof value.scopeId === 'string' && VALID_AGENT_PROJECT_ID.test(value.scopeId);
+  }
   return false;
 }

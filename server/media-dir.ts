@@ -6,7 +6,8 @@ import { createReadStream, existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { getKey, type KeyName } from './keystore.ts';
 import { getUploadObjectToFile, r2Config } from './r2.ts';
 import {
@@ -14,6 +15,7 @@ import {
   runtimeProfile,
   type RuntimeProfile,
 } from './runtime-profile.ts';
+import { resolveMediaReference } from './media-references.ts';
 
 export const DEFAULT_UPLOAD_DIR = join(process.cwd(), 'public', 'media', 'uploads');
 
@@ -72,6 +74,23 @@ export function resolveUploadFile(
   for (const d of uploadReadDirs(profile, configuredMediaDir)) {
     const file = join(d, name);
     if (existsSync(file)) return file;
+    const referenced = resolveMediaReference(d, name);
+    if (referenced) return referenced;
+  }
+  return null;
+}
+
+/** Return the external source only when the winning upload entry is a reference. */
+export function resolveUploadReference(
+  name: string,
+  profile: RuntimeProfile = runtimeProfile(),
+  configuredMediaDir?: string,
+): string | null {
+  if (!isSafeUploadName(name)) return null;
+  for (const directory of uploadReadDirs(profile, configuredMediaDir)) {
+    if (existsSync(join(directory, name))) return null;
+    const referenced = resolveMediaReference(directory, name);
+    if (referenced) return referenced;
   }
   return null;
 }
@@ -263,15 +282,23 @@ export async function serveDiskFile(req: IncomingMessage, res: ServerResponse, f
     }
     status = 206;
   }
+  const contentType = mimeFor(file);
   const headers: Record<string, string> = {
-    'Content-Type': mimeFor(file),
+    'Content-Type': contentType,
+    'X-Content-Type-Options': 'nosniff',
     'Accept-Ranges': 'bytes',
     'Content-Length': String(end - start + 1),
   };
+  if (contentType === 'image/svg+xml') {
+    headers['Content-Security-Policy'] = 'sandbox';
+    if (req.headers['sec-fetch-dest'] === 'document') {
+      headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(basename(file))}`;
+    }
+  }
   if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${info.size}`;
   res.writeHead(status, headers);
-  if (req.method === 'HEAD') { res.end(); return; }
-  createReadStream(file, { start, end }).pipe(res);
+  if (req.method === 'HEAD' || info.size === 0) { res.end(); return; }
+  await pipeline(createReadStream(file, { start, end }), res);
 }
 
 // ── Start synchronization ────────────────────────────────────────────────────────

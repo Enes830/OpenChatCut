@@ -12,24 +12,25 @@ import {
   validateExternalBridgeBinding,
 } from './external-bridge-session';
 import { commitExternalProposal, type ExternalBridgePersistence } from './external-proposal-apply';
+import { DEFAULT_EXTERNAL_BRIDGE_PERSISTENCE, EXTERNAL_PROJECT_INDEX_WARNING } from './external-bridge-persistence-defaults';
 import { ExternalApprovalGate } from './external-approval-gate';
 import { ExternalSessionRunLedger, invocationFromApproval } from './external-run-ledger';
+import { finalizeExternalSessionRun } from './external-run-terminal';
 import { validateExternalInvocation } from './external-tool-schemas';
 import { executeTool } from './tools';
 import { isExternalGlobalReadTool, isExternalRealTool } from './external-tool-policy';
 import { isProposalStale, type Proposal } from './proposal';
-import { saveProject } from '../persist/projectStore';
-import { saveAutomaticVersion } from '../persist/versionStore';
-import { saveExternalProposal, type StoredExternalProposal } from '../persist/externalProposalStore';
+import type { StoredExternalProposal } from '../persist/externalProposalStore';
 import { formatToolApprovalDetails, type ApprovalDetail } from './approval-details';
 import { redactTextForAgentRuntime } from './runtime-artifact';
+import { effectiveToolInvocationArgs } from './execution-policy';
+import { executeExternalGlobalReadTool } from './external-global-read';
+import { discardOrphanedExternalSessions, executeExternalSessionRecovery } from './external-session-recovery';
 export interface ExternalProposalSnapshot { proposal: Proposal | null; stale: boolean }
 /** Confirmation request for a real-project tool (generation/export/import/…)
  * issued from an external session; the user decides in the OpenChatCut UI. */
-export interface ExternalGuardRequest { id: string; sessionId: string; tool: string; summary: string; details: readonly ApprovalDetail[]; argsDigest: string; operationId?: string }
+export interface ExternalGuardRequest { kind: 'real_tool_confirmation'; id: string; sessionId: string; tool: string; summary: string; details: readonly ApprovalDetail[]; argsDigest: string; operationId?: string }
 export interface ExternalBridgeBinding { projectId: string; editorInstanceId: string; baseRevision: string }
-const INDEX_UPDATE_WARNING = 'The edit was applied, but the project list timestamp could not be updated.';
-const DEFAULT_PERSISTENCE: ExternalBridgePersistence = { saveProject, saveAutomaticVersion, saveExternalProposal };
 export class ExternalBridgeRuntime {
   private sessions = new Map<string, ExternalEditSession>(); private terminalRevisions = new Map<string, string>();
   private sessionWarnings = new Map<string, string>(); private proposalSessionId: string | null = null;
@@ -43,7 +44,7 @@ export class ExternalBridgeRuntime {
   constructor(
     projectId: string, editorInstanceId: string, getContext: () => AgentContext,
     publish: (snapshot: ExternalProposalSnapshot) => void,
-    persistence: ExternalBridgePersistence = DEFAULT_PERSISTENCE,
+    persistence: ExternalBridgePersistence = DEFAULT_EXTERNAL_BRIDGE_PERSISTENCE,
   ) {
     this.projectId = projectId; this.editorInstanceId = editorInstanceId;
     this.getContext = getContext; this.publish = publish; this.persistence = persistence;
@@ -96,7 +97,21 @@ export class ExternalBridgeRuntime {
     signal?: AbortSignal,
   ): Promise<unknown> {
     throwIfExternalCallCancelled(signal);
-    const invocationArgs = validateExternalInvocation(name, rawArgs);
+    const invocationArgs = effectiveToolInvocationArgs(
+      name,
+      validateExternalInvocation(name, rawArgs),
+    );
+    if (name === 'list_edit_sessions' || name === 'recover_edit_session') {
+      return executeExternalSessionRecovery(name, rawArgs, invocationArgs, binding, {
+        projectId: this.projectId,
+        sessions: this.sessions,
+        currentRevision: () => revisionOf(this.getContext().getDoc()),
+        info: (session) => this.info(session),
+        requireSession: (sessionId) => this.requireSession(sessionId),
+        discard: (session) => this.discard(session),
+        markStale: (session) => this.markTerminal(session, 'stale'),
+      });
+    }
     if (name === 'begin_edit_session') {
       await this.validateBinding(binding);
       throwIfExternalCallCancelled(signal);
@@ -105,7 +120,11 @@ export class ExternalBridgeRuntime {
     if (isExternalGlobalReadTool(name)) {
       await this.validateBinding(binding);
       throwIfExternalCallCancelled(signal);
-      return this.runGlobalReadTool(name, invocationArgs, signal);
+      return executeExternalGlobalReadTool(
+        this.projectId, name, invocationArgs,
+        this.getContext(),
+        signal,
+      );
     }
     const sessionId = externalSessionId(rawArgs);
     const session = this.sessions.get(sessionId);
@@ -138,25 +157,6 @@ export class ExternalBridgeRuntime {
     return this.runEditorTool(requiredSession, name, invocationArgs, signal);
   }
 
-  private async runGlobalReadTool(
-    name: string,
-    args: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<unknown> {
-    const run = await ExternalSessionRunLedger.start(this.projectId, 'external-connected', `global_${crypto.randomUUID()}`, 'external-connected', executeTool);
-    try {
-      const invocation = await run.requested(name, args);
-      const result = await run.executeApprovedTool(invocation, args, this.getContext(), signal);
-      await run.finalize('completed', `External global read ${name} completed.`);
-      return result;
-    } catch (error) {
-      await run.finalize('failed', `External global read ${name} failed.`).catch(() => undefined);
-      throw error;
-    } finally {
-      run.dispose();
-    }
-  }
-
   private async runRealTool(
     session: ExternalEditSession,
     name: string,
@@ -178,7 +178,7 @@ export class ExternalBridgeRuntime {
       // auto (YOLO) sessions skip the confirmation card entirely — the
       // client explicitly opted into unapproved real-project execution.
       if (session.approvalMode === 'auto') {
-        const invocation = await run.requested(name, args, true);
+        const invocation = await run.requested(name, args);
         return run.executeApprovedTool(invocation, args, this.getContext(), signal);
       }
       return this.requestRealToolApproval(session, run, name, args);
@@ -197,7 +197,7 @@ export class ExternalBridgeRuntime {
     tool: string,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const invocation = await run.requested(tool, args, true);
+    const invocation = await run.requested(tool, args);
     const presentation = formatToolApprovalDetails(tool, args);
     const guard = await this.approvalGate.request({
       sessionId: session.id,
@@ -210,7 +210,7 @@ export class ExternalBridgeRuntime {
       details: presentation.details,
     }, (entry) => run.approvalRequested(entry));
     this.onGuardRequest?.({
-      id: guard.guardId, sessionId: session.id, tool,
+      kind: 'real_tool_confirmation', id: guard.guardId, sessionId: session.id, tool,
       summary: guard.summary, details: guard.details,
       argsDigest: guard.argsDigest,
       operationId: guard.operationId ? redactTextForAgentRuntime(guard.operationId) : undefined,
@@ -219,6 +219,7 @@ export class ExternalBridgeRuntime {
       needs_confirmation: true,
       confirmationId: guard.guardId,
       tool,
+      status: 'pending',
       note: '这个操作会作用于真实工程。请在 OpenChatCut 中确认后重试同一次调用。',
     };
   }
@@ -234,7 +235,7 @@ export class ExternalBridgeRuntime {
   pendingGuard(): ExternalGuardRequest | null {
     const pending = this.approvalGate.pending();
     return pending ? {
-      id: pending.guardId, sessionId: pending.sessionId, tool: pending.tool,
+      kind: 'real_tool_confirmation', id: pending.guardId, sessionId: pending.sessionId, tool: pending.tool,
       summary: pending.summary, details: pending.details,
       argsDigest: pending.argsDigest,
       operationId: pending.operationId ? redactTextForAgentRuntime(pending.operationId) : undefined,
@@ -284,8 +285,15 @@ export class ExternalBridgeRuntime {
       warning = warning ? `${warning} The applied run ledger could not be finalized.`
         : 'The edit was applied, but the run ledger could not be finalized.';
     }
-    if (!indexUpdated) warning = warning ? `${warning} ${INDEX_UPDATE_WARNING}` : INDEX_UPDATE_WARNING;
+    if (!indexUpdated) warning = warning ? `${warning} ${EXTERNAL_PROJECT_INDEX_WARNING}` : EXTERNAL_PROJECT_INDEX_WARNING;
     if (warning) this.sessionWarnings.set(session.id, warning);
+  }
+
+  /** Discard the edit sessions orphaned by a disconnected MCP transport. */
+  discardOwnerSessions(sessionIds: readonly string[]): Promise<void> {
+    return discardOrphanedExternalSessions(
+      sessionIds, this.sessions, (session) => this.discard(session),
+    );
   }
 
   async reject(): Promise<void> {
@@ -300,7 +308,7 @@ export class ExternalBridgeRuntime {
     if (active) {
       throw new ExternalEditSessionOutcomeError(
         'rejected',
-        'An edit session is already active. Resolve it before starting another.',
+        'An edit session is already active. Call list_edit_sessions to inspect it before recovery or discard.',
       );
     }
     const session = createExternalEditSession(this.getContext().getDoc(), clientName, approvalMode);
@@ -443,22 +451,13 @@ export class ExternalBridgeRuntime {
     session: ExternalEditSession,
     status: ExternalEditSessionTerminalStatus,
   ): Promise<void> {
-    for (const approval of this.approvalGate.pendingForSession(session.id)) {
-      await this.confirmRealTool(approval.guardId, false);
-    }
-    this.approvalGate.clearSessionAllowances(session.id);
-    const run = this.runs.get(session.id);
-    if (!run) return;
-    const proposalId = session.proposal?.id;
-    if (proposalId && (status === 'applied' || status === 'rejected' || status === 'stale')) {
-      await run.proposal(proposalId, status);
-    }
-    const finalStatus = status === 'applied' || status === 'rejected'
-      ? 'completed'
-      : status === 'cancelled' || status === 'stale'
-        ? 'aborted'
-        : 'failed';
-    await run.finalize(finalStatus, `External edit session ${status}.`);
+    await finalizeExternalSessionRun(
+      session,
+      status,
+      this.approvalGate,
+      this.runs.get(session.id),
+      (guardId) => this.confirmRealTool(guardId, false),
+    );
   }
   private async complete(
     session: ExternalEditSession,

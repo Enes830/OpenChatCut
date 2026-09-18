@@ -4,6 +4,7 @@ import { timelineItemAssetId } from '../../editor/mediaAssetUsage';
 import { trackKind, type TimelineItem, type TimelineState, type TrackId } from '../../editor/types';
 import { exportClipMov, bakeClipToVideo } from '../../media/clipExport';
 import { importMedia } from '../../media/upload';
+import { kindOf } from '../../media/mediaProbe';
 import { mediaAssetRelinkPatch } from '../../media/mediaAssetRelink';
 import type { LibraryDragPayload } from '../../library/drag';
 import { t as translate } from '../../i18n/locale';
@@ -44,20 +45,22 @@ export function useTimelineMediaActions({
     relinkItemRef.current = null;
     if (relinkInputRef.current) relinkInputRef.current.value = '';
     if (!file || !item) return;
+    const liveState = liveStateRef.current;
+    const liveItem = liveState.items.find((candidate) => candidate.id === item.id);
+    if (!liveItem) return;
     try {
-      const media = await importMedia(file, state.fps);
-      const liveState = liveStateRef.current;
-      const liveItem = liveState.items.find((candidate) => candidate.id === item.id);
-      if (!liveItem) return;
       if (liveState.tracks?.[liveItem.track]?.locked) throw new Error(t('轨道已锁定'));
+      // Validate against the picked file BEFORE importing it into the media
+      // pool, otherwise a failed relink leaves an orphan duplicate asset.
+      const relinkKind = kindOf(file);
+      if (relinkKind !== liveItem.kind) throw new Error(t('请重新选择同类型文件'));
+      const media = await importMedia(file, state.fps);
       const liveAssets = liveState.assets ?? [];
-      if (media.kind !== liveItem.kind) throw new Error(t('请重新选择同类型文件'));
       const poolAssetId = timelineItemAssetId(liveItem, liveAssets);
-      if (poolAssetId) {
-        commands.relinkMediaAsset(poolAssetId, mediaAssetRelinkPatch(media));
-      } else {
-        commands.relinkTimelineItem(liveItem.id, mediaAssetRelinkPatch(media));
-      }
+      const result = poolAssetId
+        ? commands.relinkMediaAsset(poolAssetId, mediaAssetRelinkPatch(media))
+        : commands.relinkTimelineItem(liveItem.id, mediaAssetRelinkPatch(media));
+      if (!result.changed) throw new Error(t('重新链接文件失败'));
       const msg = t('已重新链接文件');
       setClipJob({ msg });
       window.setTimeout(() => setClipJob((current) => current?.msg === msg && !current.error ? null : current), 5_000);

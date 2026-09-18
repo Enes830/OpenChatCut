@@ -23,7 +23,7 @@
   <a href="#quick-start">Quick Start</a> ·
   <a href="#using-openchatcut-with-codex--claude-code">Agent / MCP</a> ·
   <a href="#community">Community</a> ·
-  <a href="#sponsor">Sponsor</a> ·
+  <a href="#sponsors">Sponsors</a> ·
   <a href="#changelog">Changelog</a> ·
   <a href="#star-growth">Star Growth</a> ·
   <a href="#contributing">Contributing</a>
@@ -39,6 +39,7 @@
   <img alt="Remotion" src="https://img.shields.io/badge/Remotion-4-0B84F3?style=flat" />
   <img alt="Electron" src="https://img.shields.io/badge/Electron-43-47848F?style=flat&logo=electron&logoColor=white" />
   <img alt="MCP" src="https://img.shields.io/badge/MCP-Agent_native-7C3AED?style=flat" />
+  <a href="https://atomgit.com/Oxsline/openchatcut"><img alt="AtomGit G-Star" src="https://img.shields.io/badge/AtomGit-G--Star-DA203E?logo=gitcode&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -55,6 +56,31 @@
 
 <p align="center">
   <sub>From a single instruction to a real timeline: agents, media, previews, motion graphics, transitions, effects, and multitrack audio all work together in one project.</sub>
+</p>
+
+---
+## Sponsors
+
+<p align="center">
+  <a href="https://ofox.ai/?utm_source=github&utm_medium=sponsorship&utm_content=openchatcut"><img src="assets/readme-pic/ofox-logo.svg" width="300" alt="OfoxAI" /></a>
+</p>
+
+**OfoxAI: Text, image, and video AI in one platform**
+
+OfoxAI is a unified API platform for text, image, and video AI, with video models from the Seedance, MiniMax (Hailuo), and Wan families. Choose models for AI applications, agents, creative ideation, image generation, and video assets through one platform.
+[Explore OfoxAI models and APIs →](https://ofox.ai/?utm_source=github&utm_medium=sponsorship&utm_content=openchatcut)
+
+<br />
+
+If OpenChatCut helps you, you can support its continued development on Ko-fi or Afdian.
+
+<p align="center">
+  <a href="https://ko-fi.com/Y5N2241IP5">
+    <img alt="Support me on Ko-fi" src="https://img.shields.io/badge/Support_me_on-Ko--fi-72a4f2?logo=kofi&amp;logoColor=white" />
+  </a>
+  <a href="https://www.ifdian.net/a/sline?utm_source=copylink&amp;utm_medium=link">
+    <img alt="Support OpenChatCut on Afdian" src="https://img.shields.io/badge/Support_on-Afdian-946CE6" />
+  </a>
 </p>
 
 ---
@@ -91,22 +117,7 @@ Join the OpenChatCut community to discuss workflows, share feedback, and follow 
 
 <p align="center">
   <br />
-  <img src="assets/readme-pic/wechat-community.png" width="220" alt="OpenChatCut WeChat community QR code" />
-</p>
-
----
-
-## Sponsor
-
-If OpenChatCut helps you, you can support its continued development on Ko-fi or Afdian.
-
-<p align="center">
-  <a href="https://ko-fi.com/Y5N2241IP5">
-    <img alt="Support me on Ko-fi" src="https://img.shields.io/badge/Support_me_on-Ko--fi-72a4f2?logo=kofi&amp;logoColor=white" />
-  </a>
-  <a href="https://www.ifdian.net/a/sline?utm_source=copylink&amp;utm_medium=link">
-    <img alt="Support OpenChatCut on Afdian" src="https://img.shields.io/badge/Support_on-Afdian-946CE6" />
-  </a>
+  <img src="assets/readme-pic/wechat-community.jpg" width="220" alt="OpenChatCut WeChat community QR code" />
 </p>
 
 ---
@@ -275,6 +286,14 @@ the legacy shared development store.
 - **ChatGPT subscription:** install the official Codex CLI 0.146.0 or newer, then open **Settings → Agent model → OpenAI · Codex**. Sign in through the browser or device-code flow, load the account's models, choose a model-specific reasoning effort (or keep its default), and select Codex from the chat model picker. OpenChatCut uses a dedicated Codex profile; the official CLI owns credential storage, token renewal, and logout, while OAuth tokens are never exposed to the browser.
 - **Claude subscription:** OpenChatCut does not collect Claude OAuth credentials. Use Claude Code through the local MCP connection below. The built-in Agent can use Anthropic through an API key.
 
+The built-in Agent always runs the model loop on the local server. Chat, drafts, and proposals survive page refreshes and local service restarts. Timeline changes still go through the active editor's validated, undoable commands.
+
+### Agent local-path access (advanced)
+
+Desktop agents can browse any local directory allowed by the operating system by default, including mounted media drives. `browse_local_media` lists folders and supported media, searches by filename or relative path and media type, and returns paginated results without importing. The agent can then use `import_assets` for up to 100 selected paths, `import_asset` for one path, or `import_folder` for a whole folder. Imports reuse media probing and reference registration, preserve source files, and skip duplicate content, including duplicates within one batch. Document files such as TXT, Markdown, DOCX, and PDF should be attached to chat instead. These tools require the desktop app.
+
+To restrict local access, set a comma-separated value such as `AGENT_IMPORT_ROOTS=/Volumes/Media,D:\Projects` in `.env.local`; leave it empty for default unrestricted directory access. Explicit restrictions apply to both browsing and import. Source checkouts read the repository file at startup. Packaged desktop builds read it from Electron's user-data directory: `~/Library/Application Support/OpenChatCut/` on macOS, `%APPDATA%\OpenChatCut\` on Windows, and `$XDG_CONFIG_HOME/OpenChatCut/` (normally `~/.config/OpenChatCut/`) on Linux. Restart after editing the file.
+
 
 Local H.264 exports automatically prefer VideoToolbox on macOS and NVENC on compatible Windows systems, then fall back to software encoding. Tune render concurrency and the heavy-export limit with `OPENCHATCUT_RENDER_CONCURRENCY` and `OPENCHATCUT_MAX_ACTIVE_EXPORTS`, disable hardware encoding with `OPENCHATCUT_DISABLE_HARDWARE_ENCODING`, or override FFmpeg-side encoder selection with `OPENCHATCUT_H264_ENCODER`; see [`.env.example`](.env.example).
 
@@ -305,7 +324,7 @@ npx skills add 0xsline/OpenChatCut
 ```
 
 Then tell the agent `Set up OpenChatCut`. The installed router registers the
-local MCP connection and loads the editor's 24 specialized skills on demand,
+local MCP connection and loads the editor's 26 specialized skills on demand,
 so the agent's skill list stays compact.
 
 Custom skills live in a user-visible directory with the same layout as
@@ -367,6 +386,50 @@ approve it in OpenChatCut before reporting that the edit was applied.
 
 External agents invoke the same internal editing tools and `EditorCore` commands as the editor itself. There are no separate project formats that can drift apart, and the live timeline is not changed while an external draft is being prepared.
 
+### Qoder
+
+Qoder is one-click too: the guide's **Connect** button writes the endpoint and
+bearer token into Qoder's own settings file, keeping any unrelated settings and
+MCP servers already there.
+
+```text
+~/.qoder/settings.json        (international build)
+~/.qoder-cn/settings.json     (China build — written as well when installed)
+```
+
+```json
+{
+  "mcpServers": {
+    "openchatcut": {
+      "type": "http",
+      "url": "http://localhost:5199/api/external-mcp/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+Restart Qoder afterwards to load the server.
+
+### Qwen Work (千问办公)
+
+千问办公 keeps custom MCP servers inside its own connector store rather than a
+config file, so OpenChatCut cannot write this one for you. In the guide, use
+**Copy config** on the 千问办公 card, then in 千问办公 open
+连接器 → 自定义 MCP → 添加, paste the JSON, and save:
+
+```json
+{
+  "mcpServers": {
+    "openchatcut": {
+      "type": "streamable-http",
+      "url": "http://localhost:5199/api/external-mcp/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
 ### Protecting MCP access
 
 When exposing the MCP endpoint yourself, configure:
@@ -394,7 +457,7 @@ Clients must send `Authorization: Bearer <token>`. The current bridge is designe
 |---|---|
 | Frontend | React 19, TypeScript 6, Vite 8 |
 | Editing core | Immutable timeline state, command layer, and proposal-based application |
-| Agent | Vercel AI SDK 7 (Anthropic, OpenAI, Gemini, Kimi, Qwen, GLM, DeepSeek, MiniMax, Xiaomi MiMo, Mistral, and compatible APIs), Agent Skills, MCP SDK |
+| Agent | Vercel AI SDK 7 (Anthropic, OpenAI, Gemini, Kimi, Qwen, GLM, DeepSeek, MiniMax, Xiaomi MiMo, Mistral, xAI Grok by API key or SuperGrok/X Premium+ subscription sign-in, OpenRouter, OrcaRouter, OFox, and compatible APIs), Agent Skills, MCP SDK |
 | Preview and visuals | Remotion Player, WebGL / GLSL |
 | Server | Dual-host Vite / Electron plugins and a server-side keystore |
 | Persistence | Shared local project store under `~/.openchatcut`, IndexedDB cache, configurable local media directory, optional Cloudflare R2 |
@@ -457,7 +520,7 @@ npm run lint
 After changing the agent, timeline, preview, or export paths, run at least:
 
 ```bash
-npx tsc --noEmit
+npx tsc -b --force
 npm test
 npm run build
 ```

@@ -3,6 +3,7 @@ import type {
   ProjectStoreRequest,
   ProjectStoreResponse,
 } from '../shared/project-store-transport';
+import type { AgentPathImportRequest, AgentPathImportResult } from '../shared/directory-import';
 import type { EditorBootstrapInfo } from '../shared/editor-auth-transport';
 import type {
   DesktopUpdateCheckSource,
@@ -27,6 +28,7 @@ import type {
   DirectoryImportEvent,
   DirectoryWatchStartResult,
 } from '../shared/directory-import';
+import type { TranscriptWindowPayload } from '../shared/transcript-window';
 interface DesktopExportDirectoryGrant {
   readonly grantId: string;
   readonly label: string;
@@ -76,8 +78,14 @@ declare global {
         disposition: DirectoryImportDisposition,
       ): Promise<void>;
       stopImportDirectoryWatch(watchId: string): Promise<void>;
+      importAgentPaths(request: AgentPathImportRequest): Promise<AgentPathImportResult>;
       subscribeImportDirectory(listener: (event: DirectoryImportEvent) => void): () => void;
-      windowAction(action: 'close' | 'minimize' | 'toggle-maximize'): Promise<void>;
+      windowAction(action: 'close' | 'minimize' | 'toggle-maximize' | 'apply-ui-scale'): Promise<void>;
+      zoomStep(step: number | 'reset'): Promise<void>;
+      subscribeUiScale(listener: (scale: number) => void): () => void;
+      openTranscriptWindow(payload: TranscriptWindowPayload): Promise<void>;
+      subscribeTranscriptWindow(listener: (payload: TranscriptWindowPayload) => void): () => void;
+      requestTranscriptWindowPayload(): Promise<TranscriptWindowPayload | null>;
       revealExport(destinationId: string, filename: string): Promise<void>;
       projectStore(request: ProjectStoreRequest): Promise<ProjectStoreResponse>;
       editorCredentials(): Promise<EditorBootstrapInfo>;

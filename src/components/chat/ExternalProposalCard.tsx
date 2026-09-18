@@ -12,9 +12,18 @@ type ConfirmGuard = ExternalProposalController['confirmGuard'];
 
 function ExternalErrorAlert({ message }: { message: string }) {
   const t = useT();
+  // Bridge errors surface as machine-readable strings; map the common
+  // ownership-conflict cases to user-facing copy, then translate via i18n.
+  const BRIDGE_ERROR_KEYS: Record<string, string> = {
+    'registration failed: HTTP 409': '工程正在其他窗口编辑，无法注册。请关闭其他窗口后重试。',
+    'poll failed: HTTP 409': '工程正在其他窗口编辑，连接已中断。请关闭其他窗口后重试。',
+    'cancellation poll failed: HTTP 409': '工程正在其他窗口编辑，连接已中断。请关闭其他窗口后重试。',
+    'result failed: HTTP 409': '工程正在其他窗口编辑，结果未能送达。请关闭其他窗口后重试。',
+  };
+  const text = t(BRIDGE_ERROR_KEYS[message] ?? message);
   return (
     <div role="alert" style={{ margin: '10px 0', color: theme.danger, fontSize: 12 }}>
-      {t('外部 Agent：{message}', { message })}
+      {text}
     </div>
   );
 }
@@ -80,7 +89,8 @@ function PendingGuardDialog({ guard, confirmGuard }: {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
         <Icon name="wand" size={14} />
-        <strong style={{ fontSize: 12.5 }}>{t('外部 Agent 请求执行真实工程操作')}</strong>
+        <strong style={{ fontSize: 12.5 }}>{t('真实工具确认')}</strong>
+        <code style={{ marginLeft: 'auto', color: theme.textDim, fontSize: 10 }}>{guard.id}</code>
       </div>
       <GuardDetails guard={guard} />
       <GuardActions guard={guard} confirmGuard={confirmGuard} />
@@ -97,7 +107,7 @@ function ExternalProposal({ external, onPreviewState }: {
   if (!proposal) return null;
   return (
     <ProposalCard
-      proposal={{ ...proposal, title: `${proposal.title} ${t('编辑提案')}` }}
+      proposal={{ ...proposal, title: `${t('提案审核')} · ${proposal.title}` }}
       onApply={external.applyProposal}
       onReject={external.rejectProposal}
       stale={external.proposalStale}

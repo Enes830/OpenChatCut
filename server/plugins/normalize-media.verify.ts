@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { access, copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { createServer, type ViteDevServer } from 'vite';
 import { ffmpegBin, ffprobeBin } from '../media-binaries.ts';
-import { EDITOR_CREDENTIAL_HEADER, editorBootstrapPayload } from '../editor-auth.ts';
 import { DEFAULT_UPLOAD_MAX_BYTES } from '../r2.ts';
 import { seedKeystore } from '../keystore.ts';
 import { maxUploadBytes } from './upload-routes.ts';
@@ -20,6 +19,7 @@ import {
   resolveStreamPlan,
   type NormalizeEncodeContext,
 } from './normalize-media.ts';
+import { postNormalize, probeVideoFixture, waitFor } from './normalize-media-verify-helpers.ts';
 
 assert.equal(parseFrameRate('30/1'), 30);
 assert.ok(Math.abs((parseFrameRate('30000/1001') ?? 0) - 29.97002997) < 0.000001);
@@ -52,11 +52,13 @@ assert.equal(
   'the published target always uses the normalized .mp4 extension',
 );
 
+const canonicalTestPath = (path: string): string => path.replaceAll('\\', '/');
 const missingTargetRealpath = async (path: string): Promise<string> => {
-  if (path.startsWith('/alias/')) {
+  const canonicalPath = canonicalTestPath(path);
+  if (canonicalPath.startsWith('/alias/')) {
     throw Object.assign(new Error(`missing: ${path}`), { code: 'ENOENT' });
   }
-  assert.equal(path, '/alias');
+  assert.equal(canonicalPath, '/alias');
   return '/Volumes/Me\u0301dia';
 };
 assert.equal(
@@ -80,7 +82,7 @@ assert.notEqual(linuxNfcKey, linuxNfdKey, 'Linux preserves normalization-distinc
 let existingTargetRealpathCalls = 0;
 const existingTargetKey = await resolveNormalizeTargetKey('/alias/Clip.mp4', 'darwin', async (path) => {
   existingTargetRealpathCalls += 1;
-  assert.equal(path, '/alias/Clip.mp4');
+  assert.equal(canonicalTestPath(path), '/alias/Clip.mp4');
   return '/Actual/Caf\u00e9.mp4';
 });
 assert.equal(existingTargetKey, '/actual/caf\u00e9.mp4');
@@ -90,69 +92,6 @@ assert.equal(existingTargetRealpathCalls, 1, 'an existing target uses its own re
 for (const [name, binary] of [['ffmpeg', ffmpegBin()], ['ffprobe', ffprobeBin()]]) {
   const result = spawnSync(binary, ['-version'], { encoding: 'utf8' });
   assert.equal(result.status, 0, `${name} binary is not executable: ${result.error?.message ?? result.stderr}`);
-}
-
-interface VideoFixtureProbe {
-  duration: number;
-  frameCount: number;
-  avgFrameRate: number;
-  nominalFrameRate: number;
-}
-
-function probeVideoFixture(path: string): VideoFixtureProbe {
-  const result = spawnSync(ffprobeBin(), [
-    '-v', 'error',
-    '-show_entries', 'format=duration:stream=codec_type,duration,avg_frame_rate,r_frame_rate,nb_frames',
-    '-of', 'json',
-    path,
-  ], { encoding: 'utf8' });
-  assert.equal(result.status, 0, `failed to probe ${basename(path)}: ${result.stderr}`);
-  const payload: unknown = JSON.parse(result.stdout || '{}');
-  if (!payload || typeof payload !== 'object') {
-    throw new Error(`${basename(path)} returned an invalid ffprobe payload`);
-  }
-  const streams = 'streams' in payload && Array.isArray(payload.streams) ? payload.streams : [];
-  const video = streams.find(
-    (stream): stream is Record<string, unknown> => (
-      Boolean(stream)
-      && typeof stream === 'object'
-      && 'codec_type' in stream
-      && stream.codec_type === 'video'
-    ),
-  );
-  if (!video) throw new Error(`${basename(path)} has no video stream`);
-  const formatDuration = 'format' in payload
-    && payload.format
-    && typeof payload.format === 'object'
-    && 'duration' in payload.format
-    ? payload.format.duration
-    : undefined;
-  const duration = Number(formatDuration ?? video.duration);
-  const frameCount = Number(video.nb_frames);
-  const avgFrameRate = parseFrameRate(video.avg_frame_rate);
-  const nominalFrameRate = parseFrameRate(video.r_frame_rate);
-  if (!(duration > 0) || !(frameCount > 0) || !avgFrameRate || !nominalFrameRate) {
-    throw new Error(`${basename(path)} has incomplete timing metadata`);
-  }
-  return { duration, frameCount, avgFrameRate, nominalFrameRate };
-}
-
-async function postNormalize(origin: string, src: string, body: Record<string, unknown> = {}): Promise<Response> {
-  return fetch(`${origin}/api/normalize-media`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ src: `/media/uploads/${src}`, ...body }),
-  });
-}
-
-async function waitFor(predicate: () => boolean, message: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(message);
-    const delay = Promise.withResolvers<void>();
-    setTimeout(delay.resolve, 10);
-    await delay.promise;
-  }
 }
 
 const previousMediaDir = process.env.MEDIA_DIR;
@@ -294,6 +233,17 @@ try {
   if (!address || typeof address === 'string') throw new Error('ingest policy verification server has no TCP address');
   const origin = `http://127.0.0.1:${address.port}`;
 
+  for (const [body, status] of [
+    ['{', 400],
+    ['null', 400],
+    [JSON.stringify({ src: 'x'.repeat(9_000) }), 413],
+  ] as const) {
+    const response = await fetch(`${origin}/api/normalize-media`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body,
+    });
+    assert.equal(response.status, status, await response.text());
+  }
+
   const vfrResponse = await postNormalize(origin, 'unequal-pts.mp4', { targetFps: 24 });
   const vfrText = await vfrResponse.text();
   assert.equal(vfrResponse.status, 200, vfrText);
@@ -332,12 +282,10 @@ try {
   assert.ok(Math.abs(vfr.durationSeconds - outputVfrProbe.duration) < 0.1);
 
 
-  const editorCredential = editorBootstrapPayload().credential;
   const multipartResponse = await fetch(`${origin}/upload/multipart/init`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      [EDITOR_CREDENTIAL_HEADER]: editorCredential,
       origin,
     },
     body: JSON.stringify({
@@ -352,7 +300,7 @@ try {
   assert.equal(multipart.maxBytes, DEFAULT_UPLOAD_MAX_BYTES);
   const abortResponse = await fetch(`${origin}/upload/multipart?uploadId=${multipart.uploadId}`, {
     method: 'DELETE',
-    headers: { [EDITOR_CREDENTIAL_HEADER]: editorCredential, origin },
+    headers: { origin },
   });
   assert.equal(abortResponse.status, 200, await abortResponse.text());
 

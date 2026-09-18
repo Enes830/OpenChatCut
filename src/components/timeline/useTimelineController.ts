@@ -24,9 +24,10 @@ import {
   type CaptionTimelineClipboard,
 } from '../../captions/captionTimelineClipboard';
 import { newManualCaptions } from '../../captions/manualCaptions';
+import { createFrameCoalescer, type FrameCoalescer } from './frameCoalescer';
 import { useTimelineShortcuts } from './useTimelineShortcuts';
 import { useTimelinePointer } from './useTimelinePointer';
-import { usePlayheadPaint } from './usePlayheadPaint';
+import { usePlayheadPaint, type AudibleAudioItem } from './usePlayheadPaint';
 import { useTimelineZoomController } from './useTimelineZoomController';
 import { timelineFitTotalFrames } from './timelineFitRange';
 import {
@@ -99,11 +100,30 @@ export function useTimelineController({
     return { kind, color };
   };
   // Playhead drawing machine: rAF frame direct drawing + Player watchdog + breakpoint resume (usePlayheadPaint)
+  // Marking mode: expose the audible audio item at a playhead frame so the
+  // playhead / marker placement can follow the media element's own clock during
+  // playback (see usePlayheadPaint). Audio items are the source of truth for
+  // beat marking; video timelines keep the wall-clock behavior.
+  const getAudibleItem = useCallback((playheadFrame: number): AudibleAudioItem | null => {
+    const s = liveStateRef.current;
+    const audible = s.items.find((it) =>
+      it.kind === 'audio' && !!it.src && (it.volume ?? 1) > 0
+      && playheadFrame >= it.startFrame && playheadFrame < it.startFrame + it.durationInFrames
+      && !s.tracks?.[it.track]?.muted && !s.tracks?.[it.track]?.hidden,
+    );
+    if (!audible) return null;
+    return {
+      startFrame: audible.startFrame,
+      playbackRate: audible.playbackRate ?? 1,
+      srcInFrame: audible.srcInFrame ?? 0,
+      src: audible.src!,
+    };
+  }, []);
   const {
     playheadRef, playheadLineRef, toolbarTimecodeRef, rulerTimecodeRef,
     paintPlayhead, setTimecodePreviewFrame, playing,
   } =
-    usePlayheadPaint({ playerRef, projectId, timelineId, fps: state.fps, total, px });
+    usePlayheadPaint({ playerRef, projectId, timelineId, fps: state.fps, total, px, getAudibleItem });
   // editing mode (Selection V / Blade B / Trim N / Pen P). selection =
   // drag/move; blade = click a clip to cut it there; trim = edge-trim ripples
   // following clips; pen = draw opacity keyframes on the selected clip.
@@ -119,7 +139,7 @@ export function useTimelineController({
       ? true
       : captionTrackEntries(state).some((entry) => entry.captions?.enabled) || textClipCount > 0;
   const {
-    captionMenu, setCaptionMenu, trackMenu, setTrackMenu,
+    captionMenu, setCaptionMenu, trackMenu, setTrackMenu, transitionMenu, setTransitionMenu,
     captionError, setCaptionError, duckMenu, setDuckMenu,
     moveCaptionCue, openCaptionTrackMenu, openDuckTrackMenu,
     closeTrackDrillMenu, backFromTrackDrillMenu,
@@ -343,7 +363,15 @@ export function useTimelineController({
       totalFrames: total,
     });
   };
+  // Hover updates are coalesced to one per animation frame, the way the drag
+  // path in useTimelinePointer already is. The browser delivers each pointer
+  // report in its own task, so without this the timeline, the timecode and the
+  // preview panel all committed once per report — measured at 890 DOM mutations
+  // over 60 moves, against 200 once coalesced.
+  const hoverFrames = useRef<FrameCoalescer<number> | null>(null);
+  hoverFrames.current ??= createFrameCoalescer<number>(requestAnimationFrame, cancelAnimationFrame);
   const clearHoverPreview = () => {
+    hoverFrames.current?.cancel();
     if (hoverPreviewFrameRef.current === null) return;
     hoverPreviewFrameRef.current = null;
     setHoverPreviewFrame(null);
@@ -352,18 +380,28 @@ export function useTimelineController({
   };
   const clearHoverPreviewRef = useRef(clearHoverPreview);
   clearHoverPreviewRef.current = clearHoverPreview;
-  const updateHoverPreview = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (playing || event.buttons !== 0 || drag || marquee || pickDrag) {
-      clearHoverPreview();
-      return;
-    }
-    const frame = frameAtClientX(event.clientX);
+  const applyHoverPreview = (clientX: number) => {
+    const frame = frameAtClientX(clientX);
     if (frame === hoverPreviewFrameRef.current) return;
     hoverPreviewFrameRef.current = frame;
     setHoverPreviewFrame(frame);
     setTimecodePreviewFrame(frame);
     onHoverPreviewFrameChange?.(frame);
   };
+  const updateHoverPreview = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // Clearing stays synchronous: the moment a drag or playback starts, the
+    // stale hover marker has to go, and dropping it a frame late is visible.
+    if (playing || event.buttons !== 0 || drag || marquee || pickDrag) {
+      clearHoverPreview();
+      return;
+    }
+    hoverFrames.current?.schedule(event.clientX, applyHoverPreview);
+  };
+  // A scheduled frame must not fire after unmount.
+  useEffect(() => {
+    const coalescer = hoverFrames.current;
+    return () => coalescer?.cancel();
+  }, []);
   useEffect(() => {
     if (playing || drag || marquee || pickDrag) clearHoverPreviewRef.current();
   }, [playing, drag, marquee, pickDrag]);
@@ -432,7 +470,7 @@ export function useTimelineController({
     commitTimelineSelectionMove, zoom, setZoom, px, trackScale, metaOf,
     playheadRef, playheadLineRef, toolbarTimecodeRef, rulerTimecodeRef,
     paintPlayhead, playing, editMode, placeMode, setPlaceMode, snapping,
-    captionsVisible, captionMenu, setCaptionMenu, trackMenu, setTrackMenu,
+    captionsVisible, captionMenu, setCaptionMenu, trackMenu, setTrackMenu, transitionMenu, setTransitionMenu,
     duckMenu, setDuckMenu, captionError, setCaptionError,
     moveCaptionCue, openCaptionTrackMenu, openDuckTrackMenu,
     closeTrackDrillMenu, backFromTrackDrillMenu, recorder, toggleCaptions,

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import {
-  chmod, link, lstat, mkdir, open, readFile, realpath, rm,
+  chmod, link, lstat, mkdir, open, readFile, realpath, rm, stat,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -112,6 +112,7 @@ async function ensureProfileDirectories(homeDir, profileId) {
     appRoot,
     profilesRoot,
     rootDir,
+    join(rootDir, 'electron-user-data'),
     join(rootDir, 'project-store-auth-v1'),
     join(rootDir, 'media'),
     join(rootDir, 'media', 'uploads'),
@@ -180,9 +181,48 @@ async function readProfileEnv(path) {
   }
 }
 
-export async function profileChildEnvironment(profile, baseEnvironment = process.env) {
+/**
+ * Reuse only the exact headless-shell build that the installed Remotion accepts
+ * for this platform and architecture. The download callback throws before any
+ * network or cache mutation; an absent, stale, or incomplete cache is left for
+ * the child renderer to repair on demand. Explicit caller configuration wins.
+ */
+export async function resolveDevHeadlessShell(
+  environment = process.env,
+  ensureBrowserImpl,
+) {
+  if (environment.CC_BROWSER_EXECUTABLE) return undefined;
+  try {
+    const ensureBrowser = ensureBrowserImpl
+      ?? (await import('@remotion/renderer')).ensureBrowser;
+    const status = await ensureBrowser({
+      chromeMode: 'headless-shell',
+      logLevel: 'error',
+      onBrowserDownload: () => {
+        throw new Error('Remotion headless-shell cache is unavailable');
+      },
+    });
+    if (status.type !== 'local-puppeteer-browser') return undefined;
+    const executable = await stat(status.path);
+    const canExecute = process.platform === 'win32' || (executable.mode & 0o111) !== 0;
+    return executable.isFile() && canExecute ? status.path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function profileChildEnvironment(
+  profile,
+  baseEnvironment = process.env,
+  ensureBrowserImpl,
+) {
   const saved = await readProfileEnv(profile.keystorePath);
-  return { ...baseEnvironment, ...saved, [DEV_PROFILE_ID_ENV]: profile.id };
+  const environment = { ...baseEnvironment, ...saved, [DEV_PROFILE_ID_ENV]: profile.id };
+  if (!environment.CC_BROWSER_EXECUTABLE) {
+    const shellPath = await resolveDevHeadlessShell(environment, ensureBrowserImpl);
+    if (shellPath) environment.CC_BROWSER_EXECUTABLE = shellPath;
+  }
+  return environment;
 }
 
 function singleGitPath(stdout, label) {
@@ -228,7 +268,7 @@ async function runProfileCommand(profile, command, args) {
 
 async function runVite(profile, args) {
   const viteCli = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url));
-  return runProfileCommand(profile, process.execPath, [viteCli, ...args]);
+  return runProfileCommand(profile, process.execPath, [viteCli, '--config', 'config/vite.config.ts', ...args]);
 }
 
 async function main() {

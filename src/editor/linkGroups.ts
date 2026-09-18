@@ -1,4 +1,5 @@
 import type { TimelineItem, TimelineLinkGroup, TimelineLinkMode, TimelineState, TrackId } from './types.js';
+import { reconcileTimelineCaptionReferences } from '../captions/reconcileSources.js';
 import { sourceFramesToTimelineFrames, timelineFramesToSourceFrames } from './sourceLimit.js';
 import { clampMoveDeltaToTrackGaps } from './trackCollision';
 
@@ -111,6 +112,9 @@ export function moveItemWithGroups(
     .map((item) => item.id === id && destinationTrack ? { ...item, track: destinationTrack } : item);
   const delta = clampMoveDeltaToTrackGaps(state, moving, ids, requestedDelta);
   if (delta === null) return state;
+  // Fully clamped away with no track change = no-op: return the original state
+  // so the rejected nudge does not pollute the undo history.
+  if (delta === 0 && (!destinationTrack || destinationTrack === target.track)) return state;
   const replacements = new Map(moving.map((item) => [
     item.id,
     { ...item, startFrame: item.startFrame + delta },
@@ -239,12 +243,12 @@ export function removeItemsWithGroups(
   const remainingIds = new Set(next.items.map((item) => item.id));
   const selectedIds = (state.selectedIds ?? (state.selectedId ? [state.selectedId] : []))
     .filter((id) => remainingIds.has(id));
-  return {
+  return reconcileTimelineCaptionReferences({
     ...next,
     transitions: (state.transitions ?? []).filter((transition) =>
       !removeIds.has(transition.incomingItemId) && !removeIds.has(transition.outgoingItemId)),
     linkGroups: maintainLinkGroups(state.linkGroups, remainingIds),
     selectedIds,
     selectedId: selectedIds[selectedIds.length - 1] ?? null,
-  };
+  });
 }

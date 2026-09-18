@@ -3,7 +3,6 @@ import {
   tool,
   type LanguageModel,
   type ModelMessage,
-  type ToolResultPart,
   type ToolSet,
 } from 'ai';
 import type { ProviderOptions } from '@ai-sdk/provider-utils';
@@ -25,7 +24,7 @@ import {
   harnessContextForModelRound,
   type HarnessToolExecutionContext,
 } from './harness-context';
-import { compactToolResultForModel } from './tool-result-compaction';
+import { toolResultModelOutput } from './tool-result-output';
 import {
   cacheTtlMsForProvider,
   getLanguageModel,
@@ -33,14 +32,9 @@ import {
 } from './client';
 import { normalizeLlmMessages } from './messages';
 import { loadAgentSettings, type AgentSettings } from './settings/agentSettings';
-import type { GuardDecision } from './skills/costGuard';
 import { completeAbortedTurn } from './abortedTurn';
 import { executeOpenChatCutTool, type CodexToolExecution } from './codex/runtime';
 import { toolFailureReason, ToolFailureTracker } from './toolFailure';
-import {
-  runtimeGuardForTool,
-  type RuntimeGuardRequest,
-} from './runtime-guard';
 import type {
   AgentEvent,
   LLMMessage,
@@ -54,38 +48,6 @@ import {
 } from './api-round';
 
 const MAX_TOOL_TURNS = 30;
-type ToolResultOutput = ToolResultPart['output'];
-
-function toolModelOutput(output: unknown, preserveExact = false): ToolResultOutput {
-  const shaped = output as {
-    denied?: boolean;
-    note?: string;
-    __images?: Array<{ frame: number; base64: string }>;
-  } | null;
-  if (shaped?.denied) {
-    return { type: 'execution-denied', reason: shaped.note ?? 'User denied tool execution.' };
-  }
-  if (Array.isArray(shaped?.__images)) {
-    const projected = compactToolResultForModel(output);
-    return {
-      type: 'content',
-      value: [
-        ...shaped.__images.map((image) => ({
-          type: 'file' as const,
-          data: { type: 'data' as const, data: image.base64 },
-          mediaType: 'image/jpeg',
-          filename: `timeline-frame-${image.frame}.jpg`,
-        })),
-        {
-          type: 'text' as const,
-          text: JSON.stringify(projected ?? shaped.note ?? `${shaped.__images.length} frames rendered`),
-        },
-      ],
-    };
-  }
-  const value = JSON.stringify((preserveExact ? output : compactToolResultForModel(output)) ?? null);
-  return { type: 'text', value };
-}
 export function apiToolExecutionOutput(execution: CodexToolExecution): unknown {
   if (!execution.success) throw new Error(toolFailureReason(execution.result));
   return execution.result;
@@ -100,7 +62,6 @@ function createAgentTools(
   onEvent: (event: AgentEvent) => void,
   settings: AgentSettings,
   harness: HarnessToolExecutionContext,
-  onSkillGuard?: (info: RuntimeGuardRequest) => Promise<GuardDecision>,
   onFollowup?: (text: string) => void,
   runRecorder?: AgentRunRecorder,
 ): ToolSet {
@@ -116,8 +77,6 @@ function createAgentTools(
           ctx,
           onEvent,
           settings,
-          resolveGuard: runtimeGuardForTool,
-          onSkillGuard,
           onFollowup,
           toolCatalog: getActivation().allSchemas(),
           activeToolCatalog: getActivation().schemas(),
@@ -132,7 +91,7 @@ function createAgentTools(
         setActivation(activated.activation);
         return activated.result;
       },
-      toModelOutput: ({ output }) => toolModelOutput(output, schema.name === 'load_skill'),
+      toModelOutput: ({ output }) => toolResultModelOutput(output, schema.name === 'load_skill'),
     }),
   ]));
 }
@@ -143,14 +102,6 @@ function responseUsedTools(messages: readonly ModelMessage[]): boolean {
     && message.content.some((part) => part.type === 'tool-call'));
 }
 
-function withoutAssistantText(messages: readonly ModelMessage[]): ModelMessage[] {
-  return messages.flatMap((message): ModelMessage[] => {
-    if (message.role !== 'assistant') return [message];
-    if (typeof message.content === 'string') return [];
-    const content = message.content.filter((part) => part.type !== 'text');
-    return content.length ? [{ ...message, content } as ModelMessage] : [];
-  });
-}
 export interface ApiRuntimeDependencies {
   readonly model?: LanguageModel;
 }
@@ -230,7 +181,7 @@ class ApiAgentRunner {
       onEvent,
       this.settings,
       harness,
-      opts?.onSkillGuard,
+
       output.markFollowup,
       opts?.runRecorder,
     );
@@ -250,12 +201,8 @@ class ApiAgentRunner {
   }
 
   private completeAborted(outcome: ApiAttemptOutcome, output: ApiRoundOutput): LLMMessage[] {
-    const unresolved = this.toolFailures.hasUnresolved;
-    const responseMessages = unresolved
-      ? withoutAssistantText(outcome.responseMessages)
-      : outcome.responseMessages;
-    if (unresolved) output.discardBuffered();
-    else output.flush();
+    const responseMessages = outcome.responseMessages;
+    output.flush();
     this.toolFailures.clear();
     const persisted = responseMessages.length || !output.visibleText
       ? responseMessages
@@ -265,25 +212,25 @@ class ApiAgentRunner {
 
   private completeRound(outcome: ApiAttemptOutcome, output: ApiRoundOutput): LLMMessage[] | null {
     const unresolved = this.toolFailures.hasUnresolved;
-    const responseMessages = unresolved
-      ? withoutAssistantText(outcome.responseMessages)
-      : outcome.responseMessages;
-    if (unresolved) output.discardBuffered();
-    else output.flush();
+    const responseMessages = outcome.responseMessages;
+    output.flush();
     const usedTools = responseUsedTools(responseMessages);
     if (output.askedFollowup) {
       output.flushFollowup();
       return [...this.conv, ...responseMessages];
     }
-    if (!usedTools && unresolved) return [...this.conv, output.failureCompletion()];
+    if (!usedTools) {
+      // The model saw the failed tool result in its own context and replies
+      // freely; no failure-report template is injected.
+      if (unresolved) this.toolFailures.clear();
+      return [...this.conv, ...responseMessages];
+    }
     this.conv = [...this.conv, ...responseMessages];
-    if (!usedTools) return this.conv;
     this.toolTurns += 1;
     if (this.toolTurns < MAX_TOOL_TURNS) return null;
     this.input.onEvent({ type: 'max-turns', turns: this.toolTurns });
-    return this.toolFailures.hasUnresolved
-      ? [...this.conv, output.failureCompletion()]
-      : this.conv;
+    this.toolFailures.clear();
+    return this.conv;
   }
 
   private failRound(error: unknown, output: ApiRoundOutput): LLMMessage[] {
@@ -291,14 +238,14 @@ class ApiAgentRunner {
       this.toolFailures.clear();
       return this.conv;
     }
-    const failure = this.toolFailures.hasUnresolved ? output.failureCompletion() : null;
-    if (!failure) output.flush();
+    this.toolFailures.clear();
+    output.flush();
     this.input.onEvent({ type: 'error', message: errorMessage(error).trim() });
-    return failure ? [...this.conv, failure] : this.conv;
+    return this.conv;
   }
 
   private async runRound(): Promise<LLMMessage[] | null> {
-    const output = new ApiRoundOutput(this.input.onEvent, this.toolFailures);
+    const output = new ApiRoundOutput(this.input.onEvent);
     try {
       const prepared = await this.prepareRound(output);
       const requestIndex = this.requestCount + 1;
@@ -336,6 +283,12 @@ class ApiAgentRunner {
   }
 }
 
+/**
+ * Browser-side API Agent loop. Server-side execution (serverRun) is the only
+ * Agent run path since the server-only refactor; this loop has no runtime
+ * consumer and is kept solely as a regression-test asset
+ * (token-efficiency.verify exercises it against a live provider).
+ */
 export function runApiAgent(
   messages: LLMMessage[],
   ctx: AgentContext,

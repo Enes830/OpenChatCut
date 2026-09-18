@@ -18,9 +18,9 @@ import {
   projectStoreRemoteAvailable,
   type BrowserProjectOwnership,
 } from '../persist/projectStoreTransport';
-import { editorBootstrapInfo, invalidateEditorBootstrapInfo } from './editor-credential';
-import { redactTextForAgentRuntime, sanitizeJsonForArtifact } from './runtime-artifact';
-import { TOOL_ARTIFACT_THRESHOLD } from './runtime-ledger';
+import { redactTextForAgentRuntime } from './runtime-artifact';
+import { projectExternalReply } from './external-result-projection';
+export { projectExternalReply } from './external-result-projection';
 import { externalBridgeCanStart, type ExternalBridgeReadinessToken } from './external-bridge-readiness';
 import {
   EditorBridgeRequestError,
@@ -40,6 +40,8 @@ export type { ExternalCall } from './externalBridgePayload';
 
 interface ExternalCallRuntime {
   execute: ExternalBridgeRuntime['execute'];
+  binding?: ExternalBridgeRuntime['binding'];
+  discardOwnerSessions?: (sessionIds: string[]) => Promise<void>;
 }
 
 export type ExternalResultSender = (
@@ -47,6 +49,7 @@ export type ExternalResultSender = (
   outcome: ExternalEditSessionTerminalStatus,
   value: unknown,
   signal: AbortSignal,
+  baseRevision?: string,
 ) => Promise<void>;
 
 interface ExternalBridgeRuntimeSlot extends ExternalBridgeReadinessToken {
@@ -74,28 +77,6 @@ function retryDelay(): Promise<void> {
   return promise;
 }
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
-let editorBridgeCredential: string | null = null;
-
-async function bootstrapEditorBridge(signal: AbortSignal): Promise<string> {
-  return (await editorBootstrapInfo(signal)).credential;
-}
-
-function projectExternalReply(value: unknown): unknown {
-  const sanitized = sanitizeJsonForArtifact(value);
-  if (!sanitized) {
-    throw new ExternalEditSessionOutcomeError(
-      'failed',
-      'The external result could not be serialized safely.',
-    );
-  }
-  if (sanitized.originalChars > TOOL_ARTIFACT_THRESHOLD) {
-    throw new ExternalEditSessionOutcomeError(
-      'failed',
-      'The external result was too large and no recoverable artifact reference was available.',
-    );
-  }
-  return JSON.parse(sanitized.body);
-}
 
 function failedOutcome(
   error: unknown,
@@ -135,12 +116,22 @@ export async function executeExternalCall(
       value = projectExternalReply(
         await runtime.execute(call.name, call.arguments, call.binding, controller.signal),
       );
+      // Flush pending project saves before reporting the result: the settle
+      // syncs the registry to the committed store revision, and a follow-up MCP
+      // session binding against a pre-autosave revision would be rejected as
+      // stale by the ownership renew check.
+      try {
+        const { flushProjectSaves } = await import('../persist/projectStore');
+        await flushProjectSaves(call.binding.projectId);
+      } catch {
+        // Save flushing is best-effort; the poll loop still converges afterwards.
+      }
     } catch (error) {
       const failed = failedOutcome(error, controller.signal);
       outcome = failed.outcome;
       value = projectExternalReply(failed.message);
     }
-    await deliverResult(call.id, outcome, value, bridgeSignal);
+    await deliverResult(call.id, outcome, value, bridgeSignal, runtime.binding?.().baseRevision);
   } finally {
     cancellations.release(call.id);
     bridgeSignal.removeEventListener('abort', cancel);
@@ -151,7 +142,6 @@ async function pollEditor(
   projectId: string,
   runtime: ExternalBridgeRuntime,
   cancellations: ExternalCallCancellationRegistry,
-  credential: string,
   ownership: BrowserProjectOwnership,
   signal: AbortSignal,
 ): Promise<void> {
@@ -163,7 +153,7 @@ async function pollEditor(
       baseRevision: browserProjectOwnership(projectId)?.baseRevision ?? binding.baseRevision,
     });
     const response = await fetch(`/api/external-agent/poll?${query}`, {
-      headers: editorBridgeHeaders(credential, false, ownership.registrationCapability),
+      headers: editorBridgeHeaders(false, ownership.registrationCapability),
       signal,
     });
     if (response.status === 204) continue;
@@ -173,13 +163,13 @@ async function pollEditor(
       runtime,
       signal,
       cancellations,
-      (id, outcome, value, resultSignal) => sendEditorBridgeResult(
+      (id, outcome, value, resultSignal, baseRevision) => sendEditorBridgeResult(
         id,
         outcome,
         value,
         resultSignal,
-        credential,
         ownership.registrationCapability,
+        baseRevision,
       ),
     );
   }
@@ -188,20 +178,24 @@ async function pollEditor(
 async function pollCancellations(
   projectId: string,
   editorInstanceId: string,
+  runtime: ExternalCallRuntime,
   cancellations: ExternalCallCancellationRegistry,
-  credential: string,
   registrationCapability: string,
   signal: AbortSignal,
 ): Promise<void> {
   const query = new URLSearchParams({ projectId, editorId: editorInstanceId });
   while (!signal.aborted) {
     const response = await fetch(`/api/external-agent/cancellation?${query}`, {
-      headers: editorBridgeHeaders(credential, false, registrationCapability),
+      headers: editorBridgeHeaders(false, registrationCapability),
       signal,
     });
     if (response.status === 204) continue;
     if (!response.ok) throw new EditorBridgeRequestError('cancellation poll', response.status);
     const cancellation = parseCancellation(await response.json());
+    if (cancellation.ownerGone?.length) {
+      await runtime.discardOwnerSessions?.(cancellation.ownerGone);
+      continue;
+    }
     cancellations.cancel(cancellation.id, cancellation.message);
   }
 }
@@ -212,17 +206,16 @@ async function pollRegisteredBridge(
   editorInstanceId: string,
   runtime: ExternalBridgeRuntime,
   cancellations: ExternalCallCancellationRegistry,
-  credential: string,
   ownership: BrowserProjectOwnership,
   signal: AbortSignal,
 ): Promise<void> {
   await Promise.all([
-    pollEditor(projectId, runtime, cancellations, credential, ownership, signal),
+    pollEditor(projectId, runtime, cancellations, ownership, signal),
     pollCancellations(
       projectId,
       editorInstanceId,
+      runtime,
       cancellations,
-      credential,
       ownership.registrationCapability,
       signal,
     ),
@@ -237,19 +230,13 @@ async function runBridgeAttempt(
   const cancellations = new ExternalCallCancellationRegistry();
   const controller = new AbortController();
   const cancel = () => controller.abort(signal.reason);
-  let credential = editorBridgeCredential;
-  let refreshCredential = false;
   let ownership: BrowserProjectOwnership | undefined;
   if (signal.aborted) controller.abort(signal.reason);
   else signal.addEventListener('abort', cancel, { once: true });
   try {
-    if (!credential) {
-      credential = await bootstrapEditorBridge(controller.signal);
-      editorBridgeCredential = credential;
-    }
     ownership = await registerEditorBridge(
       projectId, editorInstanceId, runtime.binding().baseRevision,
-      credential, controller.signal,
+      controller.signal,
       browserProjectOwnership(projectId)?.registrationCapability,
     );
     installBrowserProjectOwnership(ownership);
@@ -259,25 +246,20 @@ async function runBridgeAttempt(
       editorInstanceId,
       runtime,
       cancellations,
-      credential,
       ownership,
       controller.signal,
     );
   } catch (error) {
-    refreshCredential = handleExternalBridgeAttemptError(error, signal, onError);
+    handleExternalBridgeAttemptError(error, signal, onError);
   } finally {
     controller.abort();
     signal.removeEventListener('abort', cancel);
     cancellations.abortAll(controller.signal.reason);
     await unregisterEditorBridge(
-      projectId, editorInstanceId, credential,
+      projectId, editorInstanceId,
       ownership?.registrationCapability,
     );
     if (ownership) clearBrowserProjectOwnership(ownership);
-    if (refreshCredential && editorBridgeCredential === credential) {
-      invalidateEditorBootstrapInfo(credential ?? undefined);
-      editorBridgeCredential = null;
-    }
   }
 }
 
@@ -398,7 +380,6 @@ function useExternalPolling(
       void unregisterEditorBridge(
         projectId,
         readiness.editorInstanceId,
-        editorBridgeCredential,
         browserProjectOwnership(projectId)?.registrationCapability,
       );
     };

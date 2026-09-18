@@ -23,7 +23,7 @@
   <a href="#快速开始">快速开始</a> ·
   <a href="#在-codex--claude-code-中使用">Agent / MCP</a> ·
   <a href="#社区">社区</a> ·
-  <a href="#赞助">赞助</a> ·
+  <a href="#赞助商">赞助商</a> ·
   <a href="#更新日志">更新日志</a> ·
   <a href="#star-趋势">Star 趋势</a> ·
   <a href="#贡献">参与贡献</a>
@@ -39,6 +39,7 @@
   <img alt="Remotion" src="https://img.shields.io/badge/Remotion-4-0B84F3?style=flat" />
   <img alt="Electron" src="https://img.shields.io/badge/Electron-43-47848F?style=flat&logo=electron&logoColor=white" />
   <img alt="MCP" src="https://img.shields.io/badge/MCP-Agent_native-7C3AED?style=flat" />
+  <a href="https://atomgit.com/Oxsline/openchatcut"><img alt="AtomGit G-Star" src="https://img.shields.io/badge/AtomGit-G--Star-DA203E?logo=gitcode&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -55,6 +56,31 @@
 
 <p align="center">
   <sub>从一句话到真实时间线：Agent、素材、预览、动态图形、转场、特效与多轨音频在同一个工程中协作。</sub>
+</p>
+
+---
+## 赞助商
+
+<p align="center">
+  <a href="https://ofox.ai/?utm_source=github&utm_medium=sponsorship&utm_content=openchatcut"><img src="assets/readme-pic/ofox-logo.svg" width="300" alt="OfoxAI" /></a>
+</p>
+
+**OfoxAI：一个平台，连接文本、图像与视频 AI**
+
+OfoxAI 是统一的 AI API 平台，汇集文本、图像和视频模型，支持 Seedance、MiniMax（海螺）、Wan 等视频模型系列。从 AI 应用与智能体开发，到创意构思、图像生成和视频素材制作，通过一个平台选择适合的模型。
+[探索 OfoxAI 模型与 API →](https://ofox.ai/?utm_source=github&utm_medium=sponsorship&utm_content=openchatcut)
+
+<br />
+
+如果 OpenChatCut 对你有帮助，欢迎通过 Ko-fi 或爱发电支持项目持续开发。
+
+<p align="center">
+  <a href="https://ko-fi.com/Y5N2241IP5">
+    <img alt="通过 Ko-fi 支持项目" src="https://img.shields.io/badge/Support_me_on-Ko--fi-72a4f2?logo=kofi&amp;logoColor=white" />
+  </a>
+  <a href="https://www.ifdian.net/a/sline?utm_source=copylink&amp;utm_medium=link">
+    <img alt="通过爱发电支持 OpenChatCut" src="https://img.shields.io/badge/%E6%94%AF%E6%8C%81%E9%A1%B9%E7%9B%AE-%E7%88%B1%E5%8F%91%E7%94%B5-946CE6" />
+  </a>
 </p>
 
 ---
@@ -91,22 +117,7 @@ OpenChatCut 是 **开源 ChatCut 替代方案**：把 **对话式 Agent** 和 **
 
 <p align="center">
   <br />
-  <img src="assets/readme-pic/wechat-community.png" width="220" alt="OpenChatCut 微信社区二维码" />
-</p>
-
----
-
-## 赞助
-
-如果 OpenChatCut 对你有帮助，欢迎通过 Ko-fi 或爱发电支持项目持续开发。
-
-<p align="center">
-  <a href="https://ko-fi.com/Y5N2241IP5">
-    <img alt="通过 Ko-fi 支持项目" src="https://img.shields.io/badge/Support_me_on-Ko--fi-72a4f2?logo=kofi&amp;logoColor=white" />
-  </a>
-  <a href="https://www.ifdian.net/a/sline?utm_source=copylink&amp;utm_medium=link">
-    <img alt="通过爱发电支持 OpenChatCut" src="https://img.shields.io/badge/%E6%94%AF%E6%8C%81%E9%A1%B9%E7%9B%AE-%E7%88%B1%E5%8F%91%E7%94%B5-946CE6" />
-  </a>
+  <img src="assets/readme-pic/wechat-community.jpg" width="220" alt="OpenChatCut 微信社区二维码" />
 </p>
 
 ---
@@ -274,6 +285,14 @@ http://localhost:5199
 - **ChatGPT 订阅**：先安装官方 Codex CLI 0.146.0 或更高版本，再进入**设置 → Agent 模型 → OpenAI · Codex**。可使用浏览器或设备代码登录、读取账号可用模型，并按模型选择推理强度（或保留模型默认值），再在聊天区的模型选择器中切换到 Codex。OpenChatCut 使用独立的 Codex 配置目录；凭据存储、令牌续期与退出均由官方 CLI 负责，OAuth 令牌不会暴露给浏览器。
 - **Claude 订阅**：OpenChatCut 不接收 Claude OAuth 凭据；请通过下文的本机 MCP 连接使用 Claude Code。内置 Agent 仍可通过 Anthropic API Key 使用 Claude。
 
+内置 Agent 的模型循环始终在本机服务端运行。聊天、草稿和提案可跨页面刷新和本地服务重启保留。时间线修改仍通过活动编辑器中经过校验且可撤销的命令完成。
+
+### Agent 本地路径访问（高级）
+
+桌面端 Agent 默认可以访问操作系统允许读取的任意本地目录，包括外接素材盘。`browse_local_media` 可浏览文件夹，按文件名、相对路径和媒体类型搜索，并分页返回结果，不会自动导入。Agent 选好素材后，可用 `import_assets` 批量导入最多 100 个路径，也可用 `import_asset` 导入单个路径、`import_folder` 导入整个文件夹。导入复用媒体探测和源文件引用流程，保留原文件，并跳过媒体池及同一批次中的重复内容。TXT、Markdown、DOCX、PDF 等文稿请作为对话附件添加。这些工具仅在桌面应用中可用。
+
+需要限制目录范围时，可在 `.env.local` 中填写英文逗号分隔的绝对路径，例如 `AGENT_IMPORT_ROOTS=/Volumes/Media,D:\Projects`；留空表示默认放行。手动设置的范围同时适用于浏览和导入。源码运行会读取仓库根目录的文件；桌面安装包会从 Electron 用户数据目录读取：macOS 为 `~/Library/Application Support/OpenChatCut/`，Windows 为 `%APPDATA%\OpenChatCut\`，Linux 为 `$XDG_CONFIG_HOME/OpenChatCut/`（通常是 `~/.config/OpenChatCut/`）。修改后请重启应用。
+
 
 本地 H.264 导出会在 macOS 上优先使用 VideoToolbox，在兼容的 Windows 设备上优先使用 NVENC，失败时自动回退软件编码。可用 `OPENCHATCUT_RENDER_CONCURRENCY` 和 `OPENCHATCUT_MAX_ACTIVE_EXPORTS` 调整渲染并发及重型导出上限，用 `OPENCHATCUT_DISABLE_HARDWARE_ENCODING` 关闭硬件编码，或用 `OPENCHATCUT_H264_ENCODER` 覆盖 FFmpeg 侧的编码器选择；详见 [`.env.example`](.env.example)。
 
@@ -304,7 +323,7 @@ npx skills add 0xsline/OpenChatCut
 ```
 
 然后对 Agent 说“设置 OpenChatCut”。安装的路由 Skill 会注册本地 MCP
-连接，并按需加载编辑器内置的 24 个专项 Skill，避免技能列表出现大量入口。
+连接，并按需加载编辑器内置的 26 个专项 Skill，避免技能列表出现大量入口。
 
 自定义技能存放在用户可见目录，与 `~/.codex/skills` / `~/.claude/skills` 布局一致：
 
@@ -362,6 +381,48 @@ claude mcp add --transport http openchatcut \
 
 外部 Agent 调用的仍是编辑器内部同一套工具和 `EditorCore` 命令，不存在两套互相漂移的工程格式；外部草稿准备期间不会修改正式时间线。
 
+### Qoder
+
+Qoder 同样支持一键接入：指南里的「连接」按钮会把端点和 Bearer 令牌写进 Qoder
+自己的设置文件，已有的其它设置和 MCP 服务保持不变。
+
+```text
+~/.qoder/settings.json        （国际版）
+~/.qoder-cn/settings.json     （国内版；已安装时一并写入）
+```
+
+```json
+{
+  "mcpServers": {
+    "openchatcut": {
+      "type": "http",
+      "url": "http://localhost:5199/api/external-mcp/mcp",
+      "headers": { "Authorization": "Bearer <令牌>" }
+    }
+  }
+}
+```
+
+写入后重启 Qoder 生效。
+
+### 千问办公
+
+千问办公 的自定义 MCP 保存在应用内部的连接器里，没有可供写入的配置文件，
+因此这一步无法一键完成：在指南中点「千问办公」卡片的「复制配置」，再到
+千问办公 的 连接器 → 自定义 MCP → 添加 中粘贴并保存：
+
+```json
+{
+  "mcpServers": {
+    "openchatcut": {
+      "type": "streamable-http",
+      "url": "http://localhost:5199/api/external-mcp/mcp",
+      "headers": { "Authorization": "Bearer <令牌>" }
+    }
+  }
+}
+```
+
 ### MCP 访问保护
 
 自行暴露 MCP 入口时可配置：
@@ -389,7 +450,7 @@ OPENCHATCUT_EDITOR_URL=https://your-editor.example.com
 |---|---|
 | 前端 | React 19、TypeScript 6、Vite 8 |
 | 编辑核心 | 不可变时间线状态、命令层、提案式应用 |
-| Agent | Vercel AI SDK 7（Anthropic、OpenAI、Gemini、Kimi、Qwen、GLM、DeepSeek、MiniMax、小米 MiMo、Mistral 与兼容接口）、Agent Skills、MCP SDK |
+| Agent | Vercel AI SDK 7（Anthropic、OpenAI、Gemini、Kimi、Qwen、GLM、DeepSeek、MiniMax、小米 MiMo、Mistral、xAI Grok（API Key 或 SuperGrok/X Premium+ 订阅登录）、OpenRouter、OrcaRouter、OFox 与兼容接口）、Agent Skills、MCP SDK |
 | 预览与视觉 | Remotion Player、WebGL / GLSL |
 | 服务端 | Vite / Electron 双宿主插件、服务端密钥仓 |
 | 持久化 | `~/.openchatcut` 下的本机共享工程库、IndexedDB 缓存、可配置本地素材目录、可选 Cloudflare R2 |
@@ -452,7 +513,7 @@ npm run lint
 修改 Agent、时间线、预览或导出后，至少运行：
 
 ```bash
-npx tsc --noEmit
+npx tsc -b --force
 npm test
 npm run build
 ```

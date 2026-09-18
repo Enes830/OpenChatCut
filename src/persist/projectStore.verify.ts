@@ -7,6 +7,7 @@ import {
   hasProjectHistory,
   listProjects,
   loadChat,
+  loadProjectForEditing,
   purgeProject,
   renameProject,
   resetProjectStoreMemory,
@@ -18,7 +19,7 @@ import {
   SaveCoordinator,
   type ProjectMeta,
 } from './projectStoreCoordinators';
-import { recoverFailedAutosave } from './autosaveRecovery';
+import { pendingAutosaveAfterObservation, recoverFailedAutosave } from './autosaveRecovery';
 import { kvKeys, kvSet } from './sharedKv';
 import {
   MAX_AUTOMATIC_VERSIONS,
@@ -163,6 +164,20 @@ assert.equal(
   assert.equal(maxActiveWriters, 1, 'one project never has concurrent persistence writers');
   assert.equal((await coordinator.flush('serial-project')).ok, true);
   assert.deepEqual(writes.at(-1), 'Second', 'an older completion cannot overwrite the newer revision');
+}
+
+// Loading a project establishes an autosave baseline; only a later edit of
+// that same project is queued. Strict-mode replay and project switches stay clean.
+{
+  const hydrated = { projectId: 'hydrated-project', doc: versionDoc('Hydrated') };
+  assert.equal(pendingAutosaveAfterObservation(null, hydrated), null);
+  assert.equal(pendingAutosaveAfterObservation(hydrated, { ...hydrated }), null);
+  assert.equal(
+    pendingAutosaveAfterObservation(hydrated, { projectId: 'other-project', doc: versionDoc('Other') }),
+    null,
+  );
+  const edited = { projectId: hydrated.projectId, doc: versionDoc('First edit') };
+  assert.equal(pendingAutosaveAfterObservation(hydrated, edited), edited);
 }
 
 // Editor autosave recovery is monotonic across enqueue attempts. If S1 fails
@@ -394,6 +409,34 @@ assert.equal(
   assert.equal(deleted?.name, 'Renamed before delete');
   assert.equal(typeof deleted?.deletedAt, 'number');
   assert.equal(described?.description, 'Preserved metadata');
+}
+
+// loadProjectForEditing distinguishes "missing" (open as empty is fine) from
+// "unreadable" (stored bytes exist but cannot be migrated — the editor must
+// block instead of opening empty and letting autosave overwrite real data).
+{
+  const readableDoc = {
+    version: CURRENT_PROJECT_VERSION,
+    assets: [],
+    mediaFolders: [],
+    timelines: [{
+      id: 'tl1', name: '序列 1', fps: 30, width: 1920, height: 1080, selectedId: null, items: [],
+    }],
+    activeTimelineId: 'tl1',
+  } as unknown as ProjectDoc;
+  const meta = await createProject('Readable', readableDoc);
+  const ok = await loadProjectForEditing(meta.id);
+  assert.equal(ok.status, 'ok');
+  assert.equal(ok.status === 'ok' && ok.doc.version, CURRENT_PROJECT_VERSION);
+
+  const missing = await loadProjectForEditing('no-such-project');
+  assert.equal(missing.status, 'missing', 'absent document reads as missing');
+
+  await kvSet(`project:${meta.id}`, { version: 99, corrupted: true });
+  const unreadable = await loadProjectForEditing(meta.id);
+  assert.equal(unreadable.status, 'unreadable',
+    'a stored-but-unmigratable document must NOT read as missing/empty');
+  await purgeProject(meta.id);
 }
 
 console.log('projectStore.verify: ok');

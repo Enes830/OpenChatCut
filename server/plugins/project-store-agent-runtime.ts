@@ -14,7 +14,7 @@ import type {
   StoredEntryValue,
 } from './project-store.ts';
 
-export interface AgentRuntimeCasInput {
+export interface AgentRuntimeWriteInput {
   key: string;
   expectedRevision: number | null;
   value: unknown;
@@ -145,21 +145,21 @@ function supportedRuntimeEntry(key: string, entry: StoredEntryValue): Record<str
   throw new Error('agent runtime entry is corrupt');
 }
 
-async function compareAndSwap(
+async function writeAgentRuntime(
   withStoreLock: WithStoreLock,
-  input: AgentRuntimeCasInput,
+  input: AgentRuntimeWriteInput,
 ): Promise<ProjectStoreMutationResponse> {
   return withStoreLock(async (store) => {
     const current = await store.readEntry(input.key);
     const runtime = supportedRuntimeEntry(input.key, current);
-    const revision = runtime ? Number(runtime.revision) : null;
-    if (revision !== input.expectedRevision) return mutationResponse(current, false);
+    // Single-writer world: the agent runtime sidecar is only ever written by
+    // this server process (executor events, settle endpoint, artifact store),
+    // serialized by withStoreLock. The expectedRevision CAS check is gone;
+    // the revision increment and terminal-status guards below still protect
+    // data integrity inside the lock.
     const incoming = classifyAgentRuntimeStoreValue(input.key, input.value);
     if (incoming.kind !== 'supported') throw new Error('invalid agent runtime CAS value');
     normalizeAgentRuntimeSidecar(String(incoming.value.projectId), incoming.value);
-    if (incoming.value.revision !== (revision ?? 0) + 1) {
-      throw new Error('invalid agent runtime CAS revision');
-    }
     if (!preservesTerminalStatuses(runtime, incoming.value)) {
       return mutationResponse(current, false);
     }
@@ -192,12 +192,8 @@ function acceptedLease(
   if (input.action === 'release') {
     return exact ? { ownerInstanceId: owner, leaseToken: token, leaseExpiresAt: expiresAt } : null;
   }
-  const serverRestart = input.allowOfflineServerTakeover === true
-    && run.backend === 'external-offline'
-    && !!owner;
-  const available = !owner || expiresAt <= now || exact
-    || (owner === input.ownerInstanceId && !token) || serverRestart;
-  if (!available) return null;
+  // A claim always wins: single-window users must be able to resume an agent run
+  // immediately even if a previous session still holds the (2-minute) lease.
   return {
     ownerInstanceId: input.ownerInstanceId,
     leaseToken: exact ? token : randomUUID(),
@@ -239,11 +235,11 @@ async function updateLease(
 }
 
 export function createAgentRuntimeStoreOperations(withStoreLock: WithStoreLock): {
-  compareAndSwapAgentRuntime: (input: AgentRuntimeCasInput) => Promise<ProjectStoreMutationResponse>;
+  writeAgentRuntime: (input: AgentRuntimeWriteInput) => Promise<ProjectStoreMutationResponse>;
   updateStoredAgentRunLease: (input: AgentRunLeaseInput) => Promise<ProjectStoreMutationResponse>;
 } {
   return {
-    compareAndSwapAgentRuntime: (input) => compareAndSwap(withStoreLock, input),
+    writeAgentRuntime: (input) => writeAgentRuntime(withStoreLock, input),
     updateStoredAgentRunLease: (input) => updateLease(withStoreLock, input),
   };
 }

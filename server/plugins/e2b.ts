@@ -12,6 +12,8 @@ import { Sandbox } from '@e2b/code-interpreter';
 
 import { isSafeUploadName, resolveUploadFile, uploadDir } from '../media-dir.ts';
 import { PRODUCT_ASSETS_DIR, resolveProductAsset } from '../product-assets.ts';
+import { safePublicFetch } from '../safe-public-fetch.ts';
+
 
 const MAX_FETCH = 200_000_000; // cap bytes pulled into the sandbox
 let alphaSeq = 0; // filename disambiguator for transcoded outputs
@@ -19,7 +21,7 @@ let alphaSeq = 0; // filename disambiguator for transcoded outputs
 // Resolve a file's bytes to write into the sandbox: inline `content`, a local
 // product asset (`/fonts/...` under assets/), a user upload (`/media/uploads/...`),
 // or a public http(s) URL. Path-traversal guarded.
-async function resolveBytes(file: E2bFile): Promise<string | ArrayBuffer> {
+export async function resolveE2bFileBytes(file: E2bFile): Promise<string | ArrayBuffer> {
   if (file.content !== undefined) return file.content;
   const url = file.url;
   if (!url) throw new Error(`file ${file.path} needs content or url`);
@@ -43,7 +45,7 @@ async function resolveBytes(file: E2bFile): Promise<string | ArrayBuffer> {
     throw new Error(`local path not found: ${url} (looked in uploads + ${PRODUCT_ASSETS_DIR})`);
   }
   if (!/^https?:\/\//.test(url)) throw new Error(`unsupported url ${url}`);
-  const response = await fetch(url);
+  const response = await safePublicFetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`fetch ${url} failed (${response.status})`);
   const buf = await response.arrayBuffer();
   if (buf.byteLength > MAX_FETCH) throw new Error(`fetched file too large (${buf.byteLength} bytes)`);
@@ -123,7 +125,7 @@ export function e2bPlugin(options: E2bOptions): Plugin {
 
           sandbox = await createSandbox(options, input.timeoutMs ?? 120_000);
           for (const file of input.files ?? []) {
-            await sandbox.files.write(file.path, await resolveBytes(file));
+            await sandbox.files.write(file.path, await resolveE2bFileBytes(file));
           }
 
           let result: { stdout: string; stderr: string; exitCode: number };
@@ -162,7 +164,7 @@ export function e2bPlugin(options: E2bOptions): Plugin {
           const input = (await readJson(req)) as unknown as TranscodeRequest;
           const source = String(input.source ?? '').trim();
           if (!source) throw new Error('source is required');
-          const bytes = await resolveBytes({ path: 'in.media', url: source });
+          const bytes = await resolveE2bFileBytes({ path: 'in.media', url: source });
           if (typeof bytes === 'string') throw new Error('source must be a media file (path or url), not inline text');
 
           sandbox = await createSandbox(options, input.timeoutMs ?? 240_000);

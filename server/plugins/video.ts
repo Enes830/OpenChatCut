@@ -1,3 +1,4 @@
+import { proxyDispatcher } from '../outbound-proxy.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import {
@@ -5,7 +6,6 @@ import {
   IncompleteGenerationResultError,
   generationResultCheckpoint,
   registerGenerationJobResumer,
-  waitForGenerationAcceptance,
   requireGenerationResultUrls,
   type GenerationJobSnapshot,
   type GenerationResult,
@@ -16,15 +16,22 @@ import {
   materializeVideoReferences,
   mediaDataUrl,
   providerMediaUrl,
-  saveImageUrl,
-  saveVideo,
   ServerReferencePreflightError,
 } from './video-media.ts';
+import { generateGrokVideo } from './grok-video-provider.ts';
+import { hailuoRequestBody } from './minimax-video.ts';
+import { generateOfoxVideo } from './ofox-video-provider.ts';
+import { saveVideoResults } from './video-result-save.ts';
 import {
-  hailuoApiResolution, seedanceApiResolution, validateVideoRequest, videoSeconds,
+  seedanceApiResolution, validateVideoRequest, videoSeconds,
   type KlingVideoReferType, type ValidVideoRequest, type VideoRequest,
 } from './video-validation.ts';
 export { hailuoApiResolution, seedanceApiResolution, validateVideoRequest } from './video-validation.ts';
+// Attach the configured outbound proxy through undici.
+type FetchInit = Parameters<typeof fetch>[1] & { dispatcher?: unknown };
+const fetchWithProxy = (url: RequestInfo | URL, init?: FetchInit): Promise<Response> =>
+  fetch(url, { ...init, dispatcher: proxyDispatcher() } as RequestInit);
+
 const VIDEO_FAILURES = new Set(['failed', 'expired', 'cancelled']);
 
 interface VideoOptions {
@@ -40,6 +47,12 @@ interface VideoOptions {
   byteplusBaseUrl: string;
   byteplusApiKey: string;
   byteplusModel: string;
+  xaiBaseUrl: string;
+  xaiApiKey: string;
+  xaiVideoModel: string;
+  ofoxBaseUrl: string;
+  ofoxApiKey: string;
+  ofoxVideoModel: string;
 }
 
 async function readJson(req: IncomingMessage): Promise<VideoRequest> {
@@ -73,7 +86,7 @@ async function providerError(response: Response): Promise<string> {
 const validate = validateVideoRequest;
 
 async function requestJson(url: string, init: RequestInit): Promise<Record<string, unknown>> {
-  const response = await fetch(url, init);
+  const response = await fetchWithProxy(url, init);
   if (!response.ok) throw new Error(await providerError(response));
   const data = await response.json() as Record<string, unknown>;
   if (typeof data.code === 'number' && data.code !== 0) throw new Error(String(data.message ?? `video provider failed (${data.code})`));
@@ -161,6 +174,8 @@ async function generateSeedance(
   throw new Error(`${config.providerId} generation timed out`);
 }
 
+/** xAI Grok Imagine Video (text-to-video): async request_id + polling. The
+ * subscription session token takes priority over the configured API key. */
 function seedanceConfig(model: 'seedance2' | 'byteplus', options: VideoOptions): SeedanceConfig {
   return model === 'seedance2'
     ? {
@@ -256,7 +271,7 @@ interface MinimaxBaseResp { status_code?: number; status_msg?: string }
 /** MiniMax request: HTTP errors AND in-band base_resp errors both throw; the raw body
  * text is kept alongside the parsed JSON so int64 fields can be re-read as strings. */
 async function minimaxJson(url: string, init: RequestInit): Promise<{ raw: string; data: Record<string, unknown> }> {
-  const response = await fetch(url, init);
+  const response = await fetchWithProxy(url, init);
   if (!response.ok) throw new Error(await providerError(response));
   const raw = await response.text();
   let data: Record<string, unknown>;
@@ -276,63 +291,6 @@ function hailuoFileId(raw: string): string {
   const match = /"file_id"\s*:\s*"?(\d+)"?/.exec(raw);
   if (!match) throw new Error('hailuo succeeded without a file_id');
   return match[1];
-}
-
-/** MiniMax S2V-01 subject-reference path (face/subject lock). Configured via MINIMAX_VIDEO_MODEL. */
-export function isMinimaxSubjectModel(modelName: string): boolean {
-  return /s2v/i.test(modelName);
-}
-
-type MinimaxVideoFamily = 'subject' | 'hailuo02' | 'hailuo23' | 'hailuo23-fast' | 'legacy-t2v' | 'legacy-i2v';
-
-function minimaxVideoFamily(modelName: string): MinimaxVideoFamily {
-  if (/^s2v-01$/i.test(modelName)) return 'subject';
-  if (/hailuo-2\.3-fast/i.test(modelName)) return 'hailuo23-fast';
-  if (/hailuo-2\.3/i.test(modelName)) return 'hailuo23';
-  if (/hailuo-02/i.test(modelName)) return 'hailuo02';
-  if (/^t2v-01(?:-director)?$/i.test(modelName)) return 'legacy-t2v';
-  if (/^i2v-01(?:-director|-live)?$/i.test(modelName)) return 'legacy-i2v';
-  throw new Error(`unsupported MiniMax video model: ${modelName}`);
-}
-
-export function validateMinimaxVideoMode(input: ValidVideoRequest, modelName: string): MinimaxVideoFamily {
-  const family = minimaxVideoFamily(modelName);
-  if (family === 'subject') {
-    if (!input.firstFramePath) throw new Error('MiniMax S2V subject-reference requires firstFrame (subject/face image)');
-    if (input.lastFramePath) throw new Error('MiniMax S2V subject-reference does not support lastFrame');
-    if (input.durationSpecified || input.resolution) throw new Error('MiniMax S2V does not accept durationSeconds or resolution');
-    if (input.fastPretreatment !== undefined) throw new Error('MiniMax S2V does not accept fastPretreatment');
-  }
-  if (family === 'hailuo23-fast' && !input.firstFramePath) throw new Error('MiniMax-Hailuo-2.3-Fast is image-to-video only and requires firstFrame');
-  if (input.lastFramePath && family !== 'hailuo02') throw new Error('MiniMax first-and-last-frame mode requires MiniMax-Hailuo-02');
-  if (input.lastFramePath && input.fastPretreatment !== undefined) throw new Error('MiniMax first-and-last-frame mode does not accept fastPretreatment');
-  if (input.resolution === '512p' && family !== 'hailuo02') throw new Error('hailuo 512p requires the MiniMax-Hailuo-02 model');
-  const legacy = family === 'legacy-t2v' || family === 'legacy-i2v';
-  if (legacy && (input.durationSeconds !== 6 || (input.resolution && input.resolution !== '720p'))) throw new Error('legacy MiniMax video models support 6s at 720p only');
-  if (legacy && input.fastPretreatment !== undefined) throw new Error('legacy MiniMax video models do not accept fastPretreatment');
-  if (family === 'legacy-t2v' && input.firstFramePath) throw new Error(`${modelName} is text-to-video only`);
-  if (family === 'legacy-i2v' && !input.firstFramePath) throw new Error(`${modelName} is image-to-video only and requires firstFrame`);
-  return family;
-}
-
-export function hailuoRequestBody(
-  input: ValidVideoRequest, modelName: string, firstFrameImage?: string, lastFrameImage?: string,
-): Record<string, unknown> {
-  const family = validateMinimaxVideoMode(input, modelName);
-  const body: Record<string, unknown> = { model: modelName, prompt: input.prompt, prompt_optimizer: input.promptOptimizer !== false };
-  if (family === 'subject') {
-    if (!firstFrameImage) throw new Error('MiniMax S2V firstFrame could not be resolved');
-    body.subject_reference = [{ type: 'character', image: [firstFrameImage] }];
-    return body;
-  }
-  if (input.firstFramePath && !firstFrameImage) throw new Error('MiniMax firstFrame could not be resolved');
-  if (input.lastFramePath && !lastFrameImage) throw new Error('MiniMax lastFrame could not be resolved');
-  body.duration = input.durationSeconds;
-  body.resolution = family.startsWith('legacy-') ? '720P' : hailuoApiResolution(input.resolution);
-  if (firstFrameImage) body.first_frame_image = firstFrameImage;
-  if (lastFrameImage) body.last_frame_image = lastFrameImage;
-  if (input.fastPretreatment === true) body.fast_pretreatment = true;
-  return body;
 }
 
 async function generateHailuo(
@@ -370,21 +328,6 @@ async function generateHailuo(
   throw new Error('hailuo generation timed out');
 }
 
-async function saveVideoResults(
-  jobId: string,
-  name: string,
-  videoUrl: string,
-  lastFrameUrl?: string,
-): Promise<GenerationResult | GenerationResult[]> {
-  const video = { assetId: jobId, kind: 'video' as const, name, ...await saveVideo(videoUrl) };
-  if (!lastFrameUrl) return video;
-  const path = await saveImageUrl(lastFrameUrl);
-  return [video, {
-    assetId: `${jobId}:last-frame`, kind: 'image', name: `${name} · Last frame`, path,
-    durationSeconds: 5,
-  }];
-}
-
 async function runVideoOperation(
   operationId: string,
   name: string,
@@ -409,25 +352,30 @@ async function runVideoOperation(
         expectedResultCount,
       );
     } else {
-      const url = input.model === 'kling'
-        ? await generateKling(input, options, registerProviderTask, providerTaskId)
-        : await generateHailuo(input, options, registerProviderTask, providerTaskId);
+      const url = input.model === 'grok-imagine-video'
+        ? await generateGrokVideo(input, options, registerProviderTask, providerTaskId)
+        : input.model === 'ofox'
+          ? await generateOfoxVideo(input, options, registerProviderTask, providerTaskId)
+          : input.model === 'kling'
+            ? await generateKling(input, options, registerProviderTask, providerTaskId)
+            : await generateHailuo(input, options, registerProviderTask, providerTaskId);
       urls = requireGenerationResultUrls([url], expectedResultCount);
     }
   }
   urls = requireGenerationResultUrls(urls, expectedResultCount);
+  const resultFetch = input.model === 'grok-imagine-video' || input.model === 'ofox' ? fetchWithProxy : undefined;
   const download = () => saveVideoResults(
     operationId,
     name,
     urls[0],
     (input.model === 'seedance2' || input.model === 'byteplus') && input.returnLastFrame ? urls[1] : undefined,
+    resultFetch,
   );
   for (const [index, url] of urls.entries()) await registerDownload(url, download, index);
   return download();
 }
-
 export function videoGenerationPlugin(options: VideoOptions): Plugin {
-  for (const provider of ['seedance2', 'kling', 'hailuo', 'byteplus'] as const) {
+  for (const provider of ['seedance2', 'kling', 'hailuo', 'byteplus', 'grok-imagine-video', 'ofox'] as const) {
     registerGenerationJobResumer('submit_video', provider, async (
       snapshot: GenerationJobSnapshot,
       _update,
@@ -480,8 +428,7 @@ export function videoGenerationPlugin(options: VideoOptions): Plugin {
               expectedResultCount: expectedVideoResultCount(input),
             },
           );
-          const accepted = await waitForGenerationAcceptance(submission.operationId);
-          sendJson(res, 202, { ...submission, ...accepted });
+          sendJson(res, 202, submission);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           server.config.logger.error(`[generate:video] ${message}`);

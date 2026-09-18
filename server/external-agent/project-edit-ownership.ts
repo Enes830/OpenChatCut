@@ -2,7 +2,7 @@ import { runProjectMigrations } from '../../src/persist/migrations/index.ts';
 import { revisionOf } from '../../src/agent/external-edit-session.ts';
 import type { ProjectDoc } from '../../src/editor/types.ts';
 import {
-  withProjectStoreLock,
+  withSerializedProjectStore,
   type LockedProjectStore,
   type StoredEntryValue,
 } from '../plugins/project-store.ts';
@@ -59,12 +59,12 @@ export async function claimBrowserProjectOwnership(
   projectId: string,
   ownerId: string,
   expectedRevision: string,
-  allowExistingBrowserOwner = false,
+  _allowExistingBrowserOwner = false,
 ): Promise<BrowserOwnershipClaimResult> {
   if (!validProjectEditOwnershipIdentity(projectId, ownerId) || !expectedRevision) {
     return { status: 'blocked' };
   }
-  return withProjectStoreLock(async (store) => {
+  return withSerializedProjectStore(async (store) => {
     const project = await storedProject(store, projectId);
     if (!project || project.revision !== expectedRevision) {
       return { status: 'stale', currentRevision: project?.revision };
@@ -76,9 +76,26 @@ export async function claimBrowserProjectOwnership(
     const sameOwner = current?.ownerKind === 'browser'
       && current.ownerId === ownerId
       && current.leaseExpiresAt > Date.now();
-    if (sameOwner && !allowExistingBrowserOwner) return { status: 'blocked' };
-    if (!sameOwner && current && current.leaseExpiresAt > Date.now()) return { status: 'blocked' };
-    if (!sameOwner && current?.epoch === Number.MAX_SAFE_INTEGER) return { status: 'blocked' };
+    // A browser window that already owns this project (the same ownerId, still a
+    // live lease) may re-claim it even without its in-memory capability. In
+    // normal single-window use the bridge occasionally tears down and reconnects
+    // with the same editor id but no capability; blocking that re-claim produced
+    // a spurious 409 that flashed "close the other window" during routine use.
+    // Genuine anti-spoof is enforced at the registration-route capability layer
+    // (broker capabilityMatches / the route's renewing check), so this claim
+    // gate only needs to fence cross-layer writes, not same-owner recovery.
+    // A genuinely DIFFERENT browser window that holds the expected revision also
+    // takes over from a previously registered browser window. Single-window
+    // desktop users never open the same project in two windows, so there is no
+    // cross-browser exclusivity to enforce. We still refuse to steal from a live
+    // OFFLINE writer (external MCP / a serialized offline commit) or an
+    // epoch-pinned owner, so the browser cannot clobber a non-browser write in
+    // flight. Lost-update protection additionally holds via the CAS revision
+    // match in createProjectDocumentStoreOperation.
+    if (current && current.leaseExpiresAt > Date.now() && current.ownerKind !== 'browser') {
+      return { status: 'blocked' };
+    }
+    if (current && current.epoch === Number.MAX_SAFE_INTEGER) return { status: 'blocked' };
     const claim: ProjectEditOwnershipClaim = {
       projectId,
       ownerKind: 'browser',
@@ -98,7 +115,7 @@ export async function claimOfflineProjectOwnership(
   if (!validProjectEditOwnershipIdentity(projectId, ownerId)) {
     return { status: 'blocked' };
   }
-  return withProjectStoreLock(async (store) => {
+  return withSerializedProjectStore(async (store) => {
     const project = await storedProject(store, projectId);
     if (!project) return { status: 'missing' };
     const entry = await store.readEntry(projectEditOwnershipKey(projectId));
@@ -123,7 +140,7 @@ export async function renewProjectEditOwnership(
   claim: ProjectEditOwnershipClaim,
   _baseRevision = claim.baseRevision,
 ): Promise<OwnershipRenewResult> {
-  return withProjectStoreLock(async (store) => {
+  return withSerializedProjectStore(async (store) => {
     const ownership = await store.readEntry(projectEditOwnershipKey(claim.projectId));
     if (ownershipCompatibility(ownership, claim.projectId) === 'blocked') return { status: 'blocked' };
     const current = parseProjectEditOwnership(ownership.value, claim.projectId);
@@ -144,7 +161,7 @@ export async function renewProjectEditOwnership(
 }
 
 export async function releaseProjectEditOwnership(claim: ProjectEditOwnershipClaim): Promise<void> {
-  await withProjectStoreLock(async (store) => {
+  await withSerializedProjectStore(async (store) => {
     const key = projectEditOwnershipKey(claim.projectId);
     const entry = await store.readEntry(key);
     const current = parseProjectEditOwnership(entry.value, claim.projectId);

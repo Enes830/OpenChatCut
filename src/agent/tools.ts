@@ -37,6 +37,7 @@ import { MG_VIDEO_TOOL_NAMES, MG_VIDEO_TOOL_SCHEMAS } from './tools/schemas/mg-v
 import { EDIT_ASSET_TOOL_NAMES, EDIT_ASSET_TOOL_SCHEMAS } from './tools/schemas/edit-asset-tools';
 import { WEB_TOOL_NAMES, WEB_TOOL_SCHEMAS } from './tools/schemas/web-tools';
 import { FONT_TOOL_NAMES, FONT_TOOL_SCHEMAS } from './tools/schemas/font-tools';
+import { SEARCH_TOOL_NAMES, SEARCH_TOOL_SCHEMAS } from './tools/schemas/search-tools';
 import { FOLLOWUP_TOOL_NAMES, FOLLOWUP_TOOL_SCHEMAS } from './tools/schemas/followup-tools';
 import { PROJECT_TOOL_NAMES, PROJECT_TOOL_SCHEMAS } from './tools/schemas/project-tools';
 import { UPLOAD_TOOL_NAMES, UPLOAD_TOOL_SCHEMAS } from './tools/schemas/upload-tools';
@@ -58,6 +59,14 @@ import {
   MUSIC_INTELLIGENCE_TOOL_NAMES,
   MUSIC_INTELLIGENCE_TOOL_SCHEMAS,
 } from './tools/schemas/music-intelligence-tools';
+import {
+  AGENT_PATH_IMPORT_TOOL_NAMES,
+  AGENT_PATH_IMPORT_SCHEMAS,
+} from './tools/agent-path-import-tools';
+import {
+  TIMELINE_IMPORT_TOOL_NAMES,
+  TIMELINE_IMPORT_TOOL_SCHEMAS,
+} from './tools/timeline-import-tools';
 import { withProgressTargets } from './tools/schemas/progress';
 import {
   AGENT_RUNTIME_TOOL_NAMES,
@@ -132,6 +141,8 @@ export const TOOL_SCHEMAS: AgentToolSchema[] = [
   ...WEB_TOOL_SCHEMAS,
   // Font catalog search; generate-tools enforces confirmFontFallback during export.
   ...FONT_TOOL_SCHEMAS,
+  // Cross-project full-text search over chats/captions/transcripts (FTS5).
+  ...SEARCH_TOOL_SCHEMAS,
   // Follow-up questions: render an interactive form card and pause the runtime through __followup.
   ...FOLLOWUP_TOOL_SCHEMAS,
   // Project session: create/list/delete/duplicate/edit/restore/target_project + get_editor_url
@@ -144,7 +155,7 @@ export const TOOL_SCHEMAS: AgentToolSchema[] = [
   ...READ_PROJECT_TOOL_SCHEMAS,
   // Inline JSX → MG asset
   ...MG_CODE_TOOL_SCHEMAS,
-  // Load 24 built-in SKILL.md on demand (load_skill · progressive disclosure)
+  // Load 26 built-in SKILL.md on demand (load_skill · progressive disclosure)
   ...PLUGIN_SKILL_TOOL_SCHEMAS,
   // Install a GitHub skill repo into the user skill directory.
   ...INSTALL_SKILL_TOOL_SCHEMAS,
@@ -172,6 +183,8 @@ export const TOOL_SCHEMAS: AgentToolSchema[] = [
   ...BEAT_TOOL_SCHEMAS,
   // Cached Beat This + CLAP inspection, deterministic rhythm edit planning, and one-batch video splitting.
   ...MUSIC_INTELLIGENCE_TOOL_SCHEMAS,
+  ...AGENT_PATH_IMPORT_SCHEMAS,
+  ...TIMELINE_IMPORT_TOOL_SCHEMAS,
   // Optional advisory review of multi-scene plans; it has no runtime enforcement role.
   ...SCENE_QUALITY_TOOL_SCHEMAS,
   // ToolSearch — keyword discovery over this catalog
@@ -239,6 +252,7 @@ const EXECUTOR_GROUPS: ReadonlyArray<readonly [ReadonlySet<string>, ToolExecutor
   [EDIT_ASSET_TOOL_NAMES, async () => (await import('./tools/edit-asset-tools')).execEditAssetTool],
   [WEB_TOOL_NAMES, async () => (await import('./tools/web-tools')).execWebTool],
   [FONT_TOOL_NAMES, async () => (await import('./tools/font-tools')).execFontTool],
+  [SEARCH_TOOL_NAMES, async () => (await import('./tools/search-tools')).execSearchTool],
   [FOLLOWUP_TOOL_NAMES, async () => (await import('./tools/followup-tools')).execFollowupTool],
   [PROJECT_TOOL_NAMES, async () => (await import('./tools/project-tools')).execProjectTool],
   [UPLOAD_TOOL_NAMES, async () => (await import('./tools/upload-tools')).execUploadTool],
@@ -262,6 +276,12 @@ const EXECUTOR_GROUPS: ReadonlyArray<readonly [ReadonlySet<string>, ToolExecutor
   [MUSIC_INTELLIGENCE_TOOL_NAMES, async () => (
     await import('./tools/music-intelligence-tools')
   ).execMusicIntelligenceTool],
+  [AGENT_PATH_IMPORT_TOOL_NAMES, async () => (
+    await import('./tools/agent-path-import-tools')
+  ).execAgentPathImportTool],
+  [TIMELINE_IMPORT_TOOL_NAMES, async () => (
+    await import('./tools/timeline-import-tools')
+  ).execTimelineImportTool],
   [AUDIO_ASSET_TOOL_NAMES, async () => (await import('./tools/audio-asset-tools')).execAudioAssetTool],
   [SCENE_QUALITY_TOOL_NAMES, async () => (await import('./tools/scene-quality-tools')).execSceneQualityTool],
   [AGENT_RUNTIME_TOOL_NAMES, async () => (

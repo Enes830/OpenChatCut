@@ -41,13 +41,18 @@ import {
   type DesktopRhythmResponse,
 } from '../shared/desktop-inference.ts';
 import {
+  AGENT_PATH_IMPORT_CHANNEL,
   DIRECTORY_IMPORT_CHANNELS,
   isDirectoryImportEvent,
   isDirectoryWatchStartResult,
   type DirectoryImportDisposition,
   type DirectoryImportEvent,
+  type AgentPathImportRequest,
+  type AgentPathImportResult,
   type DirectoryWatchStartResult,
 } from '../shared/directory-import.ts';
+import { isTranscriptWindowPayload, TRANSCRIPT_WINDOW_CHANNELS, type TranscriptWindowPayload } from '../shared/transcript-window.ts';
+import { AGENT_LOCAL_MEDIA_CHANNEL, type AgentLocalMediaRequest, type AgentLocalMediaResult } from '../shared/agent-local-media.ts';
 
 export interface DesktopExportDirectoryGrant {
   readonly grantId: string;
@@ -98,8 +103,15 @@ export interface OpenChatCutDesktopApi {
     disposition: DirectoryImportDisposition,
   ): Promise<void>;
   stopImportDirectoryWatch(watchId: string): Promise<void>;
+  importAgentPaths(request: AgentPathImportRequest): Promise<AgentPathImportResult>;
+  browseLocalMedia(request: AgentLocalMediaRequest): Promise<AgentLocalMediaResult>;
   subscribeImportDirectory(listener: (event: DirectoryImportEvent) => void): () => void;
-  windowAction(action: 'close' | 'minimize' | 'toggle-maximize'): Promise<void>;
+  windowAction(action: 'close' | 'minimize' | 'toggle-maximize' | 'apply-ui-scale'): Promise<void>;
+  zoomStep(step: number | 'reset'): Promise<void>;
+  subscribeUiScale(listener: (scale: number) => void): () => void;
+  openTranscriptWindow(payload: TranscriptWindowPayload): Promise<void>;
+  subscribeTranscriptWindow(listener: (payload: TranscriptWindowPayload) => void): () => void;
+  requestTranscriptWindowPayload(): Promise<TranscriptWindowPayload | null>;
   revealExport(destinationId: string, filename: string): Promise<void>;
   projectStore(request: ProjectStoreRequest): Promise<ProjectStoreResponse>;
   editorCredentials(): Promise<EditorBootstrapInfo>;
@@ -145,6 +157,10 @@ const api: OpenChatCutDesktopApi = {
   },
   activateImportDirectoryWatch: (watchId) =>
     ipcRenderer.invoke(DIRECTORY_IMPORT_CHANNELS.activate, watchId) as Promise<void>,
+  importAgentPaths: (request) =>
+    ipcRenderer.invoke(AGENT_PATH_IMPORT_CHANNEL, request) as Promise<AgentPathImportResult>,
+  browseLocalMedia: (request) =>
+    ipcRenderer.invoke(AGENT_LOCAL_MEDIA_CHANNEL, request) as Promise<AgentLocalMediaResult>,
   acknowledgeImportDirectoryFile: (watchId, importId, disposition) =>
     ipcRenderer.invoke(
       DIRECTORY_IMPORT_CHANNELS.acknowledge, watchId, importId, disposition,
@@ -160,6 +176,28 @@ const api: OpenChatCutDesktopApi = {
   },
   windowAction: (action) =>
     ipcRenderer.invoke('openchatcut:window-action', action) as Promise<void>,
+  zoomStep: (step) =>
+    ipcRenderer.invoke('openchatcut:zoom-step', step) as Promise<void>,
+  subscribeUiScale: (listener) => {
+    const handleScale = (_event: IpcRendererEvent, value: unknown): void => {
+      if (typeof value === 'number' && Number.isFinite(value)) listener(value);
+    };
+    ipcRenderer.on('openchatcut:ui-scale-changed', handleScale);
+    return () => { ipcRenderer.removeListener('openchatcut:ui-scale-changed', handleScale); };
+  },
+  openTranscriptWindow: (payload) =>
+    ipcRenderer.invoke(TRANSCRIPT_WINDOW_CHANNELS.open, payload) as Promise<void>,
+  subscribeTranscriptWindow: (listener) => {
+    const handleUpdate = (_event: IpcRendererEvent, value: unknown): void => {
+      if (isTranscriptWindowPayload(value)) listener(value);
+    };
+    ipcRenderer.on(TRANSCRIPT_WINDOW_CHANNELS.update, handleUpdate);
+    return () => { ipcRenderer.removeListener(TRANSCRIPT_WINDOW_CHANNELS.update, handleUpdate); };
+  },
+  requestTranscriptWindowPayload: async () => {
+    const value: unknown = await ipcRenderer.invoke(TRANSCRIPT_WINDOW_CHANNELS.request);
+    return isTranscriptWindowPayload(value) ? value : null;
+  },
   revealExport: (destinationId, filename) =>
     ipcRenderer.invoke('openchatcut:reveal-export', destinationId, filename) as Promise<void>,
   projectStore: (request) =>

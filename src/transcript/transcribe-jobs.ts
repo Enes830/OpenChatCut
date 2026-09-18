@@ -339,10 +339,25 @@ export function untranscribedTimelineItemIdsForRevision(
     transcriptStale?: boolean;
   }[],
   sourceRevision: string,
+  replaceExisting = false,
 ): string[] {
   return items
-    .filter((item) => item.sourceRevision === sourceRevision && !hasOperationalTranscript(item))
+    .filter((item) => (
+      item.sourceRevision === sourceRevision
+      && (replaceExisting || !hasOperationalTranscript(item))
+    ))
     .map((item) => item.id);
+}
+
+/** Whether the pool UI can start/retry ASR for this asset: transcript-able
+ *  kinds that are neither running nor already transcribed. */
+export function assetCanTranscribe(
+  kind: MediaAsset['kind'],
+  transcribeStatus: MediaAsset['transcribeStatus'],
+): boolean {
+  return (kind === 'audio' || kind === 'video')
+    && transcribeStatus !== 'running'
+    && transcribeStatus !== 'done';
 }
 
 export function getTranscribeJob(projectId: string, assetId: string): TranscribeJob | undefined {

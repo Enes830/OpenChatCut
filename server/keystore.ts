@@ -1,11 +1,9 @@
 // Server-side in-memory API-key store backing the settings UI. Seeded at Vite
 // startup, live-updated by POST /api/keys, and persisted to the active runtime
 // profile's private settings file. Secret values never appear in responses; the
-// browser sees booleans only (keyStatus / caps). Model ids and vendor
-// routing are configuration, not credentials: the explicit NON_SECRET_NAMES whitelist
-// lets keyStatus() echo their raw values (keyStatus().models) so the settings UI can
-// show and edit them.
-import { readFile, writeFile } from "node:fs/promises";
+// browser sees booleans only (keyStatus / caps). NON_SECRET_NAMES allows model ids
+// and vendor routing in keyStatus().models so the settings UI can edit them.
+import { readFile } from "node:fs/promises";
 import { atomicWriteFile } from "./plugins/project-store-durable.ts";
 import { AI_SDK_BASE_URL_FORMAT, resolveLlmBaseUrl } from "./llm-config.ts";
 import { decodePersistedEnvValue, mergeEnvText } from "./env-text.ts";
@@ -26,9 +24,11 @@ import {
 const ACTIVE_PROFILE = runtimeProfile();
 const ENV_PATH = ACTIVE_PROFILE.keystorePath;
 
-// Whitelist of settable env vars — mirrors what vite.config.ts reads. POST /api/keys
+// Whitelist of settable env vars — mirrors what config/vite.config.ts reads. POST /api/keys
 // rejects anything outside this set so the endpoint can never write arbitrary env.
 export const KEY_NAMES = [
+  "AGENT_IMPORT_ROOTS",
+  "PROXY_URL",
   "LLM_API_KEY",
   "LLM_BASE_URL",
   "LLM_BASE_URL_FORMAT",
@@ -69,9 +69,24 @@ export const KEY_NAMES = [
   "LLM_MISTRAL_API_KEY",
   "LLM_MISTRAL_BASE_URL",
   "LLM_MISTRAL_MODEL",
+  "LLM_XAI_API_KEY",
+  "LLM_XAI_BASE_URL",
+  "LLM_XAI_MODEL",
+  "LLM_XAI_OAUTH_API_KEY",
+  "LLM_XAI_OAUTH_BASE_URL",
+  "LLM_XAI_OAUTH_MODEL",
+  "XAI_IMAGE_MODEL",
+  "XAI_VIDEO_MODEL",
   "LLM_OPENROUTER_API_KEY",
   "LLM_OPENROUTER_BASE_URL",
   "LLM_OPENROUTER_MODEL",
+  "LLM_OFOX_API_KEY",
+  "LLM_OFOX_BASE_URL",
+  "LLM_OFOX_MODEL",
+  "OFOX_VIDEO_MODEL",
+  "LLM_ORCAROUTER_API_KEY",
+  "LLM_ORCAROUTER_BASE_URL",
+  "LLM_ORCAROUTER_MODEL",
   "LLM_OLLAMA_API_KEY",
   "LLM_OLLAMA_BASE_URL",
   "LLM_OLLAMA_MODEL",
@@ -108,8 +123,12 @@ export const KEY_NAMES = [
   "KLING_BASE_URL",
   "MUREKA_API_KEY",
   "MUREKA_BASE_URL",
+  "ATLASCLOUD_API_KEY",
+  "ATLASCLOUD_API_BASE",
   "MINIMAX_API_KEY",
   "MINIMAX_BASE_URL",
+  "SONILO_API_KEY",
+  "SONILO_BASE_URL",
   "PEXELS_API_KEY",
   "PIXABAY_API_KEY",
   "UNSPLASH_ACCESS_KEY",
@@ -131,6 +150,8 @@ export const KEY_NAMES = [
   "LLM_MODEL",
   "CODEX_MODEL",
   "CODEX_REASONING_EFFORT",
+  "COPILOT_MODEL",
+  "COPILOT_REASONING_EFFORT",
   MODEL_CAPABILITY_OVERRIDES_KEY,
   "GEMINI_IMAGE_MODEL",
   "MINIMAX_IMAGE_MODEL",
@@ -159,6 +180,7 @@ export const KEY_NAMES = [
   "MINIMAX_VIDEO_MODEL",
   "MUREKA_MUSIC_MODEL",
   "MINIMAX_MUSIC_MODEL",
+  "ATLASCLOUD_MUSIC_MODEL",
   // ── vendor routing (non-secret config) ──
   "PREFERRED_IMAGE_VENDOR",
   "PREFERRED_VOICE_VENDOR",
@@ -168,6 +190,10 @@ export const KEY_NAMES = [
   "LOCAL_ASR_MODEL",
   "TRANSCRIPTION_LANGUAGE",
   "TRANSCRIPTION_DIARIZATION",
+  "AUTO_TRANSCRIBE_INGEST",
+  "UI_SCALE",
+  "UI_SCALE_BASE",
+  "UI_LOCALE",
   "OPENCHATCUT_SKILLS_DIR",
 ] as const;
 export type KeyName = (typeof KEY_NAMES)[number];
@@ -177,10 +203,14 @@ const SETTABLE = new Set<string>(KEY_NAMES);
 // not credentials). Deliberately a separate explicit list rather than derived from
 // KEY_NAMES: adding a key to the whitelist must never accidentally make it non-secret.
 export const NON_SECRET_NAMES: ReadonlySet<string> = new Set([
+  "AGENT_IMPORT_ROOTS",
+  "PROXY_URL",
   "LLM_PROVIDER",
   "LLM_MODEL",
   "CODEX_MODEL",
   "CODEX_REASONING_EFFORT",
+  "COPILOT_MODEL",
+  "COPILOT_REASONING_EFFORT",
   "LLM_OPENAI_API_MODE",
   MODEL_CAPABILITY_OVERRIDES_KEY,
   "GEMINI_IMAGE_MODEL",
@@ -200,11 +230,17 @@ export const NON_SECRET_NAMES: ReadonlySet<string> = new Set([
   "GROQ_BASE_URL",
   "TRANSCRIPTION_LANGUAGE",
   "TRANSCRIPTION_DIARIZATION",
+  "AUTO_TRANSCRIBE_INGEST",
+  "UI_SCALE",
+  "UI_SCALE_BASE",
+  "UI_LOCALE",
   "ELEVENLABS_SOUND_MODEL",
   "DOUBAO_TTS_RESOURCE_ID",
   "SEEDANCE_VIDEO_MODEL",
   "KLING_VIDEO_MODEL",
   "MUREKA_MUSIC_MODEL",
+  "ATLASCLOUD_API_BASE",
+  "ATLASCLOUD_MUSIC_MODEL",
   "MINIMAX_TTS_MODEL",
   "MINIMAX_VIDEO_MODEL",
   "MINIMAX_MUSIC_MODEL",
@@ -212,6 +248,9 @@ export const NON_SECRET_NAMES: ReadonlySet<string> = new Set([
   "WAVESPEED_IMAGE_MODEL",
   "BYTEPLUS_IMAGE_MODEL",
   "BYTEPLUS_VIDEO_MODEL",
+  "XAI_IMAGE_MODEL",
+  "XAI_VIDEO_MODEL",
+  "OFOX_VIDEO_MODEL",
   "INWORLD_TTS_MODEL",
   "FISHAUDIO_TTS_MODEL",
   "SPEECHIFY_TTS_MODEL",
@@ -234,10 +273,12 @@ export const NON_SECRET_NAMES: ReadonlySet<string> = new Set([
 const store = new Map<string, string>(); // current value per key (seed + runtime overrides)
 const envSeeded = new Set<string>(); // which keys came from .env.local / process.env at startup
 
-function normalizeStoredValue(name: string, raw: unknown): string {
+function normalizeStoredValue(name: string, raw: unknown, loading = false): string {
   const value = String(raw ?? "").trim();
   return name === MODEL_CAPABILITY_OVERRIDES_KEY && value
-    ? serializeModelCapabilityOverrides(parseModelCapabilityOverrides(decodePersistedEnvValue(value)))
+    ? serializeModelCapabilityOverrides(parseModelCapabilityOverrides(decodePersistedEnvValue(value), {
+      ignoreUnavailableProviders: loading,
+    }))
     : value;
 }
 
@@ -268,7 +309,7 @@ export function seedKeystore(env: Record<string, string>): void {
   for (const name of KEY_NAMES) {
     const raw = env[name] ?? process.env[name] ?? "";
     try {
-      const value = normalizeStoredValue(name, raw);
+      const value = normalizeStoredValue(name, raw, true);
       if (!value) continue;
       store.set(name, value);
       envSeeded.add(name);
@@ -328,7 +369,7 @@ export function getKey(name: KeyName): string {
   return store.get(name) ?? "";
 }
 
-// Capability booleans derived from current key presence — SAME logic as the vite.config
+// Capability booleans derived from current key presence — SAME logic as config/vite.config.ts
 // `define` snapshot, but computed live so the agent perceives runtime key changes.
 export interface Caps {
   image: boolean;
@@ -364,9 +405,9 @@ export function computeCaps(): Caps {
       (getKey("PREFERRED_VOICE_VENDOR") === "mistral" && has("LLM_MISTRAL_API_KEY")) ||
       (getKey("PREFERRED_VOICE_VENDOR") === "cartesia" && has("CARTESIA_API_KEY")),
     video:
-      has("SEEDANCE_API_KEY") || has("KLING_API_KEY") || has("MINIMAX_API_KEY") || has("BYTEPLUS_API_KEY"),
-    music: has("MUREKA_API_KEY") || has("MINIMAX_API_KEY"),
-    sound: has("ELEVENLABS_API_KEY"),
+      has("SEEDANCE_API_KEY") || has("KLING_API_KEY") || has("MINIMAX_API_KEY") || has("BYTEPLUS_API_KEY") || has("LLM_OFOX_API_KEY"),
+    music: has("MUREKA_API_KEY") || has("MINIMAX_API_KEY") || has("ATLASCLOUD_API_KEY") || has("SONILO_API_KEY"),
+    sound: has("ELEVENLABS_API_KEY") || has("SONILO_API_KEY"),
     stock:
       has("PEXELS_API_KEY") ||
       has("PIXABAY_API_KEY") ||
@@ -448,11 +489,7 @@ export async function setKeys(patch: Record<string, unknown>): Promise<void> {
   );
   const isolated = isIsolatedDevProfile(ACTIVE_PROFILE);
   const merged = mergeEnvText(existing, clean, isolated);
-  if (isolated) {
-    await atomicWriteFile(ENV_PATH, merged, { mode: 0o600 });
-  } else {
-    await writeFile(ENV_PATH, merged, "utf8");
-  }
+  await atomicWriteFile(ENV_PATH, merged, { mode: 0o600 });
   for (const [name, v] of clean) {
     if (v) {
       store.set(name, v);
@@ -461,4 +498,3 @@ export async function setKeys(patch: Record<string, unknown>): Promise<void> {
     else store.delete(name);
   }
 }
-

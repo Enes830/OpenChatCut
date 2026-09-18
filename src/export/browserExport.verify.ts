@@ -11,6 +11,7 @@ import {
 } from './browserExport';
 import type { ExportDestination } from './exportDestination';
 import { saveBrowserResult, type VideoExportContext } from './videoExportOperation';
+import { DEFAULT_RENDER_TIMEOUT_MS, resolveRenderTimeout } from '../../remotion/render-timeout.mjs';
 interface Deferred<Value> {
   promise: Promise<Value>;
   resolve(value?: Value): void;
@@ -87,10 +88,14 @@ const retimed = await renderTimelineInBrowser({
 assert.equal(retimed.status, 'unsupported');
 assert.equal(loaderCalls, 0, 'frame-rate mismatch must not load the browser renderer');
 
+// Real-render verification in this branch proved web-renderer's WebCodecs path
+// reliably captures WebGL clip effects and GLSL transitions (1080p × 360f,
+// zero black frames, distinct per-frame content). So a timeline carrying them is
+// NO LONGER barred from the fast browser-export path — it must yield null.
 assert.equal(browserTimelineBlocker({
   ...state,
   items: [{ ...state.items[0], effects: [{ id: 'fx_1', assetId: 'builtin:fx-bloom' }] }],
-}), '包含 WebGL 片段特效');
+}), null, 'WebGL clip effect must not block the browser fast-export path');
 
 assert.equal(browserTimelineBlocker({
   ...state,
@@ -100,13 +105,13 @@ assert.equal(browserTimelineBlocker({
   ],
   transitions: [{
     id: 'transition_1',
-    type: 'cross-dissolve',
+    type: 'organic-dissolve',
     durationInFrames: 10,
     outgoingItemId: 'video_1',
     incomingItemId: 'video_2',
     trackId: 'V1',
   }],
-}), '包含 WebGL 转场');
+}), null, 'GLSL transition must not block the browser fast-export path');
 
 const capabilityCalls: Array<Record<string, unknown>> = [];
 const renderCalls: Array<Record<string, unknown>> = [];
@@ -156,6 +161,22 @@ assert.deepEqual(capabilityCalls[0], {
 assert.equal(renderCalls[0].container, 'mp4');
 assert.equal(renderCalls[0].scale, browserScaledExportDimensions(state, '720p').scale);
 assert.equal((renderCalls[0].inputProps as { browserRenderer: boolean }).browserRenderer, true);
+
+// The per-frame budget must be handed to the web renderer explicitly. Left off,
+// it falls back to Remotion's 30s default and delayRender reports 30s minus its
+// own 2s buffer — the "not cleared after 28000ms" export failure on sources
+// that are merely slow to open, while the same project rendered fine on the
+// local engine. Both engines read the same constant so they cannot drift apart.
+assert.equal(
+  renderCalls[0].delayRenderTimeoutInMilliseconds,
+  DEFAULT_RENDER_TIMEOUT_MS,
+  'browser export must pass the shared per-frame budget, not inherit Remotion\'s 30s default',
+);
+assert.equal(
+  renderCalls[0].delayRenderTimeoutInMilliseconds,
+  resolveRenderTimeout(undefined),
+  'the browser budget must match what the local renderer resolves by default',
+);
 
 await renderTimelineInBrowser({
   state,

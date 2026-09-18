@@ -1,3 +1,4 @@
+import type {} from '../desktop-api';
 export const DESKTOP_NATIVE_INFERENCE_KEY = 'cc.desktopNativeInference';
 export const DESKTOP_NATIVE_INFERENCE_CHANGE_EVENT = 'cc:desktop-native-inference-change';
 
@@ -17,11 +18,13 @@ function preferenceStorage(): InferencePreferenceStorage | undefined {
 export function desktopNativeInferenceEnabled(
   storage: InferencePreferenceStorage | undefined = preferenceStorage(),
 ): boolean {
-  try {
-    return storage?.getItem(DESKTOP_NATIVE_INFERENCE_KEY) === '1';
-  } catch {
-    return false;
-  }
+  const stored = storage?.getItem(DESKTOP_NATIVE_INFERENCE_KEY);
+  if (stored === '0') return false;
+  if (stored === '1') return true;
+  // Auto: the desktop shell enables the packaged native runtime by default;
+  // each worker chooses the best available platform backend and falls back to
+  // CPU or the browser engine. Plain browsers have no native bridge.
+  return typeof window !== 'undefined' && Boolean(window.openChatCutDesktop?.inference);
 }
 
 async function applyDesktopNativeInferenceEnabled(enabled: boolean): Promise<void> {

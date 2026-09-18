@@ -1,94 +1,78 @@
-import { spawn } from 'node:child_process';
-import { createReadStream } from 'node:fs';
-import { isAbsolute } from 'node:path';
-import {
-  env,
-  pipeline,
-  type AutomaticSpeechRecognitionPipeline,
-} from '@huggingface/transformers';
-import { ASR_INFERENCE_CONTRACT } from '../shared/asr-inference-contract.ts';
+// Desktop native-ASR worker: whisper.cpp (ggml) via a persistent
+// whisper-server (model loaded once) with whisper-cli spawn as fallback.
+// Replaces the transformers.js ONNX pipeline on the desktop path; the
+// browser path keeps transformers.js.
+import { spawn, type ChildProcess } from 'node:child_process';
+import { createReadStream, existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
+import { createServer } from 'node:net';
 import type {
   DesktopAsrBackend,
   DesktopAsrChunk,
-  DesktopAsrPreloadRequest,
   DesktopAsrRequest,
   DesktopAsrResponse,
-  DesktopInferenceProgress,
   DesktopModelLoadResponse,
+  DesktopAsrPreloadRequest,
 } from '../shared/desktop-inference.ts';
 import {
-  isDesktopInferenceRequestId,
   parseDesktopAsrPreloadRequest,
   parseDesktopAsrRequest,
 } from '../shared/desktop-inference.ts';
+import { ASR_INFERENCE_CONTRACT } from '../shared/asr-inference-contract.ts';
+import { NativeAsrWorkerLifecycle } from './native-asr-worker-lifecycle.ts';
+import {
+  nativeGgmlFileName,
+  whisperLanguage,
+  whisperTokensToChunks,
+  whisperWordsToChunks,
+  writeWav,
+  type WhisperJson,
+} from './native-asr-utils.ts';
 
 const SAMPLE_RATE = ASR_INFERENCE_CONTRACT.sampleRate;
-const MAX_AUDIO_SECONDS = ASR_INFERENCE_CONTRACT.maxAudioSeconds;
-const MAX_PCM_BYTES = SAMPLE_RATE * MAX_AUDIO_SECONDS * Float32Array.BYTES_PER_ELEMENT;
-const FFMPEG_TIMEOUT_MS = 30 * 60_000;
-const ACCELERATOR_LOAD_TIMEOUT_MS = 90_000;
-const CPU_LOAD_TIMEOUT_MS = 5 * 60_000;
 const STDERR_LIMIT = 8_000;
+const WHISPER_CLI_TIMEOUT_MS = 45 * 60 * 1000;
 
 interface NativeWorkerData {
   readonly cacheDir: string;
   readonly ffmpegPath: string;
+  readonly whisperCliPath: string;
   readonly platform: NodeJS.Platform;
 }
 
-interface WhisperWordOutput {
-  readonly text?: string;
-  readonly timestamp?: [number, number] | [null, null];
-}
+const SERVER_READY_TIMEOUT_MS = 20_000;
 
-interface WhisperOutput {
-  readonly text?: string;
-  readonly chunks?: readonly WhisperWordOutput[];
-}
-
-interface LoadedPipeline {
+interface LoadedEngine {
   readonly modelId: string;
   readonly revision: string;
+  readonly ggmlPath: string;
   readonly backend: DesktopAsrBackend;
-  readonly pipeline: AutomaticSpeechRecognitionPipeline;
 }
 
 const port = process.parentPort;
 if (!port) throw new Error('native ASR process requires a parent port');
 let runtime: NativeWorkerData | null = null;
-let loaded: LoadedPipeline | null = null;
-let queue = Promise.resolve();
-const canceled = new Set<string>();
-
-function throwIfCanceled(requestId: string): void {
-  if (canceled.has(requestId)) {
-    throw new DOMException('Native ASR request canceled', 'AbortError');
-  }
-}
+let loaded: LoadedEngine | null = null;
+let whisperServer: { child: ChildProcess; port: number; ggmlPath: string } | null = null;
+const lifecycle = new NativeAsrWorkerLifecycle();
 
 function initialize(value: unknown): void {
   if (typeof value !== 'object' || value === null) throw new Error('invalid native ASR configuration');
   const config = value as Partial<NativeWorkerData>;
   if (typeof config.ffmpegPath !== 'string' || config.ffmpegPath.length === 0
     || typeof config.cacheDir !== 'string' || config.cacheDir.length === 0
+    || typeof config.whisperCliPath !== 'string' || config.whisperCliPath.length === 0
     || typeof config.platform !== 'string') {
     throw new Error('invalid native ASR configuration');
   }
   runtime = config as NativeWorkerData;
-  env.localModelPath = config.cacheDir;
-  env.cacheDir = config.cacheDir;
-  env.useFSCache = true;
-  env.allowLocalModels = true;
-  env.allowRemoteModels = false;
 }
 
 function requireRuntime(): NativeWorkerData {
   if (!runtime) throw new Error('native ASR process is not initialized');
   return runtime;
-}
-
-function postProgress(progress: DesktopInferenceProgress): void {
-  port.postMessage({ type: 'progress', progress });
 }
 
 function parseNativeTranscriptionRequest(value: unknown): DesktopAsrRequest {
@@ -124,171 +108,293 @@ function extractPcm(request: DesktopAsrRequest): Promise<Float32Array> {
     const input = createReadStream(request.sourcePath);
     const chunks: Buffer[] = [];
     let totalBytes = 0;
-    let stderr = '';
-    let settled = false;
-    const settle = (error?: Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      input.destroy();
-      if (error) reject(error);
-      else resolve(decodePcm(chunks, totalBytes));
-    };
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      settle(new Error('native ASR audio extraction timed out'));
-    }, FFMPEG_TIMEOUT_MS);
-    child.stdout.on('data', (chunk: Buffer) => {
-      totalBytes += chunk.byteLength;
-      if (totalBytes > MAX_PCM_BYTES) {
-        child.kill('SIGKILL');
-        settle(new Error(`audio exceeds ${MAX_AUDIO_SECONDS}s native ASR limit`));
-        return;
-      }
+    const onData = (chunk: Buffer): void => {
       chunks.push(chunk);
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr = `${stderr}${String(chunk)}`.slice(-STDERR_LIMIT);
-    });
-    input.once('error', (error) => {
-      child.kill('SIGKILL');
-      settle(error);
-    });
-    child.once('error', (error) => settle(error));
+      totalBytes += chunk.length;
+    };
+    child.stdout.on('data', onData);
+    child.stderr.resume();
+    child.once('error', (error) => reject(error));
     child.once('close', (code) => {
-      if (code === 0) settle();
-      else settle(new Error(stderr.trim() || `FFmpeg exited with code ${String(code)}`));
+      if (code === 0) {
+        resolve(decodePcm(chunks, totalBytes));
+      } else {
+        reject(new Error(`FFmpeg PCM extraction failed (${code})`));
+      }
+    });
+    input.on('error', (error) => {
+      child.kill();
+      reject(error);
     });
     input.pipe(child.stdin);
   });
 }
 
-function progressInfo(value: unknown): { progress?: number; file?: string } {
-  if (typeof value !== 'object' || value === null) return {};
-  const progress = value as { progress?: unknown; file?: unknown };
-  return {
-    ...(typeof progress.progress === 'number' ? { progress: progress.progress } : {}),
-    ...(typeof progress.file === 'string' ? { file: progress.file } : {}),
+function runWhisperCli(
+  ggmlPath: string,
+  wavPath: string,
+  language: string,
+  useGpu: boolean,
+  signal?: AbortSignal,
+): Promise<{ jsonPath: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-m', ggmlPath,
+      '-f', wavPath,
+      '-t', '8',
+      '-l', language,
+      '-ml', '20',
+      '-sow',
+      '-ojf',
+      '-nt',
+      '-of', wavPath,
+    ];
+    if (!useGpu) args.push('-ng');
+    const child: ChildProcess = spawn(requireRuntime().whisperCliPath, args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGKILL');
+      reject(new Error('whisper-cli timed out.'));
+    }, WHISPER_CLI_TIMEOUT_MS);
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGKILL');
+      reject(new Error('native ASR request aborted.'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_LIMIT);
+    });
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      reject(error);
+    });
+    child.once('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (code !== 0) {
+        reject(new Error(`whisper-cli failed (${code}): ${stderr.slice(-600)}`));
+        return;
+      }
+      resolve({ jsonPath: `${wavPath}.json`, stderr });
+    });
+  });
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const address = srv.address() as { port: number };
+      srv.close(() => resolve(address.port));
+    });
+  });
+}
+
+function serverBinaryPath(): string {
+  const cli = requireRuntime().whisperCliPath;
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  return join(cli.slice(0, Math.max(cli.lastIndexOf('/'), cli.lastIndexOf('\\')) + 1), `whisper-server${suffix}`);
+}
+
+async function stopWhisperServer(): Promise<void> {
+  if (whisperServer) {
+    whisperServer.child.kill();
+    whisperServer = null;
+  }
+}
+
+async function ensureWhisperServer(ggmlPath: string): Promise<{ child: ChildProcess; port: number; ggmlPath: string }> {
+  if (whisperServer && !whisperServer.child.killed && whisperServer.ggmlPath === ggmlPath) {
+    return whisperServer;
+  }
+  await stopWhisperServer();
+  const bin = serverBinaryPath();
+  if (!existsSync(bin)) throw new Error('whisper-server is unavailable; falling back to whisper-cli.');
+  const serverPort = await freePort();
+  const child = spawn(bin, [
+    '-m', ggmlPath,
+    '--host', '127.0.0.1',
+    '--port', String(serverPort),
+    '-t', '8',
+  ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+  child.stderr?.resume();
+  const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${serverPort}/health`);
+      if (response.ok) {
+        whisperServer = { child, port: serverPort, ggmlPath };
+        return whisperServer;
+      }
+    } catch {
+      // not ready yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  child.kill();
+  throw new Error('whisper-server failed to become ready.');
+}
+
+async function transcribeViaServer(
+  ggmlPath: string,
+  wavPath: string,
+  language: string,
+  signal?: AbortSignal,
+): Promise<{ text: string; chunks: DesktopAsrChunk[] }> {
+  const srv = await ensureWhisperServer(ggmlPath);
+  const form = new FormData();
+  form.append('file', new Blob([await readFile(wavPath)], { type: 'audio/wav' }), 'input.wav');
+  form.append('response_format', 'verbose_json');
+  if (language !== 'auto') form.append('language', language);
+  const response = await fetch(`http://127.0.0.1:${srv.port}/inference`, {
+    method: 'POST',
+    body: form,
+    signal,
+  });
+  if (!response.ok) throw new Error(`whisper-server inference failed (${response.status})`);
+  const json = await response.json() as {
+    segments?: readonly {
+      text?: string;
+      words?: readonly { word?: string; start?: number; end?: number }[];
+    }[];
   };
+  const text = (json.segments ?? [])
+    .map((segment) => (segment.text ?? '').trim())
+    .filter(Boolean)
+    .join('\n');
+  const chunks = whisperWordsToChunks(json.segments?.flatMap((segment) => segment.words ?? []));
+  return { text, chunks };
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
+async function transcribeWithEngine(
+  request: DesktopAsrRequest,
+  engine: LoadedEngine,
+  signal?: AbortSignal,
+): Promise<DesktopAsrResponse> {
+  const samples = await extractPcm(request);
+  const dir = await mkdtemp(join(tmpdir(), 'occ-asr-'));
+  const wavPath = join(dir, 'input.wav');
   try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
+    await writeWav(samples, wavPath);
+    // 1. Persistent whisper-server: model loaded once, Metal by default.
+    try {
+      const { text, chunks } = await transcribeViaServer(
+        engine.ggmlPath, wavPath, whisperLanguage(request.language), signal,
+      );
+      return {
+        requestId: request.requestId,
+        backend: engine.backend,
+        text,
+        chunks,
+      };
+    } catch {
+      // 2. whisper-cli spawn fallback (Metal, then CPU).
+      let json: WhisperJson;
+      let backend: DesktopAsrBackend = engine.backend;
+      try {
+        const { jsonPath } = await runWhisperCli(
+          engine.ggmlPath, wavPath, whisperLanguage(request.language), true, signal,
+        );
+        json = JSON.parse(await readFile(jsonPath, 'utf8')) as WhisperJson;
+      } catch (gpuError) {
+        if (engine.backend === 'native-cpu') throw gpuError;
+        const { jsonPath } = await runWhisperCli(
+          engine.ggmlPath, wavPath, whisperLanguage(request.language), false, signal,
+        );
+        json = JSON.parse(await readFile(jsonPath, 'utf8')) as WhisperJson;
+        backend = 'native-cpu';
+      }
+      const { text, chunks } = whisperTokensToChunks(json.transcription);
+      return {
+        requestId: request.requestId,
+        backend,
+        text,
+        chunks,
+      };
+    }
   } finally {
-    clearTimeout(timer);
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-type AsrLoadRequest = DesktopAsrRequest | DesktopAsrPreloadRequest;
-
-async function createPipeline(
-  request: AsrLoadRequest,
-  backend: DesktopAsrBackend,
-): Promise<AutomaticSpeechRecognitionPipeline> {
-  const attempt = pipeline('automatic-speech-recognition', request.modelId, {
-    revision: request.revision,
-    device: backend === 'directml' ? 'dml' : 'cpu',
-    dtype: ASR_INFERENCE_CONTRACT.dtype,
-    progress_callback: (value: unknown) => {
-      postProgress({ requestId: request.requestId, ...progressInfo(value) });
-    },
-  }) as Promise<unknown>;
-  const timeoutMs = backend === 'directml'
-    ? ACCELERATOR_LOAD_TIMEOUT_MS
-    : CPU_LOAD_TIMEOUT_MS;
-  return (await withTimeout(attempt, timeoutMs, 'native ASR model load timed out')) as AutomaticSpeechRecognitionPipeline;
+function ggmlPathFor(modelId: string): string | null {
+  const fileName = nativeGgmlFileName(modelId);
+  if (!fileName) return null;
+  const path = join(requireRuntime().cacheDir, 'ggml', fileName);
+  return existsSync(path) ? path : null;
 }
 
-async function ensurePipeline(request: AsrLoadRequest): Promise<LoadedPipeline> {
+async function ensureEngine(request: DesktopAsrRequest | DesktopAsrPreloadRequest): Promise<LoadedEngine> {
   if (loaded?.modelId === request.modelId && loaded.revision === request.revision) return loaded;
-  if (loaded) await loaded.pipeline.dispose();
   loaded = null;
-  const preferred: DesktopAsrBackend = requireRuntime().platform === 'win32' ? 'directml' : 'native-cpu';
-  try {
-    const next = await createPipeline(request, preferred);
-    loaded = { modelId: request.modelId, revision: request.revision, backend: preferred, pipeline: next };
-  } catch (error) {
-    if (preferred !== 'directml' || /timed out/i.test(error instanceof Error ? error.message : '')) throw error;
-    const fallback = await createPipeline(request, 'native-cpu');
-    loaded = { modelId: request.modelId, revision: request.revision, backend: 'native-cpu', pipeline: fallback };
+  const cliPath = requireRuntime().whisperCliPath;
+  if (!existsSync(cliPath)) {
+    throw new Error('whisper-cli is unavailable; reinstall the desktop app or run npm run sync:whisper-cli.');
   }
+  const ggmlPath = ggmlPathFor(request.modelId);
+  if (!ggmlPath) {
+    throw new Error(`Desktop ASR requires the GGML model for ${request.modelId}; download the model first.`);
+  }
+  const preferred: DesktopAsrBackend = requireRuntime().platform === 'darwin' ? 'native-metal' : 'native-cpu';
+  loaded = { modelId: request.modelId, revision: request.revision, ggmlPath, backend: preferred };
   return loaded;
 }
 
-function toChunks(output: WhisperOutput): DesktopAsrChunk[] {
-  const chunks: DesktopAsrChunk[] = [];
-  for (const chunk of output.chunks ?? []) {
-    const text = (chunk.text ?? '').trim();
-    const [start, end] = chunk.timestamp ?? [null, null];
-    if (!text || typeof start !== 'number' || typeof end !== 'number') continue;
-    chunks.push({ text, start: Math.round(start * 1000), end: Math.round(end * 1000) });
-  }
-  return chunks;
-}
-
-async function transcribe(request: DesktopAsrRequest): Promise<DesktopAsrResponse> {
-  const active = await ensurePipeline(request);
-  const samples = await extractPcm(request);
-  const output = await active.pipeline(samples, {
-    return_timestamps: 'word',
-    chunk_length_s: ASR_INFERENCE_CONTRACT.chunkSeconds,
-    stride_length_s: ASR_INFERENCE_CONTRACT.strideSeconds,
-    language: request.language,
-  }) as unknown as WhisperOutput;
-  return {
-    requestId: request.requestId,
-    backend: active.backend,
-    text: output.text ?? '',
-    chunks: toChunks(output),
-  };
-}
 async function preload(request: DesktopAsrPreloadRequest): Promise<DesktopModelLoadResponse> {
-  const active = await ensurePipeline(request);
+  const engine = await ensureEngine(request);
+  // Warm the persistent server so the first transcription does not pay the
+  // cold model-load cost; failure is non-fatal (transcribe falls back to
+  // whisper-cli spawn).
+  await ensureWhisperServer(engine.ggmlPath).catch(() => undefined);
   return {
     requestId: request.requestId,
-    backend: active.backend,
+    backend: engine.backend,
     result: { type: 'loaded' },
   };
 }
-
 
 async function handle(value: unknown): Promise<void> {
   const load = typeof value === 'object' && value !== null && Reflect.get(value, 'action') === 'load';
   const request = load ? parseDesktopAsrPreloadRequest(value) : parseNativeTranscriptionRequest(value);
   try {
-    throwIfCanceled(request.requestId);
     const response = load
       ? await preload(request as DesktopAsrPreloadRequest)
-      : await transcribe(request as DesktopAsrRequest);
-    throwIfCanceled(request.requestId);
+      : await transcribeWithEngine(
+        request as DesktopAsrRequest,
+        await ensureEngine(request as DesktopAsrRequest),
+      );
     port.postMessage({ type: 'result', response });
   } catch (error) {
     const name = error instanceof Error ? error.name : 'Error';
     const message = error instanceof Error ? error.message : String(error);
     port.postMessage({ type: 'error', requestId: request.requestId, name, message });
-  } finally {
-    canceled.delete(request.requestId);
   }
 }
 
 port.on('message', (event) => {
+  if (lifecycle.isTerminal()) return;
   const value = event.data;
   if (typeof value === 'object' && value !== null && Reflect.get(value, 'type') === 'initialize') {
     initialize(Reflect.get(value, 'config'));
     return;
   }
-  if (typeof value === 'object' && value !== null && Reflect.get(value, 'type') === 'cancel') {
-    const requestId = Reflect.get(value, 'requestId');
-    if (!isDesktopInferenceRequestId(requestId)) throw new Error('invalid native ASR cancellation');
-    canceled.add(requestId);
-    return;
-  }
-  queue = queue.then(() => handle(value), () => handle(value));
+  lifecycle.enqueue(() => handle(value));
+});
+
+process.once('exit', () => {
+  whisperServer?.child.kill();
 });

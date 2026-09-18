@@ -3,6 +3,10 @@ import { refPromptToken } from '../../agent/selection-refs';
 import type { MediaAsset } from '../../editor/types';
 import { kindOf } from '../../media/upload';
 import {
+  projectDocumentKind,
+  readProjectDocumentFiles,
+} from '../../media/projectFile';
+import {
   attachChatAttachmentPlaceholder,
   beginChatAttachmentImport,
   failChatAttachmentImport,
@@ -36,6 +40,10 @@ interface AttachmentImportBinding {
   readonly updateInput: UpdateInput;
   readonly setError: (message: string | null) => void;
 }
+
+/** Text document attachments (issue #84): read straight into the composer as
+ * editable text; no media-pool asset is created. */
+export const chatDocumentKind = projectDocumentKind;
 
 function assetReference(asset: MediaAsset): AgentReference {
   return { id: asset.id, name: asset.name, kind: asset.kind };
@@ -100,10 +108,18 @@ async function importOne(binding: AttachmentImportBinding, file: File): Promise<
 /** Build the paste/drop importer while keeping lifecycle transitions outside ChatPanel. */
 export function createChatAttachmentImporter(binding: AttachmentImportBinding): (files: File[]) => Promise<void> {
   return async (files) => {
-    const supported = files.filter((file) => kindOf(file) !== null);
-    binding.setError(supported.length < files.length
-      ? binding.t('已忽略不支持的文件（仅支持 视频 / 图片 / 音频 / GIF / SVG）')
+    const documents = files.filter((file) => chatDocumentKind(file) !== null);
+    const media = files.filter((file) => chatDocumentKind(file) === null && kindOf(file) !== null);
+    const unsupported = files.length - documents.length - media.length;
+    binding.setError(unsupported > 0
+      ? binding.t('已忽略不支持的文件（仅支持 视频 / 图片 / 音频 / GIF / SVG / md / txt / srt / csv / docx / pdf）')
       : null);
-    await Promise.all(supported.map((file) => importOne(binding, file)));
+    const parsed = await readProjectDocumentFiles(documents);
+    if (parsed.blocks.length) {
+      const text = parsed.blocks.join('\n');
+      binding.updateInput((value) => (value.trim() ? `${value}\n${text}` : text));
+    }
+    if (parsed.errors[0]) binding.setError(binding.t(parsed.errors[0]));
+    await Promise.all(media.map((file) => importOne(binding, file)));
   };
 }

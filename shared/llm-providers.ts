@@ -101,11 +101,39 @@ export const LLM_PROVIDER_PRESETS = [
     defaultModel: 'mistral-large-latest',
   },
   {
+    id: 'xai',
+    label: 'xAI · Grok',
+    protocol: 'openai-compatible',
+    baseUrl: 'https://api.x.ai/v1',
+    defaultModel: 'grok-4.6',
+  },
+  {
+    id: 'xai-oauth',
+    label: 'xAI · Grok (订阅登录)',
+    protocol: 'openai',
+    baseUrl: 'https://api.x.ai/v1',
+    defaultModel: 'grok-4.6',
+  },
+  {
     id: 'openrouter',
     label: 'OpenRouter',
     protocol: 'openai-compatible',
     baseUrl: 'https://openrouter.ai/api/v1',
     defaultModel: 'openrouter/auto',
+  },
+  {
+    id: 'ofox',
+    label: 'OFox',
+    protocol: 'openai-compatible',
+    baseUrl: 'https://api.ofox.ai/v1',
+    defaultModel: 'deepseek/deepseek-v3.2',
+  },
+  {
+    id: 'orcarouter',
+    label: 'OrcaRouter',
+    protocol: 'openai-compatible',
+    baseUrl: 'https://api.orcarouter.ai/v1',
+    defaultModel: 'orcarouter/auto',
   },
   {
     id: 'ollama',
@@ -141,6 +169,14 @@ const PRESETS = new Map<string, (typeof LLM_PROVIDER_PRESETS)[number]>(
 export function normalizeLlmProvider(value: unknown): LlmProvider {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
   return PRESETS.has(normalized) ? normalized as LlmProvider : DEFAULT_LLM_PROVIDER;
+}
+/** Request boundaries must not silently route an unsupported vendor to the default. */
+export function requireLlmProvider(value: unknown): LlmProvider {
+  if (value === undefined || value === null || value === '') return DEFAULT_LLM_PROVIDER;
+  if (typeof value !== 'string') throw new Error('Unsupported LLM provider');
+  const normalized = value.trim().toLowerCase();
+  if (normalized && !PRESETS.has(normalized)) throw new Error('Unsupported LLM provider');
+  return normalizeLlmProvider(normalized);
 }
 
 export function isLocalLlmProvider(provider: unknown): boolean {

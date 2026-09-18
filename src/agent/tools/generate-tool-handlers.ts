@@ -1,8 +1,8 @@
 import type { AgentContext } from '../context';
-import type { MediaAsset, TimelineState } from '../../editor/types';
+import type { MediaAsset, ProjectDoc, Timeline, TimelineState } from '../../editor/types';
 import { submitImage } from '../../generate/image';
 import { submitMusic, type MusicGenerationSubmission } from '../../generate/music';
-import { submitSound } from '../../generate/sound';
+import { submitSound, type SoundGenerationSubmission } from '../../generate/sound';
 import { submitSubtitleExport, type SubmitSubtitleExportArgs } from '../../generate/subtitles';
 import { submitMediaExport, type SubmitMediaExportArgs } from '../../generate/media-export';
 import { trackGenerationProgress } from '../../generate/progress';
@@ -73,15 +73,37 @@ const submitVoiceHandler: Handler = async (args, ctx) => {
 };
 
 const submitSoundHandler: Handler = async (args, ctx) => {
-  const asset = await submitSound(buildSubmitSoundArgs(args), ctx.getState());
-  addAsset(ctx, asset);
-  return { ok: true, assetId: asset.id, name: asset.name, src: asset.src, durationInFrames: asset.durationInFrames, addedTo: 'media-pool' };
+  const input = buildSubmitSoundArgs(args);
+  if (input.provider !== 'sonilo') {
+    const asset = await submitSound(input, ctx.getState()) as MediaAsset;
+    addAsset(ctx, asset);
+    return { ok: true, assetId: asset.id, name: asset.name, src: asset.src, durationInFrames: asset.durationInFrames, addedTo: 'media-pool' };
+  }
+  const operationId = submissionOperationId(args);
+  const label = input.name || 'Generated SFX';
+  const submitArgs: Record<string, unknown> = { ...input };
+  await registerSubmissionIntent(ctx, operationId, 'submit_sound', label, submitArgs, 'sonilo', 'sonilo');
+  let submission: SoundGenerationSubmission;
+  try {
+    submission = await submitSound({ ...input, operationId }, ctx.getState()) as SoundGenerationSubmission;
+  } catch (error) {
+    const retryClass = await recordSubmissionFailure(ctx, operationId, error);
+    if (retryClass === 'provider-retryable') {
+      return {
+        status: 'pending', resumable: true, operationId, jobId: operationId, retryClass,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    throw error;
+  }
+  await trackSubmission(ctx, submission, label, 'submit_sound', submitArgs, 'sonilo');
+  return { ok: true, ...submission, next: `Call track_progress with target=generation and jobIds=${submission.jobId}.` };
 };
 
 async function registerSubmissionIntent(
   ctx: AgentContext,
   operationId: string,
-  toolName: 'submit_music' | 'submit_video',
+  toolName: 'submit_music' | 'submit_sound' | 'submit_video',
   label: string,
   submitArgs: Record<string, unknown>,
   provider?: string,
@@ -143,7 +165,7 @@ async function trackSubmission(
     sourceRevisions?: string[];
   },
   label: string,
-  toolName: 'submit_music' | 'submit_video',
+  toolName: 'submit_music' | 'submit_sound' | 'submit_video',
   submitArgs: Record<string, unknown>,
   model?: string,
 ): Promise<void> {
@@ -251,12 +273,20 @@ async function trackProgressHandler(args: GenerateArgs, ctx: AgentContext): Prom
 const frameRangeOf = (start?: number, end?: number): { start: number; end: number } | undefined =>
   typeof start === 'number' && typeof end === 'number' ? { start, end } : undefined;
 
-function exportState(args: GenerateArgs, ctx: AgentContext): TimelineState {
-  if (typeof args.timelineId !== 'string' || !args.timelineId.trim()) return ctx.getState();
-  const query = args.timelineId.trim();
-  const timeline = ctx.getDoc().timelines.find((item) => item.id === query || item.id.startsWith(query));
-  if (!timeline) throw new Error(`timeline not found: ${args.timelineId}`);
-  return timeline;
+interface ExportTarget {
+  project: ProjectDoc;
+  state: Timeline;
+  timelineId: string;
+}
+
+function exportTarget(args: GenerateArgs, ctx: AgentContext): ExportTarget {
+  const project = ctx.getDoc();
+  const query = typeof args.timelineId === 'string' && args.timelineId.trim()
+    ? args.timelineId.trim()
+    : project.activeTimelineId;
+  const state = project.timelines.find((timeline) => timeline.id === query || timeline.id.startsWith(query));
+  if (!state) throw new Error(`timeline not found: ${args.timelineId ?? query}`);
+  return { project, state, timelineId: state.id };
 }
 
 async function exportSubtitles(args: GenerateArgs, state: TimelineState): Promise<unknown> {
@@ -273,7 +303,7 @@ async function exportSubtitles(args: GenerateArgs, state: TimelineState): Promis
   return { ok: true, ...result };
 }
 
-async function exportMedia(args: GenerateArgs, state: TimelineState, format: 'audio' | 'video'): Promise<unknown> {
+async function exportMedia(args: GenerateArgs, target: ExportTarget, format: 'audio' | 'video'): Promise<unknown> {
   const fps = typeof args.fps === 'number' ? args.fps : undefined;
   if (fps != null && ![24, 25, 30, 50, 60].includes(fps)) throw new Error('fps must be one of 24, 25, 30, 50, 60');
   const resolution = args.resolution === '480p' || args.resolution === '720p' || args.resolution === '1080p' ? args.resolution : undefined;
@@ -287,7 +317,7 @@ async function exportMedia(args: GenerateArgs, state: TimelineState, format: 'au
     resolution,
     videoBitrate: typeof args.videoBitrate === 'number' ? args.videoBitrate : undefined,
   };
-  const result = await submitMediaExport(input, state);
+  const result = await submitMediaExport(input, target.project, target.timelineId);
   void recordExport({ name: result.name, format: result.format, codec: result.codec, sizeBytes: result.sizeBytes, frameRange: frameRangeOf(result.startFrame, result.endFrameExclusive), createdAt: Date.now() });
   return { ok: true, ...result };
 }
@@ -308,21 +338,23 @@ async function exportXml(args: GenerateArgs, state: TimelineState): Promise<unkn
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  // Delayed revoke: revoking synchronously after click() can cut the download
+  // off before the browser starts reading the blob (same pattern as exportFiles.ts).
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
   void recordExport({ name: filename, format: 'xml', sizeBytes: blob.size, createdAt: Date.now() });
   return { ok: true, format: 'xml', nleFormat, name: filename, sizeBytes: blob.size, motionGraphicRenderKeys: keys };
 }
 
 async function submitExportHandler(args: GenerateArgs, ctx: AgentContext): Promise<unknown> {
   const format = args.format ?? 'video';
-  const state = exportState(args, ctx);
+  const target = exportTarget(args, ctx);
   if (format === 'video' || format === 'xml') {
-    const gate = fontFallbackGate(state, args.confirmFontFallback);
+    const gate = fontFallbackGate(target.state, args.confirmFontFallback);
     if (gate) return gate;
   }
-  if (format === 'subtitles') return exportSubtitles(args, state);
-  if (format === 'audio' || format === 'video') return exportMedia(args, state, format);
-  if (format === 'xml') return exportXml(args, state);
+  if (format === 'subtitles') return exportSubtitles(args, target.state);
+  if (format === 'audio' || format === 'video') return exportMedia(args, target, format);
+  if (format === 'xml') return exportXml(args, target.state);
   return { error: 'format must be video, audio, subtitles, or xml' };
 }
 
@@ -351,6 +383,8 @@ async function rerunGenerationHandler(args: GenerateArgs, ctx: AgentContext): Pr
     ? await submitVideoHandler(rerunArgs, ctx)
     : original.toolName === 'submit_music'
       ? await submitMusicHandler(rerunArgs, ctx)
+      : original.toolName === 'submit_sound'
+        ? await submitSoundHandler(rerunArgs, ctx)
       : { error: `generation operation ${original.operationId} uses unsupported rerun tool ${original.toolName}` };
   return result && typeof result === 'object' && !Array.isArray(result)
     ? { ...(result as Record<string, unknown>), rerunOf: original.operationId }

@@ -4,17 +4,14 @@ import { isManualCaptionEntry } from './manualCaptions.js';
 import { effectivePreset } from './renderStyles.js';
 import {
   applyWordOverrides,
-  resolveCaptionWordIndices,
-  resolveCaptionWordRefs,
-  resolveCaptionWords,
-  resolveEntryWordRefs,
-  resolveEntryWords,
+  resolveCaptionProjection,
+  type CaptionProjection,
 } from './resolve.js';
 import { orderedCaptionSourceEntries } from './sourceOrder.js';
 import {
   CAPTION_MAX_CHARS_PER_LINE,
   CAPTION_MAX_VISUAL_LINES,
-  activePage,
+  LINGER_MS,
   paginate,
   type CaptionPage,
   type CaptionsData,
@@ -43,12 +40,10 @@ function lanePages(
   captions: CaptionsData,
   entry: CaptionSourceEntry,
   laneOrder: number,
-  items: TimelineItem[],
-  fps: number,
+  projection: CaptionProjection,
   globalIndexByRef: ReadonlyMap<string, number>,
 ): CaptionPageIdentity[] {
-  const words = resolveEntryWords(entry, items, fps);
-  const refs = resolveEntryWordRefs(entry, items, fps);
+  const { words, wordRefs: refs } = projection;
   // Stable source identity is authoritative. Numeric legacy positions are only
   const sourceIndices = refs.map((ref) => globalIndexByRef.get(ref) ?? -1);
   const indices = isStableIdentity(entry.id) ? sourceIndices.map(() => -1) : sourceIndices;
@@ -73,17 +68,42 @@ function lanePages(
   });
 }
 
+/** Identity-keyed memo for the pure (captions, items, fps) → pages pipeline.
+ * Reducers are immutable, so the same items/captions references recur within a
+ * state's lifetime — the timeline caption lane re-runs the whole merge +
+ * pagination on every render and at every drag start (captionSnapPoints),
+ * which is expensive for large merged sources. WeakMap keeps the cache bounded
+ * by live state references; every caller treats the output as read-only. */
+const captionPagesMemo = new WeakMap<TimelineItem[], WeakMap<CaptionsData, Map<number, CaptionPageIdentity[]>>>();
+
 /** Canonical lane-aware pagination shared by preview, selection, and subtitle export. */
 export function buildCaptionPages(captions: CaptionsData, items: TimelineItem[], fps: number): CaptionPageIdentity[] {
+  let byCaptions = captionPagesMemo.get(items);
+  if (!byCaptions) {
+    byCaptions = new WeakMap();
+    captionPagesMemo.set(items, byCaptions);
+  }
+  let byFps = byCaptions.get(captions);
+  if (!byFps) {
+    byFps = new Map();
+    byCaptions.set(captions, byFps);
+  }
+  const cached = byFps.get(fps);
+  if (cached) return cached;
+  const pages = computeCaptionPages(captions, items, fps);
+  byFps.set(fps, pages);
+  return pages;
+}
+
+function computeCaptionPages(captions: CaptionsData, items: TimelineItem[], fps: number): CaptionPageIdentity[] {
+  const projection = resolveCaptionProjection(captions, items, fps);
   if (captions.sourceEntries?.length) {
     const entries = orderedCaptionSourceEntries(captions.sourceEntries).filter((entry) => entry.visible !== false);
-    const globalIndexByRef = new Map(resolveCaptionWordRefs(captions, items, fps).map((ref, index) => [ref, index]));
-    return entries.flatMap((entry, laneOrder) => lanePages(captions, entry, laneOrder, items, fps, globalIndexByRef))
+    const globalIndexByRef = new Map(projection.wordRefs.map((ref, index) => [ref, index]));
+    return entries.flatMap((entry, laneOrder) => lanePages(captions, entry, laneOrder, projection.entries!.get(entry)!, globalIndexByRef))
       .sort((left, right) => left.page.start - right.page.start || left.laneOrder - right.laneOrder || left.page.end - right.page.end || left.id.localeCompare(right.id));
   }
-  const words = resolveCaptionWords(captions, items, fps);
-  const refs = resolveCaptionWordRefs(captions, items, fps);
-  const applied = applyWordOverrides(words, resolveCaptionWordIndices(captions, items, fps), captions.wordOverrides, refs);
+  const applied = applyWordOverrides(projection.words, projection.indices, captions.wordOverrides, projection.wordRefs);
   const pages = paginate(applied.words, captions.pacing, effectivePreset(captions).wordsPerPage, applied.breakBefore, CAPTION_MAX_CHARS_PER_LINE, CAPTION_MAX_VISUAL_LINES);
   let cursor = 0;
   return pages.map((page) => {
@@ -94,16 +114,50 @@ export function buildCaptionPages(captions: CaptionsData, items: TimelineItem[],
   });
 }
 
+// Rightmost page whose start has passed (each lane is start-ordered by
+// buildCaptionPages), -1 when none. Binary search replaces the per-frame
+// reverse linear scan: O(pages) → O(log pages) per animation tick.
+function lastStartedIndex(lane: readonly CaptionPageIdentity[], ms: number): number {
+  let lo = 0;
+  let hi = lane.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (lane[mid].page.start <= ms) {
+      found = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return found;
+}
+
 export function activeCaptionPages(pages: readonly CaptionPageIdentity[], ms: number): CaptionPageIdentity[] {
+  // Group by lane with plain push — the previous [...(lane ?? []), page] copy
+  // was O(n²) array churn per call (the hot per-frame lookup path).
   const byLane = new Map<string, CaptionPageIdentity[]>();
-  for (const page of pages) byLane.set(page.laneId, [...(byLane.get(page.laneId) ?? []), page]);
+  for (const page of pages) {
+    const lane = byLane.get(page.laneId);
+    if (lane) lane.push(page);
+    else byLane.set(page.laneId, [page]);
+  }
   return [...byLane.values()].flatMap((lane) => {
     if (lane[0]?.manual) {
-      const active = [...lane].reverse().find((candidate) => ms >= candidate.page.start && ms < candidate.page.end);
-      return active ? [active] : [];
+      // Manual cues may overlap: the latest started page wins while on screen;
+      // walk back over expired ones (same result as the reverse linear find).
+      let i = lastStartedIndex(lane, ms);
+      while (i >= 0) {
+        const candidate = lane[i];
+        if (ms < candidate.page.end) return [candidate];
+        i -= 1;
+      }
+      return [];
     }
-    const active = activePage(lane.map((candidate) => candidate.page), ms);
-    const identity = active && lane.find((candidate) => candidate.page === active);
-    return identity ? [identity] : [];
+    const i = lastStartedIndex(lane, ms);
+    if (i < 0) return [];
+    const active = lane[i].page;
+    const until = lane[i + 1]?.page.start ?? active.end + LINGER_MS;
+    return ms < until ? [lane[i]] : [];
   }).sort((left, right) => left.laneOrder - right.laneOrder || left.id.localeCompare(right.id));
 }

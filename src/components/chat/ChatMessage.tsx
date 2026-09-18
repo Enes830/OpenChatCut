@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { theme } from '../../theme';
 import { Icon } from '../icons';
 import { useT } from '../../i18n/locale';
-import type { DisplayMessage } from '../../agent/agent-session';
+import type { AgentRetry, DisplayMessage } from '../../agent/agent-session';
 import { parseWidgets } from './widget-parse';
 import { WidgetCard } from './WidgetCard';
 import { Markdown } from './Markdown';
@@ -49,13 +49,31 @@ interface ChatMessageProps {
   msg: DisplayMessage;
   /** the actively-streaming assistant turn hides the copy button until done */
   streaming?: boolean;
+  /** true while any agent run is in flight; disables the retry button */
+  running?: boolean;
+  /** A resend action for this user turn, shown below the user's message. */
+  retry?: AgentRetry;
+  onRetry?: ((retry: AgentRetry) => void) | null;
   /** After the user fills out the <widget> form card and submits it, the assembled answer text is returned.*/
   onWidgetSubmit?: (answer: string) => void;
+  widgetSubmitted?: boolean;
   /** maxTurns pauses the card "continue"; only the last continue card can be clicked (the old card is read-only)*/
   onContinue?: (() => void) | null;
+  /** Open settings, optionally on a specific vendor page (used by the missing-model-pack action button). */
+  onOpenSettings?: ((route?: string) => void) | null;
 }
 
-export function ChatMessage({ msg, streaming, onWidgetSubmit, onContinue }: ChatMessageProps) {
+function isMissingModelPacksResult(result: unknown): boolean {
+  return !!result && typeof result === 'object' && (result as Record<string, unknown>).action === 'missing-model-packs';
+}
+
+function missingPacksSettingsRoute(result: unknown): string | undefined {
+  if (!isMissingModelPacksResult(result)) return undefined;
+  const route = (result as Record<string, unknown>).settingsRoute;
+  return typeof route === 'string' ? route : undefined;
+}
+
+export function ChatMessage({ msg, streaming, running = false, retry, onRetry, onWidgetSubmit, widgetSubmitted, onContinue, onOpenSettings }: ChatMessageProps) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   const copy = () => {
@@ -64,8 +82,14 @@ export function ChatMessage({ msg, streaming, onWidgetSubmit, onContinue }: Chat
 
   if (msg.role === 'user') {
     return (
-      <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '16px 0' }}>
-      <div style={{ maxWidth: '86%', background: theme.hover, color: theme.text, borderRadius: 6, padding: '9px 14px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>{msg.text}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', margin: '16px 0' }}>
+        <div style={{ maxWidth: '86%', background: theme.hover, color: theme.text, borderRadius: 6, padding: '9px 14px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>{msg.text}</div>
+        {retry && onRetry && (
+          <button type="button" onClick={() => onRetry(retry)} title={t('重试请求')} disabled={running}
+            style={{ marginTop: 5, border: 'none', background: 'transparent', color: theme.textDim, borderRadius: 6, padding: '3px 6px', fontSize: 12, cursor: running ? 'default' : 'pointer', opacity: running ? 0.4 : 1, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span aria-hidden="true">↻</span>{t('重试')}
+          </button>
+        )}
       </div>
     );
   }
@@ -87,13 +111,31 @@ overflowWrap:anywhere breaks long tokens - long errors/summaries are wrapped in 
           <span style={{ fontFamily: 'Geist Mono, ui-monospace, SFMono-Regular, Menlo, monospace', letterSpacing: 0.2 }}>{tool.name}</span>
           {summary && <span style={{ opacity: 0.8 }}> · {summary}</span>}
           {!ok && <span style={{ color: theme.danger }}>：{String(r!.error)}</span>}
+          {!ok && onOpenSettings && isMissingModelPacksResult(r) && (
+            <button type="button" onClick={() => onOpenSettings(missingPacksSettingsRoute(r))}
+              style={{ marginLeft: 8, border: `0.5px solid ${theme.accent}`, background: 'transparent', color: theme.accent, borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>
+              {t('去设置安装')}
+            </button>
+          )}
         </span>
       </div>
     );
   }
-
   if (msg.role === 'error') {
-    return <div style={{ color: theme.danger, fontSize: 12.5, margin: '8px 0' }}>⚠ {msg.text}</div>;
+    return (
+      <div style={{ color: theme.danger, fontSize: 12.5, margin: '8px 0', overflowWrap: 'anywhere' }}>
+        ⚠ {msg.text}
+      </div>
+    );
+  }
+
+  // Quiet system line (which tool calls failed in a run that still completed).
+  if (msg.role === 'note') {
+    return (
+      <div role="note" style={{ margin: '6px 0', fontSize: 12, color: theme.textDim, overflowWrap: 'anywhere' }}>
+        {msg.text}
+      </div>
+    );
   }
 
   // maxTurns pause card ("continue?"): text = number of rounds executed
@@ -129,6 +171,7 @@ overflowWrap:anywhere breaks long tokens - long errors/summaries are wrapped in 
             title={seg.title}
             submitLabel={seg.submitLabel}
             messagePrefix={seg.messagePrefix}
+            persistedSubmitted={widgetSubmitted}
             onSubmit={(answer) => onWidgetSubmit?.(answer)}
           />
         ) : (

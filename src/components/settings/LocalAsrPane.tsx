@@ -6,16 +6,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { theme } from '../../theme';
 import { useT } from '../../i18n/locale';
 import { warmUpLocalAsr } from '../../transcript/local-asr';
+import { asrBackendPreference } from '../../transcript/deviceProfile';
 import { VendorIcon } from './vendorIcons';
 import type { AsrDownloadStatus } from '../../../shared/asr-models';
 import { FieldRow, type FieldCtx } from './settingsVendorPane';
 import type { SettingsField } from './settingsSchema';
-import { LocalModelPackPane } from './LocalModelPackPane';
 import { mutateLocalAsrModel } from './local-asr-model-mutation';
 import {
   desktopNativeInferenceEnabled,
   setDesktopNativeInferenceEnabled,
 } from '../../transcript/desktop-inference-preference';
+import {
+  setVadSilenceRemovalPreference,
+  vadSilenceRemovalEnabled,
+} from '../../audio/vadPreference';
 
 interface AsrModelState {
   id: string;
@@ -51,6 +55,8 @@ export function LocalAsrPane({ fields, ctx }: { fields: readonly SettingsField[]
   const hasDesktopInference = Boolean(window.openChatCutDesktop?.inference);
   const [nativeInference, setNativeInference] = useState(desktopNativeInferenceEnabled);
   const [desktopInferenceSupported, setDesktopInferenceSupported] = useState(false);
+  const [webgpuAccel, setWebgpuAccel] = useState(() => asrBackendPreference() === 'webgpu');
+  const [vadSilence, setVadSilence] = useState(vadSilenceRemovalEnabled);
   useEffect(() => {
     let active = true;
     const inference = window.openChatCutDesktop?.inference;
@@ -59,7 +65,8 @@ export function LocalAsrPane({ fields, ctx }: { fields: readonly SettingsField[]
         .then((capabilities) => {
           if (active) {
             setDesktopInferenceSupported(
-              capabilities.platform === 'darwin' || capabilities.platform === 'win32',
+              capabilities.platform === 'darwin' || capabilities.platform === 'win32'
+                || capabilities.platform === 'linux',
             );
           }
         })
@@ -73,6 +80,24 @@ export function LocalAsrPane({ fields, ctx }: { fields: readonly SettingsField[]
       .catch((error: unknown) => {
         setLoadError(error instanceof Error ? error.message : String(error));
       });
+  }, []);
+  const toggleWebgpuAccel = useCallback((enabled: boolean) => {
+    try {
+      if (enabled) {
+        localStorage.setItem('cc.asrBackend', 'webgpu');
+        // Re-allow WebGPU attempts when the user re-enables the toggle.
+        localStorage.removeItem('cc.asrWebgpuBroken');
+      } else {
+        localStorage.removeItem('cc.asrBackend');
+      }
+    } catch {
+      // Best-effort preference persistence.
+    }
+    setWebgpuAccel(enabled);
+  }, []);
+  const toggleVadSilence = useCallback((enabled: boolean) => {
+    setVadSilenceRemovalPreference(enabled);
+    setVadSilence(enabled);
   }, []);
 
   const downloadingRef = useRef<ReadonlySet<string>>(new Set());
@@ -138,7 +163,7 @@ export function LocalAsrPane({ fields, ctx }: { fields: readonly SettingsField[]
         : 0;
       return { text: t('下载中 {pct}%', { pct }), color: theme.accent };
     }
-    if (task?.status === 'error') return { text: t('下载失败'), color: '#f77' };
+    if (task?.status === 'error') return { text: t('下载失败'), color: theme.danger };
     if (m.downloaded) return { text: t('已下载'), color: theme.success };
     return { text: t('未下载'), color: theme.textDim };
   };
@@ -162,18 +187,49 @@ export function LocalAsrPane({ fields, ctx }: { fields: readonly SettingsField[]
             style={{ marginTop: 2 }}
           />
           <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <span style={{ fontSize: 12, fontWeight: 600 }}>{t('桌面原生推理加速（实验）')}</span>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>{t('桌面原生推理加速')}</span>
             <span style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.45 }}>
-              {t('启用后，转写、画面语义、节拍与音乐语义模型自动选择 Windows DirectML 或 macOS CoreML/原生 CPU；转写模型在编辑器打开后后台预热，其他模型首次使用时按需加载；失败时回退浏览器引擎。')}
+              {t('启用后，转写使用 macOS Metal 或原生 CPU；画面语义、节拍与音乐语义模型自动选择 Windows DirectML、Linux CUDA、macOS CoreML 或浏览器 WebGPU；失败时回退 CPU 或浏览器引擎。')}
             </span>
           </span>
         </label>
       )}
+      <label style={{
+        display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 10px',
+        border: `0.5px solid ${theme.border}`, borderRadius: 8, background: theme.panel,
+      }}>
+        <input
+          type="checkbox"
+          checked={webgpuAccel}
+          onChange={(event) => toggleWebgpuAccel(event.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>{t('WebGPU 转写加速')}</span>
+        </span>
+      </label>
+      <label style={{
+        display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 10px',
+        border: `0.5px solid ${theme.border}`, borderRadius: 8, background: theme.panel,
+      }}>
+        <input
+          type="checkbox"
+          checked={vadSilence}
+          onChange={(event) => toggleVadSilence(event.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>{t('删除静音（本地 VAD）')}</span>
+          <span style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.45 }}>
+            {t('启用后，Agent 的删除静音用本机 Silero VAD 判定语音区间，只删除确认无人说话的片段；关闭时不执行删除。模型随应用内置，无需下载。')}
+          </span>
+        </span>
+      </label>
       <div style={{ fontSize: 11.5, color: theme.textDim }}>
         {t('模型按需下载到本机，不随应用打包。首次使用或下载模型时自动加速下载。')}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-        {loadError && <div style={{ fontSize: 11.5, color: '#f77' }}>{t('无法读取模型列表：{err}', { err: loadError })}</div>}
+        {loadError && <div style={{ fontSize: 11.5, color: theme.danger }}>{t('无法读取模型列表：{err}', { err: loadError })}</div>}
         {!loadError && !models && <div style={{ fontSize: 11.5, color: theme.textDim }}>{t('读取中…')}</div>}
         {(models ?? []).map((m) => {
           const status = statusLabel(m);
@@ -206,7 +262,6 @@ export function LocalAsrPane({ fields, ctx }: { fields: readonly SettingsField[]
           );
         })}
       </div>
-      <LocalModelPackPane />
     </div>
   );
 }
