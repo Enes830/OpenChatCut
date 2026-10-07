@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" width="1200" height="620" fill="none">
+  <defs>
+    <filter id="c-red-shadow" x="-10%" y="-10%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#000000" flood-opacity="0.3" />
+    </filter>
+    <filter id="c-white-shadow" x="-10%" y="-10%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="22" flood-color="#000000" flood-opacity="0.38" />
+    </filter>
+    <filter id="c-logo-shadow" x="-20%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.35" />
+    </filter>
+    <linearGradient id="c-red-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#D6222E" />
+      <stop offset="100%" stop-color="#B8141F" />
+    </linearGradient>
+  </defs>
+
+  <!-- Red Card -->
+  <g filter="url(#c-red-shadow)">
+    <rect x="150" y="70" width="900" height="210" rx="28" fill="url(#c-red-grad)" />
+  </g>
+
+  <!-- Top Right Logo positioned on the red card corner -->
+  <g filter="url(#c-logo-shadow)" transform="translate(940, 20) scale(0.7) skewX(-16)">
+    <rect x="40" y="20" width="22" height="110" rx="11" fill="#FFFFFF" />
+    <rect x="76" y="20" width="22" height="70" rx="11" fill="#FFFFFF" />
+    <circle cx="87" cy="118" r="11" fill="#FFFFFF" />
+  </g>
+
+  <!-- White Card slightly overlapping bottom edge of red card -->
+  <g filter="url(#c-white-shadow)">
+    <rect x="110" y="250" width="980" height="230" rx="30" fill="#FFFFFF" />
+  </g>
+</svg>

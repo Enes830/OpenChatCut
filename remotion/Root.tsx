@@ -18,32 +18,54 @@ const EMPTY_STATE: TimelineState = {
   selectedId: null,
 };
 
+import { ArabicHeadlineBoxes } from './ArabicHeadlineBoxes';
+
 export function Root() {
   return (
-    <Composition
-      id="timeline"
-      component={TimelineComposition}
-      defaultProps={{ state: EMPTY_STATE, transparent: false }}
-      // Metadata comes from the timeline itself — same source of truth as the
-      // Player (see timelineDuration in src/editor/types.ts). Min 1 frame.
-      calculateMetadata={({ props }) => {
-        const { state, project, timelineId } = props;
-        const durationInFrames = project && timelineId
-          ? resolveTimelineRenderPlan(project, timelineId).durationInFrames
-          : timelineDuration(state);
-        return {
-          durationInFrames: Math.max(1, durationInFrames),
-          fps: state.fps,
-          width: state.width,
-          height: state.height,
-        };
-      }}
-      // Fallbacks only; calculateMetadata overrides these before every render.
-      durationInFrames={Math.max(1, timelineDuration(EMPTY_STATE))}
-      fps={EMPTY_STATE.fps}
-      width={EMPTY_STATE.width}
-      height={EMPTY_STATE.height}
-    />
+    <>
+      <Composition
+        id="timeline"
+        component={TimelineComposition}
+        defaultProps={{ state: EMPTY_STATE, transparent: false }}
+        // Metadata comes from the timeline itself — same source of truth as the
+        // Player (see timelineDuration in src/editor/types.ts). Min 1 frame.
+        calculateMetadata={({ props }) => {
+          const { state, project, timelineId } = props;
+          const durationInFrames = project && timelineId
+            ? resolveTimelineRenderPlan(project, timelineId).durationInFrames
+            : timelineDuration(state);
+          return {
+            durationInFrames: Math.max(1, durationInFrames),
+            fps: state.fps,
+            width: state.width,
+            height: state.height,
+          };
+        }}
+        // Fallbacks only; calculateMetadata overrides these before every render.
+        durationInFrames={Math.max(1, timelineDuration(EMPTY_STATE))}
+        fps={EMPTY_STATE.fps}
+        width={EMPTY_STATE.width}
+        height={EMPTY_STATE.height}
+      />
+      <Composition
+        id="ArabicHeadlineBoxes"
+        component={ArabicHeadlineBoxes}
+        durationInFrames={120}
+        fps={30}
+        width={1080}
+        height={1920}
+        defaultProps={{
+          item: {
+            props: {
+              topText: 'أشيلكم إنتوا التلاتة',
+              bottomText: 'ربنا يخليك لينا يا بابا',
+              subtitleText: 'أنا عايزة أوريكم بابا',
+              showSubtitle: true,
+            },
+          },
+        }}
+      />
+    </>
   );
 }
 

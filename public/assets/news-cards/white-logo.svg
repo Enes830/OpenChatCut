@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240" fill="none">
+  <defs>
+    <filter id="logo-shadow" x="-20%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.35" />
+    </filter>
+  </defs>
+  <g filter="url(#logo-shadow)" transform="skewX(-16) translate(40, 30)">
+    <!-- Left slanted pill -->
+    <rect x="40" y="20" width="24" height="120" rx="12" fill="#FFFFFF" />
+    <!-- Right top slanted pill -->
+    <rect x="80" y="20" width="24" height="74" rx="12" fill="#FFFFFF" />
+    <!-- Right bottom dot -->
+    <circle cx="92" cy="128" r="12" fill="#FFFFFF" />
+  </g>
+</svg>

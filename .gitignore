@@ -38,6 +38,7 @@ test-results/
 /exports/
 /*.ccproj.json
 /*.fcpxml
+*.mov
 
 # secrets
 .env
