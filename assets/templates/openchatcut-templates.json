@@ -18458,5 +18458,261 @@
   ],
   "thumb": "/thumbnails/ss-quote-card.jpg",
   "code": "const ArabicHeadlineBoxesTemplate = ({ item }) => {\n  const frame = useCurrentFrame();\n  const { fps } = useVideoConfig();\n  const safeFps = fps || 30;\n\n  const props = item?.props || {};\n  const topText = props.topText ?? \"أشيلكم إنتوا التلاتة\";\n  const bottomText = props.bottomText ?? \"ربنا يخليك لينا يا بابا\";\n  const subtitleText = props.subtitleText ?? \"أنا عايزة أوريكم بابا\";\n  const showSubtitle = props.showSubtitle ?? true;\n\n  const topBgColor = props.topBgColor || \"#c41824\";\n  const topTextColor = props.topTextColor || \"#ffffff\";\n  const bottomBgColor = props.bottomBgColor || \"#ffffff\";\n  const bottomTextColor = props.bottomTextColor || \"#111111\";\n  const fontFamily = props.fontFamily || \"GhroobArabic, \\\"Noto Sans Arabic\\\", sans-serif\";\n  const fontSize = Number(props.fontSize) || 52;\n  const yOffsetPercent = Number(props.yOffsetPercent ?? 68);\n  const borderRadius = Number(props.borderRadius ?? 12);\n  const gap = Number(props.gap ?? 14);\n  const showShadow = props.showShadow !== false;\n  const align = props.align || \"center\";\n\n  const entranceDelay = Number(props.entranceDelay ?? 8);\n  const staggerDelay = Number(props.staggerDelay ?? 6);\n\n  const DESIGN_WIDTH = 1080;\n  const DESIGN_HEIGHT = 1920;\n  const scale = Math.min(\n    (item?.width || DESIGN_WIDTH) / DESIGN_WIDTH,\n    (item?.height || DESIGN_HEIGHT) / DESIGN_HEIGHT\n  );\n\n  const topSpring = spring({\n    frame: Math.max(0, frame - entranceDelay),\n    fps: safeFps,\n    config: { damping: 16, stiffness: 120, mass: 0.8 },\n  });\n\n  const bottomSpring = spring({\n    frame: Math.max(0, frame - (entranceDelay + staggerDelay)),\n    fps: safeFps,\n    config: { damping: 16, stiffness: 120, mass: 0.8 },\n  });\n\n  const subtitleSpring = spring({\n    frame: Math.max(0, frame - (entranceDelay + staggerDelay + 4)),\n    fps: safeFps,\n    config: { damping: 20, stiffness: 100 },\n  });\n\n  const topClipLeft = Math.max(0, Math.min(100, (1 - topSpring) * 100));\n  const bottomClipLeft = Math.max(0, Math.min(100, (1 - bottomSpring) * 100));\n\n  const topSlideX = (1 - topSpring) * 35;\n  const bottomSlideX = (1 - bottomSpring) * 35;\n\n  const topOpacity = interpolate(topSpring, [0, 0.08], [0, 1], { extrapolateRight: \"clamp\" });\n  const bottomOpacity = interpolate(bottomSpring, [0, 0.08], [0, 1], { extrapolateRight: \"clamp\" });\n  const subtitleOpacity = interpolate(subtitleSpring, [0, 0.2], [0, 1], { extrapolateRight: \"clamp\" });\n  const subtitleSlideY = (1 - subtitleSpring) * 15;\n\n  const shadowStyle = showShadow\n    ? { boxShadow: \"0 8px 24px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.18)\" }\n    : {};\n\n  const containerAlignStyle = align === \"right\"\n    ? { alignItems: \"flex-end\", paddingRight: 60 }\n    : align === \"left\"\n    ? { alignItems: \"flex-start\", paddingLeft: 60 }\n    : { alignItems: \"center\" };\n\n  return (\n    <div\n      style={{\n        position: \"absolute\",\n        top: 0,\n        left: 0,\n        width: DESIGN_WIDTH,\n        height: DESIGN_HEIGHT,\n        transform: `scale(${scale})`,\n        transformOrigin: \"top left\",\n        pointerEvents: \"none\",\n        overflow: \"hidden\",\n        fontFamily,\n      }}\n    >\n      <div\n        style={{\n          position: \"absolute\",\n          top: `${yOffsetPercent}%`,\n          left: 0,\n          right: 0,\n          display: \"flex\",\n          flexDirection: \"column\",\n          gap: `${gap}px`,\n          ...containerAlignStyle,\n          direction: \"rtl\",\n        }}\n      >\n        {topText.trim() && (\n          <div\n            style={{\n              opacity: topOpacity,\n              clipPath: `inset(0 0 0 ${topClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n              WebkitClipPath: `inset(0 0 0 ${topClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n              transform: `translateX(${topSlideX.toFixed(2)}px)`,\n              transformOrigin: \"right center\",\n            }}\n          >\n            <div\n              style={{\n                backgroundColor: topBgColor,\n                color: topTextColor,\n                fontSize: `${fontSize}px`,\n                fontWeight: 800,\n                lineHeight: 1.25,\n                padding: \"14px 34px\",\n                borderRadius: `${borderRadius}px`,\n                display: \"inline-block\",\n                whiteSpace: \"nowrap\",\n                letterSpacing: \"-0.3px\",\n                textAlign: \"center\",\n                ...shadowStyle,\n              }}\n            >\n              {topText}\n            </div>\n          </div>\n        )}\n\n        {bottomText.trim() && (\n          <div\n            style={{\n              opacity: bottomOpacity,\n              clipPath: `inset(0 0 0 ${bottomClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n              WebkitClipPath: `inset(0 0 0 ${bottomClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n              transform: `translateX(${bottomSlideX.toFixed(2)}px)`,\n              transformOrigin: \"right center\",\n            }}\n          >\n            <div\n              style={{\n                backgroundColor: bottomBgColor,\n                color: bottomTextColor,\n                fontSize: `${Math.round(fontSize * 0.96)}px`,\n                fontWeight: 900,\n                lineHeight: 1.25,\n                padding: \"14px 34px\",\n                borderRadius: `${borderRadius}px`,\n                display: \"inline-block\",\n                whiteSpace: \"nowrap\",\n                letterSpacing: \"-0.3px\",\n                textAlign: \"center\",\n                ...shadowStyle,\n              }}\n            >\n              {bottomText}\n            </div>\n          </div>\n        )}\n\n        {showSubtitle && subtitleText.trim() && (\n          <div\n            style={{\n              marginTop: \"16px\",\n              opacity: subtitleOpacity,\n              transform: `translateY(${subtitleSlideY.toFixed(2)}px)`,\n              backgroundColor: \"rgba(20, 20, 20, 0.78)\",\n              backdropFilter: \"blur(8px)\",\n              color: \"#ffffff\",\n              fontSize: `${Math.round(fontSize * 0.52)}px`,\n              fontWeight: 600,\n              padding: \"8px 22px\",\n              borderRadius: \"20px\",\n              display: \"inline-block\",\n              whiteSpace: \"nowrap\",\n              boxShadow: \"0 4px 12px rgba(0, 0, 0, 0.3)\",\n            }}\n          >\n            {subtitleText}\n          </div>\n        )}\n      </div>\n    </div>\n  );\n};"
+ },
+ {
+  "id": "arabic-blue-news-boxes",
+  "name": "Arabic News Headline (Blue & White 3-Box)",
+  "category": "lower-thirds",
+  "description": "Broadcast news headline 3-line card with vivid blue lead box, sliding animated runner tab, RTL wipe entrance, and staggered fade exit.",
+  "width": 1080,
+  "height": 1080,
+  "fps": 30,
+  "durationInFrames": 140,
+  "props": {
+   "line1Text": "أحد رجال مبارك",
+   "line2Text": "ومن أشد المعادين",
+   "line3Text": "للرئيس الراحل محمد مرسي",
+   "line1BgColor": "#0f83f3",
+   "line1TextColor": "#ffffff",
+   "line2BgColor": "#ffffff",
+   "line2TextColor": "#111111",
+   "line3BgColor": "#ffffff",
+   "line3TextColor": "#111111",
+   "showAccentTab": true,
+   "accentTabColor": "#ffffff",
+   "tabWidth": 38,
+   "tabHeight": 15,
+   "runnerSpeed": 1.85,
+   "tabStartDelay": 22,
+   "fontFamily": "GhroobArabic",
+   "fontSize": 54,
+   "yOffsetPercent": 28,
+   "borderRadius": 2,
+   "gap": 16,
+   "rightMargin": 48,
+   "entranceDelay": 0,
+   "staggerDelay": 8,
+   "enableExitAnimation": true,
+   "exitDelayFrames": 115,
+   "exitStaggerDelay": 6,
+   "align": "right",
+   "showShadow": true
+  },
+  "propSchema": [
+   {
+    "key": "line1Text",
+    "type": "string",
+    "defaultValue": "أحد رجال مبارك",
+    "label": "Lead Line (Blue Box)"
+   },
+   {
+    "key": "line2Text",
+    "type": "string",
+    "defaultValue": "ومن أشد المعادين",
+    "label": "Line 2 (White Box)"
+   },
+   {
+    "key": "line3Text",
+    "type": "string",
+    "defaultValue": "للرئيس الراحل محمد مرسي",
+    "label": "Line 3 (White Box)"
+   },
+   {
+    "key": "line1BgColor",
+    "type": "color",
+    "defaultValue": "#0f83f3",
+    "label": "Line 1 Background"
+   },
+   {
+    "key": "line1TextColor",
+    "type": "color",
+    "defaultValue": "#ffffff",
+    "label": "Line 1 Text Color"
+   },
+   {
+    "key": "line2BgColor",
+    "type": "color",
+    "defaultValue": "#ffffff",
+    "label": "Line 2 Background"
+   },
+   {
+    "key": "line2TextColor",
+    "type": "color",
+    "defaultValue": "#111111",
+    "label": "Line 2 Text Color"
+   },
+   {
+    "key": "line3BgColor",
+    "type": "color",
+    "defaultValue": "#ffffff",
+    "label": "Line 3 Background"
+   },
+   {
+    "key": "line3TextColor",
+    "type": "color",
+    "defaultValue": "#111111",
+    "label": "Line 3 Text Color"
+   },
+   {
+    "key": "showAccentTab",
+    "type": "boolean",
+    "defaultValue": true,
+    "label": "Top Accent Tab"
+   },
+   {
+    "key": "accentTabColor",
+    "type": "color",
+    "defaultValue": "#ffffff",
+    "label": "Accent Tab Color"
+   },
+   {
+    "key": "tabWidth",
+    "type": "number",
+    "min": 10,
+    "max": 100,
+    "step": 2,
+    "defaultValue": 38,
+    "label": "Tab Width"
+   },
+   {
+    "key": "tabHeight",
+    "type": "number",
+    "min": 6,
+    "max": 40,
+    "step": 1,
+    "defaultValue": 15,
+    "label": "Tab Height"
+   },
+   {
+    "key": "runnerSpeed",
+    "type": "number",
+    "min": 0,
+    "max": 10,
+    "step": 0.1,
+    "defaultValue": 1.85,
+    "label": "Tab Runner Speed"
+   },
+   {
+    "key": "tabStartDelay",
+    "type": "number",
+    "min": 0,
+    "max": 60,
+    "step": 1,
+    "defaultValue": 22,
+    "label": "Tab Start Delay (Frames)"
+   },
+   {
+    "key": "fontFamily",
+    "type": "font",
+    "defaultValue": "GhroobArabic",
+    "label": "Font Family"
+   },
+   {
+    "key": "fontSize",
+    "type": "number",
+    "min": 24,
+    "max": 120,
+    "step": 2,
+    "defaultValue": 54,
+    "label": "Font Size"
+   },
+   {
+    "key": "yOffsetPercent",
+    "type": "number",
+    "min": 5,
+    "max": 90,
+    "step": 1,
+    "defaultValue": 28,
+    "label": "Vertical Position (%)"
+   },
+   {
+    "key": "borderRadius",
+    "type": "number",
+    "min": 0,
+    "max": 40,
+    "step": 1,
+    "defaultValue": 2,
+    "label": "Corner Radius"
+   },
+   {
+    "key": "gap",
+    "type": "number",
+    "min": 0,
+    "max": 50,
+    "step": 2,
+    "defaultValue": 16,
+    "label": "Box Gap"
+   },
+   {
+    "key": "rightMargin",
+    "type": "number",
+    "min": 0,
+    "max": 200,
+    "step": 4,
+    "defaultValue": 48,
+    "label": "Right Margin"
+   },
+   {
+    "key": "entranceDelay",
+    "type": "number",
+    "min": 0,
+    "max": 120,
+    "step": 1,
+    "defaultValue": 0,
+    "label": "Start Frame"
+   },
+   {
+    "key": "staggerDelay",
+    "type": "number",
+    "min": 0,
+    "max": 30,
+    "step": 1,
+    "defaultValue": 8,
+    "label": "Stagger Delay"
+   },
+   {
+    "key": "enableExitAnimation",
+    "type": "boolean",
+    "defaultValue": true,
+    "label": "Exit Fade Animation"
+   },
+   {
+    "key": "exitDelayFrames",
+    "type": "number",
+    "min": 20,
+    "max": 300,
+    "step": 5,
+    "defaultValue": 115,
+    "label": "Exit Start Frame"
+   },
+   {
+    "key": "exitStaggerDelay",
+    "type": "number",
+    "min": 0,
+    "max": 30,
+    "step": 1,
+    "defaultValue": 6,
+    "label": "Exit Stagger Delay"
+   },
+   {
+    "key": "align",
+    "type": "select",
+    "options": [
+     "right",
+     "center",
+     "left"
+    ],
+    "defaultValue": "right",
+    "label": "Alignment"
+   },
+   {
+    "key": "showShadow",
+    "type": "boolean",
+    "defaultValue": true,
+    "label": "Drop Shadow"
+   }
+  ],
+  "thumb": "/thumbnails/arabic-blue-news-boxes.jpg",
+  "code": "const ArabicBlueNewsBoxesTemplate = ({ item }) => {\n  const frame = useCurrentFrame();\n  const { fps, durationInFrames: compositionDuration } = useVideoConfig();\n  const safeFps = fps || 30;\n\n  const props = item?.props || {};\n\n  const line1Text = props.line1Text ?? \"أحد رجال مبارك\";\n  const line2Text = props.line2Text ?? \"ومن أشد المعادين\";\n  const line3Text = props.line3Text ?? \"للرئيس الراحل محمد مرسي\";\n\n  const line1BgColor = props.line1BgColor || \"#0f83f3\";\n  const line1TextColor = props.line1TextColor || \"#ffffff\";\n  const line2BgColor = props.line2BgColor || \"#ffffff\";\n  const line2TextColor = props.line2TextColor || \"#111111\";\n  const line3BgColor = props.line3BgColor || \"#ffffff\";\n  const line3TextColor = props.line3TextColor || \"#111111\";\n\n  const showAccentTab = props.showAccentTab !== false;\n  const accentTabColor = props.accentTabColor || \"#ffffff\";\n  const tabWidth = Number(props.tabWidth ?? 38);\n  const tabHeight = Number(props.tabHeight ?? 15);\n  const runnerSpeed = Number(props.runnerSpeed ?? 1.85);\n  const tabStartDelay = Number(props.tabStartDelay ?? 22);\n\n  const fontFamily = props.fontFamily || \"GhroobArabic, \\\"Noto Sans Arabic\\\", Cairo, sans-serif\";\n  const fontSize = Number(props.fontSize) || 54;\n  const yOffsetPercent = Number(props.yOffsetPercent ?? 28);\n  const borderRadius = Number(props.borderRadius ?? 2);\n  const gap = Number(props.gap ?? 16);\n  const rightMargin = Number(props.rightMargin ?? 48);\n  const showShadow = props.showShadow !== false;\n  const align = props.align || \"right\";\n\n  const entranceDelay = Number(props.entranceDelay ?? 0);\n  const staggerDelay = Number(props.staggerDelay ?? 8);\n  const enableExitAnimation = props.enableExitAnimation !== false;\n\n  const effectiveDuration = item?.durationInFrames || compositionDuration || 140;\n  const exitDelayFrames = Number(props.exitDelayFrames ?? Math.max(entranceDelay + 40, effectiveDuration - 25));\n  const exitStaggerDelay = Number(props.exitStaggerDelay ?? 6);\n  const exitFadeDuration = 8;\n\n  const DESIGN_WIDTH = 1080;\n  const DESIGN_HEIGHT = 1080;\n  const scale = Math.min(\n    (item?.width || DESIGN_WIDTH) / DESIGN_WIDTH,\n    (item?.height || DESIGN_HEIGHT) / DESIGN_HEIGHT\n  );\n\n  const line1Spring = spring({\n    frame: Math.max(0, frame - entranceDelay),\n    fps: safeFps,\n    config: { damping: 18, stiffness: 110, mass: 0.8 },\n  });\n\n  const line2Spring = spring({\n    frame: Math.max(0, frame - (entranceDelay + staggerDelay)),\n    fps: safeFps,\n    config: { damping: 18, stiffness: 110, mass: 0.8 },\n  });\n\n  const line3Spring = spring({\n    frame: Math.max(0, frame - (entranceDelay + staggerDelay * 2)),\n    fps: safeFps,\n    config: { damping: 18, stiffness: 110, mass: 0.8 },\n  });\n\n  const line1ClipLeft = Math.max(0, Math.min(100, (1 - line1Spring) * 100));\n  const line2ClipLeft = Math.max(0, Math.min(100, (1 - line2Spring) * 100));\n  const line3ClipLeft = Math.max(0, Math.min(100, (1 - line3Spring) * 100));\n\n  const line1EntranceOpacity = interpolate(line1Spring, [0, 0.08], [0, 1], { extrapolateRight: \"clamp\" });\n  const line2EntranceOpacity = interpolate(line2Spring, [0, 0.08], [0, 1], { extrapolateRight: \"clamp\" });\n  const line3EntranceOpacity = interpolate(line3Spring, [0, 0.08], [0, 1], { extrapolateRight: \"clamp\" });\n\n  const tabStartFrame = entranceDelay + tabStartDelay;\n  const isTabActive = frame >= tabStartFrame;\n  const tabSlideOffset = Math.max(0, (frame - tabStartFrame) * runnerSpeed);\n  const tabInitialRight = 10;\n  const tabRightPos = tabInitialRight + tabSlideOffset;\n\n  const tabEntranceOpacity = isTabActive\n    ? interpolate(frame, [tabStartFrame, tabStartFrame + 4], [0, 1], {\n        extrapolateLeft: \"clamp\",\n        extrapolateRight: \"clamp\",\n      })\n    : 0;\n\n  const line1ExitOpacity = enableExitAnimation\n    ? interpolate(frame, [exitDelayFrames, exitDelayFrames + exitFadeDuration], [1, 0], {\n        extrapolateLeft: \"clamp\",\n        extrapolateRight: \"clamp\",\n      })\n    : 1;\n\n  const line2ExitOpacity = enableExitAnimation\n    ? interpolate(\n        frame,\n        [exitDelayFrames + exitStaggerDelay, exitDelayFrames + exitStaggerDelay + exitFadeDuration],\n        [1, 0],\n        { extrapolateLeft: \"clamp\", extrapolateRight: \"clamp\" }\n      )\n    : 1;\n\n  const line3ExitOpacity = enableExitAnimation\n    ? interpolate(\n        frame,\n        [exitDelayFrames + exitStaggerDelay * 2, exitDelayFrames + exitStaggerDelay * 2 + exitFadeDuration],\n        [1, 0],\n        { extrapolateLeft: \"clamp\", extrapolateRight: \"clamp\" }\n      )\n    : 1;\n\n  const line1FinalOpacity = line1EntranceOpacity * line1ExitOpacity;\n  const line2FinalOpacity = line2EntranceOpacity * line2ExitOpacity;\n  const line3FinalOpacity = line3EntranceOpacity * line3ExitOpacity;\n  const tabFinalOpacity = tabEntranceOpacity * line1ExitOpacity;\n\n  const shadowStyle = showShadow\n    ? { boxShadow: \"0 8px 24px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.14)\" }\n    : {};\n\n  const containerAlignStyle = align === \"right\"\n    ? { alignItems: \"flex-end\", paddingRight: `${rightMargin}px` }\n    : align === \"left\"\n    ? { alignItems: \"flex-start\", paddingLeft: `${rightMargin}px` }\n    : { alignItems: \"center\" };\n\n  return (\n    <div\n      style={{\n        position: \"absolute\",\n        top: 0,\n        left: 0,\n        width: DESIGN_WIDTH,\n        height: DESIGN_HEIGHT,\n        transform: `scale(${scale})`,\n        transformOrigin: \"top left\",\n        pointerEvents: \"none\",\n        overflow: \"hidden\",\n        fontFamily,\n      }}\n    >\n      <div\n        style={{\n          position: \"absolute\",\n          top: `${yOffsetPercent}%`,\n          left: 0,\n          right: 0,\n          display: \"flex\",\n          flexDirection: \"column\",\n          gap: `${gap}px`,\n          ...containerAlignStyle,\n          direction: \"rtl\",\n        }}\n      >\n        {line1Text.trim() && (\n          <div\n            style={{\n              position: \"relative\",\n              opacity: line1FinalOpacity,\n            }}\n          >\n            {showAccentTab && isTabActive && (\n              <div\n                style={{\n                  position: \"absolute\",\n                  top: `-${tabHeight}px`,\n                  right: `${tabRightPos.toFixed(1)}px`,\n                  width: `${tabWidth}px`,\n                  height: `${tabHeight}px`,\n                  backgroundColor: accentTabColor,\n                  borderTopLeftRadius: `${borderRadius}px`,\n                  borderTopRightRadius: `${borderRadius}px`,\n                  opacity: tabFinalOpacity,\n                  zIndex: 10,\n                }}\n              />\n            )}\n            <div\n              style={{\n                clipPath: `inset(0 0 0 ${line1ClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n                WebkitClipPath: `inset(0 0 0 ${line1ClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n                transformOrigin: \"right center\",\n                backgroundColor: line1BgColor,\n                color: line1TextColor,\n                fontSize: `${fontSize}px`,\n                fontWeight: 800,\n                lineHeight: 1.25,\n                padding: \"16px 36px\",\n                borderRadius: `${borderRadius}px`,\n                display: \"inline-block\",\n                whiteSpace: \"nowrap\",\n                letterSpacing: \"-0.3px\",\n                textAlign: \"center\",\n                ...shadowStyle,\n              }}\n            >\n              {line1Text}\n            </div>\n          </div>\n        )}\n\n        {line2Text.trim() && (\n          <div\n            style={{\n              opacity: line2FinalOpacity,\n              clipPath: `inset(0 0 0 ${line2ClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n              WebkitClipPath: `inset(0 0 0 ${line2ClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n              transformOrigin: \"right center\",\n            }}\n          >\n            <div\n              style={{\n                backgroundColor: line2BgColor,\n                color: line2TextColor,\n                fontSize: `${fontSize}px`,\n                fontWeight: 800,\n                lineHeight: 1.25,\n                padding: \"16px 36px\",\n                borderRadius: `${borderRadius}px`,\n                display: \"inline-block\",\n                whiteSpace: \"nowrap\",\n                letterSpacing: \"-0.3px\",\n                textAlign: \"center\",\n                ...shadowStyle,\n              }}\n            >\n              {line2Text}\n            </div>\n          </div>\n        )}\n\n        {line3Text.trim() && (\n          <div\n            style={{\n              opacity: line3FinalOpacity,\n              clipPath: `inset(0 0 0 ${line3ClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n              WebkitClipPath: `inset(0 0 0 ${line3ClipLeft.toFixed(2)}% round ${borderRadius}px)`,\n              transformOrigin: \"right center\",\n            }}\n          >\n            <div\n              style={{\n                backgroundColor: line3BgColor,\n                color: line3TextColor,\n                fontSize: `${fontSize}px`,\n                fontWeight: 800,\n                lineHeight: 1.25,\n                padding: \"16px 36px\",\n                borderRadius: `${borderRadius}px`,\n                display: \"inline-block\",\n                whiteSpace: \"nowrap\",\n                letterSpacing: \"-0.3px\",\n                textAlign: \"center\",\n                ...shadowStyle,\n              }}\n            >\n              {line3Text}\n            </div>\n          </div>\n        )}\n      </div>\n    </div>\n  );\n};"
  }
 ]

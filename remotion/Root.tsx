@@ -19,6 +19,7 @@ const EMPTY_STATE: TimelineState = {
 };
 
 import { ArabicHeadlineBoxes } from './ArabicHeadlineBoxes';
+import { ArabicBlueNewsBoxes } from './ArabicBlueNewsBoxes';
 
 export function Root() {
   return (
@@ -61,6 +62,25 @@ export function Root() {
               bottomText: 'ربنا يخليك لينا يا بابا',
               subtitleText: 'أنا عايزة أوريكم بابا',
               showSubtitle: true,
+            },
+          },
+        }}
+      />
+      <Composition
+        id="ArabicBlueNewsBoxes"
+        component={ArabicBlueNewsBoxes}
+        durationInFrames={140}
+        fps={30}
+        width={1080}
+        height={1080}
+        defaultProps={{
+          item: {
+            props: {
+              line1Text: 'أحد رجال مبارك',
+              line2Text: 'ومن أشد المعادين',
+              line3Text: 'للرئيس الراحل محمد مرسي',
+              line1BgColor: '#0f83f3',
+              showAccentTab: true,
             },
           },
         }}
