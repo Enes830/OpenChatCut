@@ -24,11 +24,13 @@ import { xaiOauthAccessToken } from './xai-oauth-session.ts';
 import {
   classifyStatus,
   networkMessage,
+  parseModelCatalog,
+  parseTextModelCatalog,
   sanitizeProbeText,
   type ProbeResult,
 } from './key-probe-result.ts';
 import { PROBE_TIMEOUT_MS, runDataDirProbe, runProxyProbe } from './key-probe-local.ts';
-export { classifyStatus, networkMessage, type ProbeResult } from './key-probe-result.ts';
+export { classifyStatus, networkMessage, parseModelCatalog, type ProbeResult } from './key-probe-result.ts';
 export { runDataDirProbe, runProxyProbe } from './key-probe-local.ts';
 // Proxy-aware fetch: attaches the configured outbound proxy (keystore
 // PROXY_URL or HTTPS_PROXY/HTTP_PROXY env) via undici dispatcher.
@@ -101,23 +103,6 @@ function llmProbe(provider: LlmProvider): ProbeDef {
     },
     models: parseModelCatalog,
   };
-}
-
-export function parseModelCatalog(bodyText: string): string[] {
-  try {
-    const body = JSON.parse(bodyText) as {
-      data?: Array<{ id?: unknown; name?: unknown }>;
-      models?: Array<{ id?: unknown; name?: unknown }>;
-    };
-    const rows = Array.isArray(body.data) ? body.data : Array.isArray(body.models) ? body.models : [];
-    return [...new Set(rows
-      .map((row) => typeof row.id === 'string' ? row.id : typeof row.name === 'string' ? row.name : '')
-      .map((id) => id.trim())
-      .filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b));
-  } catch {
-    return [];
-  }
 }
 
 /** The provider's error copy is flattened before entering the results: line breaks and truncation are removed. Never splice any key values.*/
@@ -248,6 +233,26 @@ const cartesiaProbe: ProbeDef = {
   }),
 };
 
+/** Requesty: the authenticated /models call checks the key, then the model list
+ * comes from /models/managed, whose ids match the bundled capability catalog.
+ * Falls back to the full /models list if the managed list is unavailable. */
+const requestyLlmProbe = llmProbe('requesty');
+const requestyProbe: ProbeDef = {
+  ...requestyLlmProbe,
+  run: async (get) => {
+    const checked = await requestyLlmProbe.run(get);
+    if (!checked.ok) return checked;
+    const root = resolveLlmBaseUrl('requesty', get('LLM_REQUESTY_BASE_URL'), AI_SDK_BASE_URL_FORMAT);
+    const managed = await fetchWithProxy(`${root}/models/managed`, { signal: t() }).catch(() => null);
+    return managed?.ok ? managed : checked;
+  },
+};
+
+const cheaperInferenceProbe: ProbeDef = {
+  ...llmProbe('cheaperinference'),
+  models: parseTextModelCatalog,
+};
+
 
 /** page key (same name as the vendor page key of settingsSchema) → detection definition.*/
 export const PROBES: Record<string, ProbeDef> = {
@@ -255,6 +260,8 @@ export const PROBES: Record<string, ProbeDef> = {
     `llm/${preset.id}`,
     llmProbe(preset.id),
   ])),
+  'llm/requesty': requestyProbe,
+  'llm/cheaperinference': cheaperInferenceProbe,
   'image/openai': {
     needs: [['IMAGE_API_KEY'], ['OPENAI_API_KEY']],
     run: (get) => fetch(`${base(get, 'IMAGE_BASE_URL', 'https://api.openai.com')}/v1/models`, {
@@ -406,6 +413,14 @@ export const PROBES: Record<string, ProbeDef> = {
     needs: [['FIRECRAWL_API_KEY']],
     run: (get) => fetch('https://api.firecrawl.dev/v2/team/credit-usage', {
       signal: t(), headers: bearer(get('FIRECRAWL_API_KEY')),
+    }),
+  },
+  // Read-only account endpoint; a fake key is a stable 401. Upload-Post keys
+  // use the `Apikey` scheme, not `Bearer`.
+  'publish/upload-post': {
+    needs: [['UPLOAD_POST_API_KEY']],
+    run: (get) => fetch(`${base(get, 'UPLOAD_POST_BASE_URL', 'https://api.upload-post.com')}/api/uploadposts/me`, {
+      signal: t(), headers: { Authorization: `Apikey ${get('UPLOAD_POST_API_KEY')}` },
     }),
   },
   // S3 HeadBucket is sent via SDK (SigV4 signature cannot be fetched manually), r2.ts synthesizes Response:

@@ -1,3 +1,4 @@
+import { FAL_MODELS } from '../../../shared/fal-models';
 // Set the information architecture of the panel (first-level classification → second-level capability group → third-level provider page → fields) and pure display logic.
 // Three columns: Left tree = Category → Capability; Middle column = Vendor list under this capability; Right column = Configuration page of the selected vendor.
 // Agent LLM saves independent API URLs, API Keys and models for each vendor; the capability to generate classes can be additionally provided
@@ -11,6 +12,7 @@ import {
 } from '../../../shared/llm-providers';
 import type { CodexAgentStatus } from '../../../shared/codex-agent';
 import type { CopilotAgentStatus } from '../../../shared/copilot-agent';
+import type { ClaudeCodeAgentStatus } from '../../../shared/claude-code-agent';
 import type { VendorId } from './vendorIcons';
 import {
   directory,
@@ -27,6 +29,7 @@ import {
   type SettingsVendorPage,
 } from './settingsFields';
 import {
+  LOCAL_ASR_SETTINGS_ROUTE,
   ROUTE_NEEDS,
   TRANSCRIPTION_SETTINGS_GROUP,
   VOICE_SETTINGS_GROUP,
@@ -67,6 +70,22 @@ const byteplusPage = (cap: string, modelField: SettingsField, title = 'BytePlus 
   ],
 });
 
+const falPage = (cap: 'image' | 'video'): SettingsVendorPage => ({
+  key: `${cap}/fal`, vendor: 'fal', title: 'Fal.ai',
+  note: '选择 Fal.ai 作为默认厂商，然后选择模型。聊天中指定的模型优先于此默认值。',
+  fields: [
+    secret('FAL_KEY', 'API Key'),
+    {
+      name: cap === 'image' ? 'FAL_IMAGE_MODEL' : 'FAL_VIDEO_MODEL',
+      label: cap === 'image' ? '生图模型' : '视频模型', kind: 'select',
+      options: [
+        { value: '', label: '每次询问（默认）' },
+        ...FAL_MODELS.filter((model) => model.kind === cap).map(({ id, label }) => ({ value: id, label })),
+      ],
+    },
+  ],
+});
+
 export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
   {
     key: 'agent', title: 'Agent 模型', icon: 'sparkles',
@@ -87,6 +106,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
     groups: [
       { key: 'image', title: '生图', hint: 'submit_image · 文生图 / 图生图，任一厂商即可。',
         route: routeSelect('PREFERRED_IMAGE_VENDOR', [
+          { value: 'fal', label: 'Fal.ai' },
           { value: 'gpt-image-2', label: 'OpenAI gpt-image' },
           { value: 'nano-banana', label: 'Gemini Nano Banana' },
           { value: 'image-01', label: 'MiniMax' },
@@ -104,6 +124,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
             text('GEMINI_BASE_URL', 'Base URL', '默认 https://generativelanguage.googleapis.com'),
             modelText('GEMINI_IMAGE_MODEL', '生图模型', 'gemini-3.1-flash-image'),
           ] },
+          falPage('image'),
           minimaxPage('image', modelPicker('MINIMAX_IMAGE_MODEL', '生图模型', 'image-01', ['image-01', 'image-01-live'])),
           { key: 'image/wavespeed', vendor: 'wavespeed', title: 'WaveSpeed', fields: [
             secret('WAVESPEED_API_KEY', 'API Key'),
@@ -122,6 +143,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
       VOICE_SETTINGS_GROUP,
       { key: 'video', title: '生视频', hint: 'submit_video · 文 / 图生视频，任一厂商即可。',
         route: routeSelect('PREFERRED_VIDEO_VENDOR', [
+          { value: 'fal', label: 'Fal.ai' },
           { value: 'seedance2', label: 'Seedance' },
           { value: 'kling', label: '可灵' },
           { value: 'hailuo', label: 'MiniMax 海螺' },
@@ -130,6 +152,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
           { value: 'ofox', label: 'OFox · 多模型' },
         ]),
         vendors: [
+          falPage('video'),
           { key: 'video/seedance', vendor: 'seedance', title: 'Seedance · 火山', fields: [
             secret('SEEDANCE_API_KEY', 'API Key'),
             text('SEEDANCE_BASE_URL', 'Base URL', '默认 https://ark.cn-beijing.volces.com/api/v3'),
@@ -248,6 +271,17 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
           { key: 'web/firecrawl', vendor: 'firecrawl', title: 'Firecrawl',
             fields: [secret('FIRECRAWL_API_KEY', 'API Key')] },
         ] },
+      { key: 'publish', title: '发布到社交平台', hint: 'publish_to_social · 把导出的成片发布到 TikTok、Instagram、YouTube 等平台。',
+        vendors: [
+          { key: 'publish/upload-post', vendor: 'uploadpost', title: 'Upload-Post',
+            note: '一个 Key 发布到 TikTok、Instagram、YouTube、LinkedIn、Facebook、X、Threads、Pinterest、Bluesky。'
+              + '先在 Upload-Post 创建一个 Profile 并连接各平台账号，再把 Profile 名称填在下面。'
+              + 'Agent 发布前总会先预览平台、标题与视频，等你确认后才上传；YouTube 默认私密。',
+            fields: [
+              secret('UPLOAD_POST_API_KEY', 'API Key'),
+              text('UPLOAD_POST_PROFILE', 'Profile', undefined, '在 Upload-Post 控制台创建、已连接社交账号的 Profile 名称。'),
+            ] },
+        ] },
     ],
   },
   {
@@ -276,7 +310,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
     groups: [
       { key: 'local', title: '本地模型', hint: '本地转写、节拍与音乐分析、画面语义搜索。模型按需安装，数据不出本机。',
         vendors: [
-          { key: 'local/asr', vendor: 'localasr', title: '本地转写', icon: 'mic', kind: 'local-models', fields: localAsrPage.fields },
+          { key: LOCAL_ASR_SETTINGS_ROUTE, vendor: 'localasr', title: '本地转写', icon: 'mic', kind: 'local-models', fields: localAsrPage.fields },
           { key: 'local/music/packs', vendor: 'localasr', title: '节拍与音乐分析', icon: 'music', kind: 'local-models', fields: [] },
           { key: 'local/semantic/setup', vendor: 'localasr', title: '画面语义搜索', icon: 'search', kind: 'local-models', fields: [] },
         ] },
@@ -322,12 +356,16 @@ export function vendorConfigured(
   page: SettingsVendorPage,
   codexStatus?: CodexAgentStatus | null,
   copilotStatus?: CopilotAgentStatus | null,
+  claudeCodeStatus?: ClaudeCodeAgentStatus | null,
 ): boolean {
   if (page.connection === 'codex') {
     return Boolean(codexStatus?.installed && codexStatus.account?.type === 'chatgpt');
   }
   if (page.connection === 'copilot') {
     return Boolean(copilotStatus?.installed && copilotStatus.supported && copilotStatus.authenticated);
+  }
+  if (page.connection === 'claude-code') {
+    return Boolean(claudeCodeStatus?.installed && claudeCodeStatus.account?.loggedIn);
   }
   if (page.connection === 'xai-oauth') {
     return Boolean(status?.keys?.LLM_XAI_OAUTH_API_KEY?.configured);
@@ -347,9 +385,11 @@ export function groupConfigured(
   group: SettingsGroup,
   codexStatus?: CodexAgentStatus | null,
   copilotStatus?: CopilotAgentStatus | null,
+  claudeCodeStatus?: ClaudeCodeAgentStatus | null,
 ): boolean {
   if (group.key === 'llm' || group.key === 'proxy') {
-    return group.vendors.some((page) => vendorConfigured(status, page, codexStatus, copilotStatus));
+    return group.vendors.some((page) =>
+      vendorConfigured(status, page, codexStatus, copilotStatus, claudeCodeStatus));
   }
   return status ? Boolean(status.caps[group.key]) : false;
 }
@@ -360,10 +400,12 @@ export function categoryGroupStats(
   category: SettingsCategory,
   codexStatus?: CodexAgentStatus | null,
   copilotStatus?: CopilotAgentStatus | null,
+  claudeCodeStatus?: ClaudeCodeAgentStatus | null,
 ): { done: number; total: number } {
   return {
     done: category.groups
-      .filter((group) => groupConfigured(status, group, codexStatus, copilotStatus)).length,
+      .filter((group) =>
+        groupConfigured(status, group, codexStatus, copilotStatus, claudeCodeStatus)).length,
     total: category.groups.length,
   };
 }

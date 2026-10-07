@@ -11,11 +11,14 @@ import {
   setPreferredTranscriptionProvider,
 } from '../../transcript/provider';
 import { isTranscriptionProviderId } from '../../transcript/types';
+import { isAsrModelTier } from '../../../shared/asr-models';
 import { setAutoTranscribeIngest } from '../../transcript/provider';
 import { FieldRow, ON, VendorPane, WARN, type FieldCtx } from './settingsVendorPane';
 import { useCodexSettings } from './useCodexSettings';
+import { useClaudeCodeSettings } from './useClaudeCodeSettings';
 import type { CodexAgentStatus } from '../../../shared/codex-agent';
 import type { CopilotAgentStatus } from '../../../shared/copilot-agent';
+import type { ClaudeCodeAgentStatus } from '../../../shared/claude-code-agent';
 import { useCopilotSettings } from './useCopilotSettings';
 import { stageFieldValue } from './codexReasoning';
 import { SettingsVersionControl } from './SettingsVersionControl';
@@ -95,9 +98,9 @@ function syncTranscriptionPreferences(models: Record<string, string>): void {
 /** Keep the runtime ASR model tier in sync with the saved setting ('' → auto). */
 function syncLocalAsrModel(saved: string | undefined): void {
   try {
-    if (saved === 'tiny' || saved === 'base' || saved === 'small' || saved === 'medium' || saved === '') {
-      localStorage.setItem('cc.asrModel', saved ?? '');
-    }
+    // Validate against the catalog, never a hand-written list: a tier missing
+    // here is discarded silently and the previous selection stays in force.
+    if (isAsrModelTier(saved ?? '')) localStorage.setItem('cc.asrModel', saved ?? '');
   } catch {
     // Best-effort; the auto tier stays in effect.
   }
@@ -167,6 +170,7 @@ function useHover(): [boolean, { onMouseEnter: () => void; onMouseLeave: () => v
 function useTreeSelection(initialVendor?: string): {
   group: SettingsGroup; page: SettingsVendorPage;
   selectGroup: (key: string) => void; selectVendor: (key: string) => void;
+  openPage: (vendorKey: string) => void;
 } {
   const seeded = seedSelection(initialVendor);
   const [groupKey, setGroupKey] = useState<string>(seeded.group.key);
@@ -178,7 +182,13 @@ function useTreeSelection(initialVendor?: string): {
     setGroupKey(key);
     setVendorKey(nextGroup.vendors[0].key);
   };
-  return { group, page, selectGroup, selectVendor: setVendorKey };
+  // Jump to a page in any group, resolved the same way as initialVendor.
+  const openPage = (vendorKey: string): void => {
+    const target = seedSelection(vendorKey);
+    setGroupKey(target.group.key);
+    setVendorKey(target.vendor.key);
+  };
+  return { group, page, selectGroup, selectVendor: setVendorKey, openPage };
 }
 
 /** Open on a specific vendor page when the caller routed here (e.g. the chat's missing-model-pack button). */
@@ -211,6 +221,7 @@ function useFieldContext(
   reveal: boolean,
   refreshStatus: () => Promise<void>,
   copilotEnabled: boolean,
+  openPage: (route: string) => void,
 ): FieldCtx {
   const [modelOptions, setModelOptions] = useState<Record<string, readonly string[]>>({});
   const [autoClearedEffort, setAutoClearedEffort] = useState<string | null>(null);
@@ -219,6 +230,7 @@ function useFieldContext(
     modelValue(status, 'CODEX_REASONING_EFFORT'),
   );
   const copilot = useCopilotSettings(copilotEnabled);
+  const claudeCode = useClaudeCodeSettings(modelValue(status, 'CLAUDE_CODE_MODEL'));
   const onStage = (field: SettingsField, raw: string): void => {
     const staged = stageFieldValue(values, field, raw, status, codex.models, autoClearedEffort);
     setValues(staged.values);
@@ -230,7 +242,7 @@ function useFieldContext(
     }
   }, [values]);
   const onToggleClear = (field: SettingsField): void => {
-    if (field.name === 'CODEX_MODEL') {
+    if (field.name === 'CODEX_MODEL' || field.name === 'CLAUDE_CODE_MODEL') {
       onStage(field, values[field.name] === '' ? modelValue(status, field.name) : '');
       return;
     }
@@ -239,7 +251,8 @@ function useFieldContext(
       : { ...previous, [field.name]: '' });
   };
   return {
-    status, values, reveal, onStage, onToggleClear, modelOptions, codex, copilot, refreshStatus,
+    status, values, reveal, onStage, onToggleClear, modelOptions, codex, copilot, claudeCode,
+    refreshStatus, openPage,
     onModelsDiscovered: (name, models) => {
       setModelOptions((previous) => ({ ...previous, [name]: [...new Set(models)] }));
     },
@@ -255,7 +268,7 @@ export function SettingsDialog({ onClose, initialVendor }: { onClose: () => void
   );
   const { status, setStatus, loadError } = useKeyStatus();
   const [values, setValues] = useState<Values>({});
-  const { group, page, selectGroup, selectVendor } = useTreeSelection(initialVendor);
+  const { group, page, selectGroup, selectVendor, openPage } = useTreeSelection(initialVendor);
   const [reveal, setReveal] = useState(false);
   const refreshStatus = async (): Promise<void> => {
     try {
@@ -268,7 +281,7 @@ export function SettingsDialog({ onClose, initialVendor }: { onClose: () => void
     }
   };
   const ctx = useFieldContext(status, values, setValues, reveal, refreshStatus,
-    page.connection === 'copilot');
+    page.connection === 'copilot', openPage);
   useEffect(() => {
     if (!status?.models) return;
     syncTranscriptionPreferences(status.models);
@@ -291,6 +304,7 @@ export function SettingsDialog({ onClose, initialVendor }: { onClose: () => void
 
   const codexStatus = ctx.codex.status;
   const copilotStatus = ctx.copilot.status;
+  const claudeCodeStatus = ctx.claudeCode.status;
 
   const shownError = error ?? loadError;
   const message = shownError ? { text: shownError, color: WARN }
@@ -317,6 +331,7 @@ export function SettingsDialog({ onClose, initialVendor }: { onClose: () => void
         </header>
         <div style={bodyRow}>
           <CapabilityTree status={status} codexStatus={codexStatus} copilotStatus={copilotStatus}
+            claudeCodeStatus={claudeCodeStatus}
             activeGroup={group.key} onSelect={selectGroup} />
           <VendorList group={group} activeVendor={page.key} onSelectVendor={selectVendor} ctx={ctx} />
           <VendorPane page={page} hint={group.hint} ctx={ctx} />
@@ -330,9 +345,12 @@ export function SettingsDialog({ onClose, initialVendor }: { onClose: () => void
 
 // ── Left column (categories can be folded → capabilities can be selected) ──────────────────────────────────────
 
-function CapabilityTree({ status, codexStatus, copilotStatus, activeGroup, onSelect }: {
+function CapabilityTree({
+  status, codexStatus, copilotStatus, claudeCodeStatus, activeGroup, onSelect,
+}: {
   status: KeyStatusResponse | null; codexStatus: CodexAgentStatus | null;
   copilotStatus: CopilotAgentStatus | null;
+  claudeCodeStatus: ClaudeCodeAgentStatus | null;
   activeGroup: string; onSelect: (key: string) => void;
 }) {
   const t = useT();
@@ -348,7 +366,7 @@ function CapabilityTree({ status, codexStatus, copilotStatus, activeGroup, onSel
       <div style={treeScroll}>
         {SETTINGS_CATEGORIES.map((cat) => (
           <TreeCategory key={cat.key} category={cat} status={status} codexStatus={codexStatus}
-            copilotStatus={copilotStatus}
+            copilotStatus={copilotStatus} claudeCodeStatus={claudeCodeStatus}
             open={!collapsed.has(cat.key)} activeGroup={activeGroup}
             onToggle={() => toggle(cat.key)} onSelect={onSelect} />
         ))}
@@ -363,12 +381,15 @@ function CapabilityTree({ status, codexStatus, copilotStatus, activeGroup, onSel
 interface TreeCategoryProps {
   category: SettingsCategory; status: KeyStatusResponse | null; codexStatus: CodexAgentStatus | null;
   copilotStatus: CopilotAgentStatus | null;
+  claudeCodeStatus: ClaudeCodeAgentStatus | null;
   open: boolean; activeGroup: string; onToggle: () => void; onSelect: (key: string) => void;
 }
 
-function TreeCategory({ category, status, codexStatus, copilotStatus, open, activeGroup, onToggle, onSelect }: TreeCategoryProps) {
+function TreeCategory({
+  category, status, codexStatus, copilotStatus, claudeCodeStatus, open, activeGroup, onToggle, onSelect,
+}: TreeCategoryProps) {
   const t = useT();
-  const { done, total } = categoryGroupStats(status, category, codexStatus, copilotStatus);
+  const { done, total } = categoryGroupStats(status, category, codexStatus, copilotStatus, claudeCodeStatus);
   return (
     <div>
       <button type="button" onClick={onToggle} title={open ? t('收起') : t('展开')} style={catRow}>
@@ -382,7 +403,8 @@ function TreeCategory({ category, status, codexStatus, copilotStatus, open, acti
         </span>
       </button>
       {open && category.groups.map((g) => (
-        <GroupRow key={g.key} title={g.title} on={groupConfigured(status, g, codexStatus, copilotStatus)}
+        <GroupRow key={g.key} title={g.title}
+          on={groupConfigured(status, g, codexStatus, copilotStatus, claudeCodeStatus)}
           active={g.key === activeGroup} onSelect={() => onSelect(g.key)} />
       ))}
     </div>
@@ -412,7 +434,8 @@ function VendorList({ group, activeVendor, onSelectVendor, ctx }: {
     <div style={vendorCol}>
       {group.route && <div style={routeBox}><FieldRow field={group.route} ctx={ctx} /></div>}
       {group.vendors.map((p) => (
-        <VendorRow key={p.key} page={p} on={vendorConfigured(ctx.status, p, ctx.codex.status, ctx.copilot.status)}
+        <VendorRow key={p.key} page={p}
+          on={vendorConfigured(ctx.status, p, ctx.codex.status, ctx.copilot.status, ctx.claudeCode.status)}
           active={p.key === activeVendor} onSelect={() => onSelectVendor(p.key)} />
       ))}
     </div>

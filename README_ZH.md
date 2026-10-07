@@ -197,6 +197,7 @@ OpenChatCut 是 **开源 ChatCut 替代方案**：把 **对话式 Agent** 和 **
 | AI 生成 | 图片、视频、语音、音乐和音效任务，支持进度追踪 |
 | 素材 | 上传、文件夹、在线图片/视频/音频检索、Firecrawl 视觉素材兜底 |
 | 导出 | MP4、音频、字幕、FCPXML、工程导入导出、导出历史、硬件感知的 H.264 加速和资源感知的导出排队 |
+| 发布 | Agent 通过 Upload-Post 把成片发布到 TikTok、Instagram、YouTube、LinkedIn、Facebook、X、Threads、Pinterest、Bluesky，先预览、确认后才上传 |
 | Agent | 内置对话 Agent、技能系统、提案式编辑、外部 Streamable HTTP MCP |
 
 ---
@@ -258,6 +259,8 @@ OpenChatCut 是 **开源 ChatCut 替代方案**：把 **对话式 Agent** 和 **
 
 需要 Node.js 24.x 和 npm。`package.json` 会约束支持的 Node.js 范围，`.nvmrc` 可供 Node 版本管理器直接选择对应主版本。
 
+在 Linux x64 上，`npm install` 还会从 NuGet 下载 ONNX Runtime 可选的 CUDA 组件（数百 MB）。只需 CPU 推理时，可改用 `ONNXRUNTIME_NODE_INSTALL=skip npm install`。
+
 ```bash
 git clone https://github.com/0xsline/OpenChatCut.git
 cd OpenChatCut
@@ -271,6 +274,8 @@ npm run dev
 ```text
 http://localhost:5199
 ```
+
+编辑器需要浏览器的[安全上下文](https://developer.mozilla.org/zh-CN/docs/Web/Security/Defenses/Secure_Contexts)：请在运行 OpenChatCut 的电脑上通过 `http://localhost` 或 `http://127.0.0.1` 访问，或通过 HTTPS 提供服务。从其他设备以普通 HTTP 访问（局域网 IP 或反向代理）时，浏览器会禁用 Web Crypto、WebCodecs 和剪贴板，工程列表仍可打开，但编辑器会显示这一要求而不会进入。
 
 `.env.local` 中只需填写你实际使用的模型或素材服务。没有配置的第三方能力会明确提示缺少对应 Key，不影响本地时间线编辑、内置素材和已配置的其他能力。
 
@@ -450,7 +455,7 @@ OPENCHATCUT_EDITOR_URL=https://your-editor.example.com
 |---|---|
 | 前端 | React 19、TypeScript 6、Vite 8 |
 | 编辑核心 | 不可变时间线状态、命令层、提案式应用 |
-| Agent | Vercel AI SDK 7（Anthropic、OpenAI、Gemini、Kimi、Qwen、GLM、DeepSeek、MiniMax、小米 MiMo、Mistral、xAI Grok（API Key 或 SuperGrok/X Premium+ 订阅登录）、OpenRouter、OrcaRouter、OFox 与兼容接口）、Agent Skills、MCP SDK |
+| Agent | Vercel AI SDK 7（Anthropic、OpenAI、Gemini、Kimi、Qwen、GLM、DeepSeek、MiniMax、小米 MiMo、Mistral、xAI Grok（API Key 或 SuperGrok/X Premium+ 订阅登录）、OpenRouter、OrcaRouter、OFox、Requesty、Cheaper Inference 与兼容接口）、Agent Skills、MCP SDK |
 | 预览与视觉 | Remotion Player、WebGL / GLSL |
 | 服务端 | Vite / Electron 双宿主插件、服务端密钥仓 |
 | 持久化 | `~/.openchatcut` 下的本机共享工程库、IndexedDB 缓存、可配置本地素材目录、可选 Cloudflare R2 |
@@ -496,6 +501,12 @@ OPENCHATCUT_EDITOR_URL=https://your-editor.example.com
 
 ---
 
+### Fal.ai 图像与视频生成
+
+Fal.ai 是可选的生成服务，提供明确的图像与视频模型目录。
+在 **设置 → AI 生成 → 生图或生视频 → Fal.ai** 中配置。
+支持的模型、服务端密钥配置、免费验证和扩展方式见 [Fal.ai 使用指南](FAL.md)。
+
 ## 开发与验证
 
 ```bash
@@ -531,6 +542,8 @@ OpenChatCut 基于以下核心项目与规范构建：
 | [Model Context Protocol](https://modelcontextprotocol.io/) | Codex、Claude Code 等外部 Agent 访问工程与时间线工具的协议基础。 |
 | [Vercel AI SDK](https://ai-sdk.dev/) | 内置 Agent 的多厂商模型流式响应与工具调用基础。 |
 | [tt-a1i/archify](https://github.com/tt-a1i/archify) | README 运行时架构图的定义、校验与 SVG 生成工具。 |
+
+剪映 / CapCut 草稿导出由 [capcut-cli](https://github.com/renezander030/capcut-cli) 提供支持。
 
 这里列出的是项目的主要技术基础，不替代各依赖、字体和内置二进制随附的许可证。完整 JavaScript 依赖版本见 `package-lock.json`，字体授权见 [`assets/fonts/LICENSES.md`](assets/fonts/LICENSES.md)。
 
