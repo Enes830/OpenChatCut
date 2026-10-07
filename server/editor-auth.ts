@@ -76,6 +76,7 @@ function requestEditorOrigin(req: IncomingMessage): string | null {
   try {
     const actual = new URL(`${protocol}//${host}`);
     if (expected) return actual.origin === expected ? expected : null;
+    if (process.env.OPENCHATCUT_ALLOW_REMOTE_HOSTS === '1') return actual.origin;
     return LOCAL_EDITOR_HOSTS[actual.hostname.toLowerCase()] === true ? actual.origin : null;
   } catch {
     return null;
@@ -83,7 +84,8 @@ function requestEditorOrigin(req: IncomingMessage): string | null {
 }
 
 export function trustedEditorRequest(req: IncomingMessage, requireOrigin: boolean): boolean {
-  if (!isLoopbackAddress(req.socket.remoteAddress)) return false;
+  const allowRemote = process.env.OPENCHATCUT_ALLOW_REMOTE_HOSTS === '1' || process.env.OPENCHATCUT_EDITOR_URL !== undefined;
+  if (!allowRemote && !isLoopbackAddress(req.socket.remoteAddress)) return false;
   const expected = requestEditorOrigin(req);
   if (!expected) return false;
   const origin = headerValue(req, 'origin');

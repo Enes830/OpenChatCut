@@ -28,13 +28,28 @@ export function projectStoreAuthDir(profile: RuntimeProfile = runtimeProfile()):
   return profile.authDir;
 }
 
+function configuredHostName(): string | null {
+  const configured = process.env.OPENCHATCUT_EDITOR_URL?.trim();
+  if (!configured) return null;
+  try {
+    const url = new URL(configured);
+    return url.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 function loopbackHost(value: string | undefined): value is string {
   if (!value) return false;
   const lower = value.toLowerCase();
   const host = lower.startsWith('[')
     ? lower.slice(1, lower.indexOf(']'))
     : lower.split(':', 1)[0];
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+  const configuredHost = configuredHostName();
+  if (configuredHost && host === configuredHost) return true;
+  if (process.env.OPENCHATCUT_ALLOW_REMOTE_HOSTS === '1') return true;
+  return false;
 }
 
 function header(req: IncomingMessage, name: string): string | null {
@@ -44,7 +59,9 @@ function header(req: IncomingMessage, name: string): string | null {
 }
 
 function trustedLoopback(req: IncomingMessage): boolean {
-  return isLoopbackAddress(req.socket.remoteAddress) && loopbackHost(req.headers.host);
+  const allowRemote = process.env.OPENCHATCUT_ALLOW_REMOTE_HOSTS === '1' || process.env.OPENCHATCUT_EDITOR_URL !== undefined;
+  const validAddress = allowRemote || isLoopbackAddress(req.socket.remoteAddress);
+  return validAddress && loopbackHost(req.headers.host);
 }
 
 function sameOrigin(req: IncomingMessage): boolean {

@@ -76,82 +76,89 @@ const HTTP_OPERATIONS = {
 };
 
 export function projectStorePlugin(options: { http?: boolean } = {}): Plugin {
-  return {
-    name: 'openchatcut-project-store',
-    configureServer(server) {
-      if (options.http === false) return;
-      server.middlewares.use('/api/project-store', async (req, res) => {
-        // Full-text search: read-only, no session needed (loopback same-origin).
-        if (req.method === 'GET' && req.url?.startsWith('/search')) {
-          if (!projectStoreReadAuthorized(req) && !projectStoreHttpAuthorized(req)) {
-            sendProjectStoreJson(res, 403, { error: 'invalid project store session' });
-            return;
-          }
-          try {
-            const url = new URL(req.url ?? '', 'http://localhost');
-            const query = url.searchParams.get('q')?.trim() ?? '';
-            const project = url.searchParams.get('project')?.trim() || undefined;
-            const limit = Number(url.searchParams.get('limit') ?? 20);
-            if (!query) {
-              sendProjectStoreJson(res, 400, { error: 'q is required' });
-              return;
-            }
-            sendProjectStoreJson(res, 200, { hits: searchContent(query, { projectId: project, limit }) });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            sendProjectStoreJson(res, 400, { error: message });
-          }
-          return;
-        }
-        // Hybrid search: text (FTS5) + visual (sqlite-vec) fused by RRF.
-        if (req.method === 'POST' && req.url === '/hybrid-search') {
-          if (!projectStoreReadAuthorized(req) && !projectStoreHttpAuthorized(req)) {
-            sendProjectStoreJson(res, 403, { error: 'invalid project store session' });
-            return;
-          }
-          try {
-            const body = await readBody(req);
-            const query = typeof body.query === 'string' ? body.query.trim() : '';
-            const queryVector = Array.isArray(body.queryVector)
-              ? (body.queryVector as unknown[]).filter((v): v is number => typeof v === 'number')
-              : undefined;
-            const projectId = typeof body.projectId === 'string' ? body.projectId : undefined;
-            const limit = typeof body.limit === 'number' ? body.limit : 20;
-            if (!query) {
-              sendProjectStoreJson(res, 400, { error: 'query is required' });
-              return;
-            }
-            sendProjectStoreJson(res, 200, {
-              hits: hybridSearch(query, queryVector, { projectId, limit }),
-            });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            sendProjectStoreJson(res, 400, { error: message });
-          }
-          return;
-        }
-        const readOnly = req.method === 'GET';
-        const authorized = readOnly
-          ? projectStoreReadAuthorized(req) || projectStoreHttpAuthorized(req)
-          : projectStoreHttpAuthorized(req);
-        if (!authorized) {
+  const setupMiddleware = (server: any) => {
+    if (options.http === false) return;
+    server.middlewares.use('/api/project-store', async (req: any, res: any) => {
+      // Full-text search: read-only, no session needed (loopback same-origin).
+      if (req.method === 'GET' && req.url?.startsWith('/search')) {
+        if (!projectStoreReadAuthorized(req) && !projectStoreHttpAuthorized(req)) {
           sendProjectStoreJson(res, 403, { error: 'invalid project store session' });
           return;
         }
         try {
-          await handleProjectStoreRequest(req, res, HTTP_OPERATIONS);
+          const url = new URL(req.url ?? '', 'http://localhost');
+          const query = url.searchParams.get('q')?.trim() ?? '';
+          const project = url.searchParams.get('project')?.trim() || undefined;
+          const limit = Number(url.searchParams.get('limit') ?? 20);
+          if (!query) {
+            sendProjectStoreJson(res, 400, { error: 'q is required' });
+            return;
+          }
+          sendProjectStoreJson(res, 200, { hits: searchContent(query, { projectId: project, limit }) });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          server.config.logger.error(`[project-store] ${message}`);
-          if (!res.headersSent) {
-            const clientMessage = scrubInternalPaths(message);
-            const body = error instanceof AgentSessionClearBlockedError
-              ? { error: clientMessage, code: error.code, run: error.run }
-              : { error: clientMessage };
-            sendProjectStoreJson(res, 400, body);
-          }
+          sendProjectStoreJson(res, 400, { error: message });
         }
-      });
-    },
+        return;
+      }
+      // Hybrid search: text (FTS5) + visual (sqlite-vec) fused by RRF.
+      if (req.method === 'POST' && req.url === '/hybrid-search') {
+        if (!projectStoreReadAuthorized(req) && !projectStoreHttpAuthorized(req)) {
+          sendProjectStoreJson(res, 403, { error: 'invalid project store session' });
+          return;
+        }
+        try {
+          const body = await readBody(req);
+          const query = typeof body.query === 'string' ? body.query.trim() : '';
+          const queryVector = Array.isArray(body.queryVector)
+            ? (body.queryVector as unknown[]).filter((v): v is number => typeof v === 'number')
+            : undefined;
+          const projectId = typeof body.projectId === 'string' ? body.projectId : undefined;
+          const limit = typeof body.limit === 'number' ? body.limit : 20;
+          if (!query) {
+            sendProjectStoreJson(res, 400, { error: 'query is required' });
+            return;
+          }
+          sendProjectStoreJson(res, 200, {
+            hits: hybridSearch(query, queryVector, { projectId, limit }),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendProjectStoreJson(res, 400, { error: message });
+        }
+        return;
+      }
+      const readOnly = req.method === 'GET';
+      const authorized = readOnly
+        ? projectStoreReadAuthorized(req) || projectStoreHttpAuthorized(req)
+        : projectStoreHttpAuthorized(req);
+      if (!authorized) {
+        sendProjectStoreJson(res, 403, { error: 'invalid project store session' });
+        return;
+      }
+      try {
+        await handleProjectStoreRequest(req, res, HTTP_OPERATIONS);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (server.config?.logger?.error) {
+          server.config.logger.error(`[project-store] ${message}`);
+        } else {
+          console.error(`[project-store] ${message}`);
+        }
+        if (!res.headersSent) {
+          const clientMessage = scrubInternalPaths(message);
+          const body = error instanceof AgentSessionClearBlockedError
+            ? { error: clientMessage, code: error.code, run: error.run }
+            : { error: clientMessage };
+          sendProjectStoreJson(res, 400, body);
+        }
+      }
+    });
+  };
+
+  return {
+    name: 'openchatcut-project-store',
+    configureServer: setupMiddleware,
+    configurePreviewServer: setupMiddleware,
   };
 }

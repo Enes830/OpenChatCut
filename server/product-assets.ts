@@ -112,45 +112,48 @@ export function copyProductAssetsTo(destRoot: string): void {
  * `public/` only holds user runtime files (`media/uploads`).
  */
 export function productAssetsPlugin(): Plugin {
+  const setupMiddleware = (server: any) => {
+    server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+      try {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          next();
+          return;
+        }
+        const url = req.url ?? '';
+        // Leave Vite internals / API / user uploads alone
+        if (
+          url.startsWith('/@')
+          || url.startsWith('/node_modules')
+          || url.startsWith('/src/')
+          || url.startsWith('/media/uploads')
+          || url.startsWith('/api')
+          || url.startsWith('/llm')
+          || url.startsWith('/assemblyai')
+          || url.startsWith('/e2b')
+          || url.startsWith('/upload')
+          || url.startsWith('/export')
+          || url.startsWith('/generate')
+          || url.startsWith('/jobs')
+        ) {
+          next();
+          return;
+        }
+        const file = resolveProductAsset(url);
+        if (!file) {
+          next();
+          return;
+        }
+        await sendProductAsset(req, res, file);
+      } catch {
+        next();
+      }
+    });
+  };
+
   return {
     name: 'openchatcut-product-assets',
-    configureServer(server) {
-      server.middlewares.use(async (req, res, next) => {
-        try {
-          if (req.method !== 'GET' && req.method !== 'HEAD') {
-            next();
-            return;
-          }
-          const url = req.url ?? '';
-          // Leave Vite internals / API / user uploads alone
-          if (
-            url.startsWith('/@')
-            || url.startsWith('/node_modules')
-            || url.startsWith('/src/')
-            || url.startsWith('/media/uploads')
-            || url.startsWith('/api')
-            || url.startsWith('/llm')
-            || url.startsWith('/assemblyai')
-            || url.startsWith('/e2b')
-            || url.startsWith('/upload')
-            || url.startsWith('/export')
-            || url.startsWith('/generate')
-            || url.startsWith('/jobs')
-          ) {
-            next();
-            return;
-          }
-          const file = resolveProductAsset(url);
-          if (!file) {
-            next();
-            return;
-          }
-          await sendProductAsset(req, res, file);
-        } catch {
-          next();
-        }
-      });
-    },
+    configureServer: setupMiddleware,
+    configurePreviewServer: setupMiddleware,
     closeBundle() {
       const dist = resolve(process.cwd(), 'dist');
       if (!existsSync(dist)) return;

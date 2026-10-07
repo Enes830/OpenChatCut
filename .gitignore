@@ -39,6 +39,7 @@ test-results/
 /*.ccproj.json
 /*.fcpxml
 *.mov
+*.mp4
 
 # secrets
 .env

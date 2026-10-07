@@ -149,6 +149,9 @@ export default defineConfig(({ mode }) => {
     // and are served/copied by productAssetsPlugin (URLs unchanged: /fonts, /thumbnails, …).
     publicDir: 'public',
     plugins: [serveOrtWasmLoader(), react(), productAssetsPlugin(), excludeUserMediaFromBuild(), ...serverPlugins()],
+    preview: {
+      allowedHosts: true,
+    },
     server: {
       port: 5199,
       strictPort: true,
