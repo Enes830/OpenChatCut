@@ -10,5 +10,8 @@ export function uploadPlugin(): Plugin {
     configureServer(server) {
       registerUploadRoutes(server);
     },
+    configurePreviewServer(server) {
+      registerUploadRoutes(server as unknown as Parameters<typeof registerUploadRoutes>[0]);
+    },
   };
 }
