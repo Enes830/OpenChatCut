@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, rename, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ViteDevServer } from 'vite';
+import type { PreviewServer, ViteDevServer } from 'vite';
 import { resolveH264TargetBitrate } from '../media-acceleration.ts';
 import { uploadDir } from '../media-dir.ts';
 import {
@@ -53,7 +53,7 @@ function isExportCapabilitiesPath(url: string | undefined): boolean {
   return path === '/capabilities' || path === '/export/capabilities';
 }
 
-export function registerExportJobRoute(server: ViteDevServer): void {
+export function registerExportJobRoute(server: ViteDevServer | PreviewServer): void {
   server.middlewares.use('/export/job', async (req, res) => {
     const path = (req.url ?? '/').split('?')[0];
     const segments = path.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
@@ -224,7 +224,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
   });
 }
 
-export function registerExportRoute(server: ViteDevServer): void {
+export function registerExportRoute(server: ViteDevServer | PreviewServer): void {
   server.middlewares.use('/export', async (req, res) => {
     if (req.method === 'GET' && isExportCapabilitiesPath(req.url)) {
       try {

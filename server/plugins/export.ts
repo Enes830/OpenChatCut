@@ -38,29 +38,32 @@ export function exportPlugin(): Plugin {
     if (file) await unlinkWithRetry(file);
   });
   registerGenerationRetentionGuard('server-export', retainUnresolvedExportRecovery);
+  const setupServer = (server: Parameters<typeof registerExportJobRoute>[0]) => {
+    setUploadsDirProvider(uploadDir);
+    const cleanStaleExports = () => cleanupStaleExportFiles(uploadDir(), {
+        shouldRetain: retainUnresolvedExportRecovery,
+        onError: (path, error) => server.config.logger.warn(
+          `[export] failed to clean stale artifact ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      }).then((removed) => {
+        if (removed > 0) server.config.logger.info(`[export] removed ${removed} stale export artifact(s)`);
+      }).catch((error) => {
+        server.config.logger.warn(`[export] stale artifact scan failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    void cleanStaleExports();
+    const cleanupTimer = setInterval(() => { void cleanStaleExports(); }, EXPORT_JOB_RETENTION_MS);
+    cleanupTimer.unref?.();
+    server.httpServer?.once('close', () => clearInterval(cleanupTimer));
+
+    registerRenderStillRoute(server);
+    registerRenderClipRoute(server);
+    registerExportJobRoute(server);
+    registerExportRoute(server);
+  };
+
   return {
     name: 'openchatcut-export',
-    configureServer(server) {
-      setUploadsDirProvider(uploadDir);
-      const cleanStaleExports = () => cleanupStaleExportFiles(uploadDir(), {
-          shouldRetain: retainUnresolvedExportRecovery,
-          onError: (path, error) => server.config.logger.warn(
-            `[export] failed to clean stale artifact ${path}: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-        }).then((removed) => {
-          if (removed > 0) server.config.logger.info(`[export] removed ${removed} stale export artifact(s)`);
-        }).catch((error) => {
-          server.config.logger.warn(`[export] stale artifact scan failed: ${error instanceof Error ? error.message : String(error)}`);
-        });
-      void cleanStaleExports();
-      const cleanupTimer = setInterval(() => { void cleanStaleExports(); }, EXPORT_JOB_RETENTION_MS);
-      cleanupTimer.unref?.();
-      server.httpServer?.once('close', () => clearInterval(cleanupTimer));
-
-      registerRenderStillRoute(server);
-      registerRenderClipRoute(server);
-      registerExportJobRoute(server);
-      registerExportRoute(server);
-    },
+    configureServer: setupServer,
+    configurePreviewServer: setupServer,
   };
 }

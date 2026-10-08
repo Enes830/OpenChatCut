@@ -207,28 +207,31 @@ export async function handleExportDestinationPut(
 }
 
 export function exportDestinationPlugin(): Plugin {
+  const setupServer = (server: any) => {
+    server.middlewares.use('/api/export-destinations', async (req: IncomingMessage, res: ServerResponse) => {
+      try {
+        await handleExportDestinationPut(req, res);
+      } catch (error) {
+        if (res.writableEnded) return;
+        const expected = error instanceof ExportDestinationError;
+        if (!expected) server.config?.logger?.error?.(`[export-destination] ${error instanceof Error ? error.message : String(error)}`);
+        const message = expected ? error.message : 'failed to write export file';
+        const failure = createExportFailure({
+          stage: 'destination',
+          code: expected ? error.code : 'export_destination_failed',
+          retryable: expected ? error.retryable : true,
+          cleanupStatus: expected ? error.cleanupStatus : 'not-required',
+          targetPath: expected ? error.targetPath : null,
+          message,
+        });
+        sendJson(res, expected ? error.status : 500, { error: message, failure });
+      }
+    });
+  };
+
   return {
     name: 'openchatcut-export-destination',
-    configureServer(server) {
-      server.middlewares.use('/api/export-destinations', async (req, res) => {
-        try {
-          await handleExportDestinationPut(req, res);
-        } catch (error) {
-          if (res.writableEnded) return;
-          const expected = error instanceof ExportDestinationError;
-          if (!expected) server.config.logger.error(`[export-destination] ${error instanceof Error ? error.message : String(error)}`);
-          const message = expected ? error.message : 'failed to write export file';
-          const failure = createExportFailure({
-            stage: 'destination',
-            code: expected ? error.code : 'export_destination_failed',
-            retryable: expected ? error.retryable : true,
-            cleanupStatus: expected ? error.cleanupStatus : 'not-required',
-            targetPath: expected ? error.targetPath : null,
-            message,
-          });
-          sendJson(res, expected ? error.status : 500, { error: message, failure });
-        }
-      });
-    },
+    configureServer: setupServer,
+    configurePreviewServer: setupServer,
   };
 }

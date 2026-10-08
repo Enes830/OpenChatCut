@@ -61,7 +61,7 @@ import { systemFontsPlugin } from './system-fonts.ts';
 
 export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plugin[] {
   installSystemProxy();
-  return [
+  const plugins: Plugin[] = [
     requestShapeGatePlugin(),
     systemFontsPlugin(),
     crossOriginIsolationPlugin(),
@@ -368,4 +368,16 @@ export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plu
       },
     }),
   ];
+
+  return plugins.map((plugin: Plugin) => {
+    if (plugin.configureServer && !plugin.configurePreviewServer) {
+      return {
+        ...plugin,
+        configurePreviewServer(server: any) {
+          return (plugin.configureServer as (s: any) => any)(server);
+        },
+      };
+    }
+    return plugin;
+  });
 }

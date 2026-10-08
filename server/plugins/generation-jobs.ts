@@ -115,46 +115,49 @@ function report(job: GenerationJob, action: ProgressRequest['action']) {
 const wait = (milliseconds: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 
 export function generationProgressPlugin(): Plugin {
+  const setupServer = (server: any) => {
+    void initializeGenerationJobs().catch((error) => {
+      server.config?.logger?.error?.(`[generate:progress] failed to restore operations: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    server.middlewares.use('/generate/progress', async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed — use POST' }); return; }
+      try {
+        await initializeGenerationJobs();
+        await resumeRestoredJobs();
+        const input = await readJson(req);
+        if (input.target !== 'generation') throw new Error('target must be generation');
+        if (!input.action || !['params', 'status', 'wait', 'resume'].includes(input.action)) throw new Error('action must be params, status, wait, or resume');
+        const jobIds = parseJobIds(input.jobIds);
+        if (!jobIds.length) throw new Error('jobIds is required');
+        const timeoutSeconds = input.timeoutSeconds ?? 90;
+        if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0 || timeoutSeconds > 3600) throw new Error('timeoutSeconds must be between 0 and 3600');
+
+        if (input.action === 'wait') {
+          const deadline = Date.now() + timeoutSeconds * 1000;
+          while (Date.now() < deadline) {
+            const known = jobIds.map((id) => jobs.get(id));
+            if (known.every((job) => !job || TERMINAL.has(job.status))) break;
+            await wait(250);
+          }
+        }
+        if (input.action === 'resume') await Promise.all(jobIds.map((id) => resumeGenerationJobDownload(id)));
+
+        const reports = jobIds.map((id) => {
+          const job = jobs.get(id);
+          return job ? report(job, input.action) : { jobId: id, operationId: id, status: 'not_found', error: 'generation job not found' };
+        });
+        sendJson(res, 200, { target: 'generation', action: input.action, reports });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        server.config?.logger?.error?.(`[generate:progress] ${message}`);
+        sendJson(res, 400, { error: message });
+      }
+    });
+  };
+
   return {
     name: 'openchatcut-generation-progress',
-    configureServer(server) {
-      void initializeGenerationJobs().catch((error) => {
-        server.config.logger.error(`[generate:progress] failed to restore operations: ${error instanceof Error ? error.message : String(error)}`);
-      });
-      server.middlewares.use('/generate/progress', async (req, res) => {
-        if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed — use POST' }); return; }
-        try {
-          await initializeGenerationJobs();
-          await resumeRestoredJobs();
-          const input = await readJson(req);
-          if (input.target !== 'generation') throw new Error('target must be generation');
-          if (!input.action || !['params', 'status', 'wait', 'resume'].includes(input.action)) throw new Error('action must be params, status, wait, or resume');
-          const jobIds = parseJobIds(input.jobIds);
-          if (!jobIds.length) throw new Error('jobIds is required');
-          const timeoutSeconds = input.timeoutSeconds ?? 90;
-          if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0 || timeoutSeconds > 3600) throw new Error('timeoutSeconds must be between 0 and 3600');
-
-          if (input.action === 'wait') {
-            const deadline = Date.now() + timeoutSeconds * 1000;
-            while (Date.now() < deadline) {
-              const known = jobIds.map((id) => jobs.get(id));
-              if (known.every((job) => !job || TERMINAL.has(job.status))) break;
-              await wait(250);
-            }
-          }
-          if (input.action === 'resume') await Promise.all(jobIds.map((id) => resumeGenerationJobDownload(id)));
-
-          const reports = jobIds.map((id) => {
-            const job = jobs.get(id);
-            return job ? report(job, input.action) : { jobId: id, operationId: id, status: 'not_found', error: 'generation job not found' };
-          });
-          sendJson(res, 200, { target: 'generation', action: input.action, reports });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          server.config.logger.error(`[generate:progress] ${message}`);
-          sendJson(res, 400, { error: message });
-        }
-      });
-    },
+    configureServer: setupServer,
+    configurePreviewServer: setupServer,
   };
 }

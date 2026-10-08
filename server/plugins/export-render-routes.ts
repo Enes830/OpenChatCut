@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, mkdir, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ViteDevServer } from 'vite';
+import type { PreviewServer, ViteDevServer } from 'vite';
 import { exportFailureFrom } from '../../src/export/exportFailure.ts';
 import { sanitizeFileName } from '../file-name.ts';
 import { formatFrameLabel, tileContactSheet } from '../frame-grid.ts';
@@ -27,7 +27,7 @@ import {
 const CLIP_EXT: Record<string, string> = { prores: 'mov', vp8: 'webm', vp9: 'webm', h264: 'mp4' };
 const CLIP_MIME: Record<string, string> = { mov: 'video/quicktime', webm: 'video/webm', mp4: 'video/mp4' };
 
-export function registerRenderStillRoute(server: ViteDevServer): void {
+export function registerRenderStillRoute(server: ViteDevServer | PreviewServer): void {
   // POST /render-still { state, frames:[n], grid?, fps? }
   //   → { frames: [{frame, base64}], gridBase64?, renderedBy: 'remotion' }
   // grid=true (default when ≥2 frames): one labeled contact-sheet JPEG for vision.
@@ -120,7 +120,7 @@ export function registerRenderStillRoute(server: ViteDevServer): void {
   });
 }
 
-export function registerRenderClipRoute(server: ViteDevServer): void {
+export function registerRenderClipRoute(server: ViteDevServer | PreviewServer): void {
   server.middlewares.use('/render-clip', async (req, res) => {
     if (req.method !== 'POST') { sendError(res, 405, 'method not allowed — use POST'); return; }
     let tmpOut: string | null = null;

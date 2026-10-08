@@ -128,24 +128,27 @@ export async function handleExternalAgentBridge(
 }
 
 export function externalAgentPlugin(): Plugin {
+  const setupServer = (server: any) => {
+    server.middlewares.use('/api/external-agent', (req: IncomingMessage, res: ServerResponse) => {
+      void handleExternalAgentBridge(req, res).catch((error) => {
+        if (!res.headersSent) sendBridgeJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      });
+    });
+    server.middlewares.use('/api/external-mcp/mcp', (req: IncomingMessage, res: ServerResponse) => {
+      if (!externalMcpAuthorized(req)) {
+        sendBridgeJson(res, 401, { error: 'invalid OpenChatCut MCP token' });
+        return;
+      }
+      void handleMcpRequest(req, res, requestBaseUrl(req)).catch((error) => {
+        server.config?.logger?.error?.(`[external-mcp] ${error instanceof Error ? error.message : String(error)}`);
+        if (!res.headersSent) sendBridgeJson(res, 500, { error: 'MCP request failed' });
+      });
+    });
+  };
+
   return {
     name: 'openchatcut-external-agent',
-    configureServer(server) {
-      server.middlewares.use('/api/external-agent', (req, res) => {
-        void handleExternalAgentBridge(req, res).catch((error) => {
-          if (!res.headersSent) sendBridgeJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
-        });
-      });
-      server.middlewares.use('/api/external-mcp/mcp', (req, res) => {
-        if (!externalMcpAuthorized(req)) {
-          sendBridgeJson(res, 401, { error: 'invalid OpenChatCut MCP token' });
-          return;
-        }
-        void handleMcpRequest(req, res, requestBaseUrl(req)).catch((error) => {
-          server.config.logger.error(`[external-mcp] ${error instanceof Error ? error.message : String(error)}`);
-          if (!res.headersSent) sendBridgeJson(res, 500, { error: 'MCP request failed' });
-        });
-      });
-    },
+    configureServer: setupServer,
+    configurePreviewServer: setupServer,
   };
 }
