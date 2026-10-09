@@ -14,6 +14,7 @@ test-results/
 /output/
 .vite/
 *.tsbuildinfo
+backups/
 
 # OS / editor / temporary files
 *.log

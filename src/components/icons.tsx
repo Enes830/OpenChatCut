@@ -165,3 +165,51 @@ export function OpenChatCutWordmark({ width = 126 }: { width?: number }) {
     </svg>
   );
 }
+
+/** Kashida brand logo: rendered via CSS mask so it adapts to currentColor across dark and light themes. */
+export function KashidaLogo({ size = 20, style }: { size?: number; style?: React.CSSProperties }) {
+  const width = Math.round(size * (250 / 154));
+  return (
+    <span
+      role="img"
+      aria-label="Kashida"
+      style={{
+        display: 'inline-block',
+        width,
+        height: size,
+        backgroundColor: 'currentColor',
+        WebkitMaskImage: 'url(/kashida-logo.png)',
+        maskImage: 'url(/kashida-logo.png)',
+        WebkitMaskSize: 'contain',
+        maskSize: 'contain',
+        WebkitMaskRepeat: 'no-repeat',
+        maskRepeat: 'no-repeat',
+        WebkitMaskPosition: 'center',
+        maskPosition: 'center',
+        flexShrink: 0,
+        ...style,
+      }}
+    />
+  );
+}
+
+/** Kashida wordmark for titlebar navbar. */
+export function KashidaWordmark({ style }: { style?: React.CSSProperties }) {
+  return (
+    <span
+      style={{
+        fontFamily: 'Geist, Inter, system-ui, -apple-system, sans-serif',
+        fontSize: 16,
+        fontWeight: 700,
+        letterSpacing: '-0.02em',
+        color: 'currentColor',
+        lineHeight: 1,
+        userSelect: 'none',
+        ...style,
+      }}
+    >
+      Kashida
+    </span>
+  );
+}
+

@@ -3,7 +3,7 @@ import type { ProjectMeta } from '../../persist/projectStoreCoordinators';
 import { theme } from '../../theme';
 import { useT } from '../../i18n/locale';
 import { DashboardHeaderLinks } from '../DashboardHeaderLinks';
-import { BrandMark, Icon, OpenChatCutWordmark } from '../icons';
+import { Icon, KashidaLogo, KashidaWordmark } from '../icons';
 import { bindAction } from '../../shortcuts/actionRegistry';
 // Opened on demand, so they load on demand — see dashboardDialogs.tsx.
 import {
@@ -60,8 +60,8 @@ export function DashboardTitlebarContent({ model }: { model: DashboardModel }) {
   const t = useT();
   return (
     <>
-      <BrandMark size={20} />
-      <OpenChatCutWordmark />
+      <KashidaLogo size={20} />
+      <KashidaWordmark />
       <span style={{ color: theme.textDim, fontSize: 13 }}>{t('· 我的工程')}</span>
       <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
         <DashboardHeaderLinks />
