@@ -52,10 +52,19 @@ applyLiveKeyStatus({ ATLASCLOUD_API_KEY: { configured: true } });
 const atlas = capabilitiesPrompt({ ...ALL_OFF, music: true });
 assert.ok(atlas.includes('Atlas Cloud(provider=atlas)'), 'Atlas key lights the Atlas music route');
 
-// AND-group: doubao needs both keys
-applyLiveKeyStatus({ DOUBAO_TTS_APP_ID: { configured: true } });
+// Doubao needs its API key: unconfigured status hides the vendor
+applyLiveKeyStatus({});
 const half = capabilitiesPrompt({ ...ALL_OFF, voice: true });
-assert.ok(!half.includes('Doubao(provider=doubao)'), 'AND-group (doubao needs both keys) not satisfied by one');
+assert.ok(!half.includes('Doubao(provider=doubao)'), 'doubao without API key stays hidden');
+
+// saved Doubao default speaker reaches the agent so it can be passed verbatim
+applyLiveKeyStatus({ DOUBAO_TTS_API_KEY: { configured: true }, DOUBAO_TTS_VOICE_ID: { configured: true } });
+applyLiveModels({ DOUBAO_TTS_VOICE_ID: 'S_5wulnA7i2' });
+const doubaoDefault = capabilitiesPrompt({ ...ALL_OFF, voice: true });
+assert.ok(doubaoDefault.includes('Doubao(provider=doubao)'), 'configured Doubao is selectable');
+assert.ok(doubaoDefault.includes('Doubao default speaker ID: S_5wulnA7i2'), 'saved speaker reaches the agent');
+applyLiveKeyStatus({});
+applyLiveModels({});
 
 // several vendors + NO user default → agent must ask before first use
 applyLiveKeyStatus({ KLING_API_KEY: { configured: true }, SEEDANCE_API_KEY: { configured: true } });
