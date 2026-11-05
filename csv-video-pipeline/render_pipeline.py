@@ -107,6 +107,8 @@ def main():
 
     workspace_uploads = PROJECT_ROOT / 'public' / 'media' / 'uploads'
     workspace_uploads.mkdir(parents=True, exist_ok=True)
+    data_uploads = Path(data_dir) / 'media' / 'uploads'
+    data_uploads.mkdir(parents=True, exist_ok=True)
     if profile_media_dir:
         Path(profile_media_dir).mkdir(parents=True, exist_ok=True)
 
@@ -143,13 +145,15 @@ def main():
 
         for cand in candidates:
             if cand and cand.exists():
-                target_ws = workspace_uploads / media_file
-                if cand.resolve() != target_ws.resolve():
-                    shutil.copyfile(cand, target_ws)
-                if profile_media_dir:
-                    target_pm = Path(profile_media_dir) / media_file
-                    if cand.resolve() != target_pm.resolve():
-                        shutil.copyfile(cand, target_pm)
+                targets = [
+                    workspace_uploads / media_file,
+                    data_uploads / media_file,
+                    (Path(profile_media_dir) / media_file) if profile_media_dir else None
+                ]
+                for target in targets:
+                    if target and cand.resolve() != target.resolve():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(cand, target)
                 break
 
         asset_id = f"asset_scene_{idx+1}_{uuid.uuid4().hex[:6]}"
