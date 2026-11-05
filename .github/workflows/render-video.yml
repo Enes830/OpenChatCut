@@ -37,11 +37,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install System Dependencies & Arabic Fonts
+      - name: Install Arabic Fonts
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-noto-core fonts-noto-extra || true
-          
           # Install custom Ghroob Arabic font from repository
           sudo mkdir -p /usr/local/share/fonts
           if [ -d "assets/fonts" ]; then
