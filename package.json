@@ -113,7 +113,7 @@
     "@ffprobe-installer/ffprobe": "^2.1.2",
     "@github/copilot-sdk": "1.0.11",
     "@huggingface/transformers": "^4.2.0",
-    "@mediapipe/tasks-vision": "^1.1.1",
+    "@mediapipe/tasks-vision": "1.1.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@remotion/bundler": "4.0.537",
     "@remotion/fonts": "4.0.537",
