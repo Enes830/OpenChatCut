@@ -99,28 +99,11 @@ def main():
     Path(data_dir).mkdir(parents=True, exist_ok=True)
     db_path = os.path.join(data_dir, 'project-store-v1.sqlite3')
 
-    # Ensure table and migration receipt exist
-    init_conn = sqlite3.connect(db_path)
-    init_conn.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);")
-    init_conn.execute("""
-        CREATE TABLE IF NOT EXISTS storage_migration_state (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            state TEXT NOT NULL CHECK (state = 'complete'),
-            receipt TEXT NOT NULL
-        );
-    """)
-    receipt_data = json.dumps({"phase": 2, "count": 0, "keys": {}, "sources": {}})
-    init_conn.execute("""
-        INSERT OR REPLACE INTO storage_migration_state (singleton, state, receipt)
-        VALUES (1, 'complete', ?);
-    """, (receipt_data,))
-    init_conn.commit()
-    init_conn.close()
-
-    receipt_file = Path(f"{db_path}.receipt.json")
-    if not receipt_file.exists():
-        with open(receipt_file, 'w', encoding='utf-8') as rf:
-            rf.write(receipt_data)
+    # If database doesn't exist yet, initialize it cleanly via occ
+    if not os.path.exists(db_path):
+        occ_cli = PROJECT_ROOT / 'cli' / 'occ.mjs'
+        init_cmd = ['node', str(occ_cli), '--data-dir', data_dir, 'project', 'new', 'Init']
+        subprocess.run(init_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     workspace_uploads = PROJECT_ROOT / 'public' / 'media' / 'uploads'
     workspace_uploads.mkdir(parents=True, exist_ok=True)
