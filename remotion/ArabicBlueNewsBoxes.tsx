@@ -7,15 +7,18 @@ export interface ArabicBlueNewsBoxesProps {
   line2Text?: string;
   line3Text?: string;
 
-  // Colors
+  // Colors & Blend Modes
   line1BgColor?: string;
   line1TextColor?: string;
+  line1BlendMode?: React.CSSProperties['mixBlendMode'];
   line2BgColor?: string;
   line2TextColor?: string;
+  line2BlendMode?: React.CSSProperties['mixBlendMode'];
   line3BgColor?: string;
   line3TextColor?: string;
+  line3BlendMode?: React.CSSProperties['mixBlendMode'];
 
-  // Sliding Accent Runner Tab (the animated white box on top of the blue banner)
+  // Sliding Accent Runner Tab (the blue box on top of the first banner)
   showAccentTab?: boolean;
   accentTabColor?: string;
   tabWidth?: number;
@@ -23,12 +26,17 @@ export interface ArabicBlueNewsBoxesProps {
   runnerSpeed?: number; // pixels moved per frame to the left
   tabStartDelay?: number; // frames after entrance delay before tab appears
 
+  // Background Gradient Overlay (Figma Rectangle 7)
+  showGradientOverlay?: boolean;
+
   // Typography
   fontFamily?: string;
   fontSize?: number;
+  fontWeight?: number | string;
 
   // Layout & Styling
   yOffsetPercent?: number; // 0 - 100 (% from top)
+  boxHeight?: number;
   borderRadius?: number;
   gap?: number;
   showShadow?: boolean;
@@ -57,34 +65,48 @@ export const ArabicBlueNewsBoxes: React.FC<{
 
   const props = item?.props || {};
 
-  // Content defaults from Sequence 03.mp4
-  const line1Text = props.line1Text ?? 'أحد رجال مبارك';
-  const line2Text = props.line2Text ?? 'ومن أشد المعادين';
-  const line3Text = props.line3Text ?? 'للرئيس الراحل محمد مرسي';
+  // Content defaults from customer's Figma:
+  // "أصول جديدة تدخل قائمة البيع وتحذيرات تفاقم أزمة الديون"
+  const line1Text = props.line1Text ?? 'أصول جديدة';
+  const line2Text = props.line2Text ?? 'تدخل قائمة البيع';
+  const line3Text = props.line3Text ?? 'وتحذيرات تفاقم أزمة الديون';
 
-  // Colors & Visual Styling
-  const line1BgColor = props.line1BgColor || '#0f83f3';
-  const line1TextColor = props.line1TextColor || '#ffffff';
-  const line2BgColor = props.line2BgColor || '#ffffff';
-  const line2TextColor = props.line2TextColor || '#111111';
-  const line3BgColor = props.line3BgColor || '#ffffff';
-  const line3TextColor = props.line3TextColor || '#111111';
+  // Colors & Blend Modes matching Figma exact specs:
+  // Line 1: White semi-transparent (screen blend mode), dark text
+  const line1BgColor = props.line1BgColor || 'rgba(255, 255, 255, 0.7)';
+  const line1TextColor = props.line1TextColor || '#000000';
+  const line1BlendMode = props.line1BlendMode || 'screen';
 
-  // Sliding Accent Runner Tab defaults
+  // Lines 2 & 3: Black 50% semi-transparent (multiply blend mode), white text
+  const line2BgColor = props.line2BgColor || 'rgba(0, 0, 0, 0.5)';
+  const line2TextColor = props.line2TextColor || '#ffffff';
+  const line2BlendMode = props.line2BlendMode || 'multiply';
+
+  const line3BgColor = props.line3BgColor || 'rgba(0, 0, 0, 0.5)';
+  const line3TextColor = props.line3TextColor || '#ffffff';
+  const line3BlendMode = props.line3BlendMode || 'multiply';
+
+  // Background Gradient Overlay (Figma Rectangle 7: top 328px down to 40% black)
+  const showGradientOverlay = props.showGradientOverlay ?? true;
+
+  // Sliding Accent Runner Tab defaults (Figma: 54px x 22px, #1283F9)
   const showAccentTab = props.showAccentTab !== false;
-  const accentTabColor = props.accentTabColor || '#ffffff';
-  const tabWidth = Number(props.tabWidth ?? 38);
-  const tabHeight = Number(props.tabHeight ?? 15);
-  const runnerSpeed = Number(props.runnerSpeed ?? 1.85);
-  const tabStartDelay = Number(props.tabStartDelay ?? 22);
+  const accentTabColor = props.accentTabColor || '#1283F9';
+  const tabWidth = Number(props.tabWidth ?? 54);
+  const tabHeight = Number(props.tabHeight ?? 22);
+  const runnerSpeed = Number(props.runnerSpeed ?? 2.2);
+  const tabStartDelay = Number(props.tabStartDelay ?? 20);
 
-  const fontFamily = props.fontFamily || 'GhroobArabic, "Noto Sans Arabic", Cairo, "IBM Plex Sans Arabic", sans-serif';
-  const fontSize = Number(props.fontSize) || 54;
-  const yOffsetPercent = Number(props.yOffsetPercent ?? 28);
-  const borderRadius = Number(props.borderRadius ?? 2);
-  const gap = Number(props.gap ?? 16);
-  const rightMargin = Number(props.rightMargin ?? 48);
-  const showShadow = props.showShadow !== false;
+  // Typography & Layout matching Figma (76px, 112px box height, 26px gap)
+  const fontFamily = props.fontFamily || "'Ghroob Arabic itf', GhroobArabic, 'Noto Sans Arabic', Cairo, 'IBM Plex Sans Arabic', sans-serif";
+  const fontSize = Number(props.fontSize) || 76;
+  const fontWeight = props.fontWeight || 700;
+  const boxHeight = Number(props.boxHeight ?? 112);
+  const yOffsetPercent = Number(props.yOffsetPercent ?? 54.4); // 1045px / 1920px = 54.4%
+  const borderRadius = Number(props.borderRadius ?? 0);
+  const gap = Number(props.gap ?? 26); // 1183 - (1045 + 112) = 26px
+  const rightMargin = Number(props.rightMargin ?? 54);
+  const showShadow = props.showShadow ?? false;
   const align = props.align || 'right';
 
   // Animation timing
@@ -92,60 +114,51 @@ export const ArabicBlueNewsBoxes: React.FC<{
   const staggerDelay = Number(props.staggerDelay ?? 8);
   const enableExitAnimation = props.enableExitAnimation !== false;
 
-  // Default exit begins ~24 frames before the clip ends if not explicitly specified
   const effectiveDuration = item?.durationInFrames || compositionDuration || 140;
   const exitDelayFrames = Number(props.exitDelayFrames ?? Math.max(entranceDelay + 40, effectiveDuration - 25));
   const exitStaggerDelay = Number(props.exitStaggerDelay ?? 6);
   const exitFadeDuration = 8;
 
-  // Reference canvas (1080x1080 square reference from Sequence 03.mp4)
+  // Reference canvas (1080x1920 vertical format matching customer's Figma)
   const DESIGN_WIDTH = 1080;
-  const DESIGN_HEIGHT = 1080;
+  const DESIGN_HEIGHT = 1920;
   const scale = Math.min(
     (item?.width || DESIGN_WIDTH) / DESIGN_WIDTH,
     (item?.height || DESIGN_HEIGHT) / DESIGN_HEIGHT
   );
 
   // ── ENTRANCE ANIMATION (Right-to-Left Wipe Reveal) ──
-  // Line 1 (Blue Box)
   const line1Spring = spring({
     frame: Math.max(0, frame - entranceDelay),
     fps: safeFps,
     config: { damping: 18, stiffness: 110, mass: 0.8 },
   });
 
-  // Line 2 (White Box 1)
   const line2Spring = spring({
     frame: Math.max(0, frame - (entranceDelay + staggerDelay)),
     fps: safeFps,
     config: { damping: 18, stiffness: 110, mass: 0.8 },
   });
 
-  // Line 3 (White Box 2)
   const line3Spring = spring({
     frame: Math.max(0, frame - (entranceDelay + staggerDelay * 2)),
     fps: safeFps,
     config: { damping: 18, stiffness: 110, mass: 0.8 },
   });
 
-  // RTL wipe calculations:
-  // As spring moves 0 -> 1, left clipping inset goes 100% -> 0%
-  // This smoothly reveals each box from right to left while keeping right edge fixed.
   const line1ClipLeft = Math.max(0, Math.min(100, (1 - line1Spring) * 100));
   const line2ClipLeft = Math.max(0, Math.min(100, (1 - line2Spring) * 100));
   const line3ClipLeft = Math.max(0, Math.min(100, (1 - line3Spring) * 100));
 
-  // Entrance opacities
   const line1EntranceOpacity = interpolate(line1Spring, [0, 0.08], [0, 1], { extrapolateRight: 'clamp' });
   const line2EntranceOpacity = interpolate(line2Spring, [0, 0.08], [0, 1], { extrapolateRight: 'clamp' });
   const line3EntranceOpacity = interpolate(line3Spring, [0, 0.08], [0, 1], { extrapolateRight: 'clamp' });
 
   // ── SLIDING ACCENT RUNNER TAB DYNAMICS ──
-  // Appears after Line 1 finishes wiping open (~frame 22), then glides steadily leftward along the top border
   const tabStartFrame = entranceDelay + tabStartDelay;
   const isTabActive = frame >= tabStartFrame;
   const tabSlideOffset = Math.max(0, (frame - tabStartFrame) * runnerSpeed);
-  const tabInitialRight = 10; // initial offset from the right edge
+  const tabInitialRight = 10;
   const tabRightPos = tabInitialRight + tabSlideOffset;
 
   const tabEntranceOpacity = isTabActive
@@ -214,6 +227,21 @@ export const ArabicBlueNewsBoxes: React.FC<{
         fontFamily,
       }}
     >
+      {/* Background Gradient Overlay (Figma Rectangle 7) */}
+      {showGradientOverlay && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '328px',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.4) 100%)',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+
       <div
         style={{
           position: 'absolute',
@@ -227,7 +255,7 @@ export const ArabicBlueNewsBoxes: React.FC<{
           direction: 'rtl',
         }}
       >
-        {/* Line 1: Primary Lead Box (Vivid Blue) with Animated Sliding Tab */}
+        {/* Line 1: Primary Lead Box (White semi-transparent / Screen blend) with Blue Accent Tab */}
         {line1Text.trim() && (
           <div
             style={{
@@ -235,7 +263,7 @@ export const ArabicBlueNewsBoxes: React.FC<{
               opacity: line1FinalOpacity,
             }}
           >
-            {/* Sliding White Runner Accent Tab on Top Border (as seen in Sequence 03.mp4) */}
+            {/* Sliding Accent Runner Tab on Top Border (Figma: 54px x 22px, #1283F9) */}
             {showAccentTab && isTabActive && (
               <div
                 style={{
@@ -253,20 +281,24 @@ export const ArabicBlueNewsBoxes: React.FC<{
               />
             )}
 
-            {/* The Blue Box (with RTL Wipe Reveal) */}
+            {/* The First Box (with RTL Wipe Reveal) */}
             <div
               style={{
                 clipPath: `inset(0 0 0 ${line1ClipLeft.toFixed(2)}% round ${borderRadius}px)`,
                 WebkitClipPath: `inset(0 0 0 ${line1ClipLeft.toFixed(2)}% round ${borderRadius}px)`,
                 transformOrigin: 'right center',
                 backgroundColor: line1BgColor,
+                mixBlendMode: line1BlendMode,
                 color: line1TextColor,
                 fontSize: `${fontSize}px`,
-                fontWeight: 800,
-                lineHeight: 1.25,
-                padding: '16px 36px',
+                fontWeight,
+                lineHeight: 1,
+                minHeight: `${boxHeight}px`,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 40px',
                 borderRadius: `${borderRadius}px`,
-                display: 'inline-block',
                 whiteSpace: 'nowrap',
                 letterSpacing: '-0.3px',
                 textAlign: 'center',
@@ -278,7 +310,7 @@ export const ArabicBlueNewsBoxes: React.FC<{
           </div>
         )}
 
-        {/* Line 2: Headline Body Box 1 (White) */}
+        {/* Line 2: Headline Body Box 1 (50% Black / Multiply blend) */}
         {line2Text.trim() && (
           <div
             style={{
@@ -291,13 +323,17 @@ export const ArabicBlueNewsBoxes: React.FC<{
             <div
               style={{
                 backgroundColor: line2BgColor,
+                mixBlendMode: line2BlendMode,
                 color: line2TextColor,
                 fontSize: `${fontSize}px`,
-                fontWeight: 800,
-                lineHeight: 1.25,
-                padding: '16px 36px',
+                fontWeight,
+                lineHeight: 1,
+                minHeight: `${boxHeight}px`,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 40px',
                 borderRadius: `${borderRadius}px`,
-                display: 'inline-block',
                 whiteSpace: 'nowrap',
                 letterSpacing: '-0.3px',
                 textAlign: 'center',
@@ -309,7 +345,7 @@ export const ArabicBlueNewsBoxes: React.FC<{
           </div>
         )}
 
-        {/* Line 3: Headline Body Box 2 (White) */}
+        {/* Line 3: Headline Body Box 2 (50% Black / Multiply blend) */}
         {line3Text.trim() && (
           <div
             style={{
@@ -322,13 +358,17 @@ export const ArabicBlueNewsBoxes: React.FC<{
             <div
               style={{
                 backgroundColor: line3BgColor,
+                mixBlendMode: line3BlendMode,
                 color: line3TextColor,
                 fontSize: `${fontSize}px`,
-                fontWeight: 800,
-                lineHeight: 1.25,
-                padding: '16px 36px',
+                fontWeight,
+                lineHeight: 1,
+                minHeight: `${boxHeight}px`,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 40px',
                 borderRadius: `${borderRadius}px`,
-                display: 'inline-block',
                 whiteSpace: 'nowrap',
                 letterSpacing: '-0.3px',
                 textAlign: 'center',

@@ -20,6 +20,9 @@ const EMPTY_STATE: TimelineState = {
 
 import { ArabicHeadlineBoxes } from './ArabicHeadlineBoxes';
 import { ArabicBlueNewsBoxes } from './ArabicBlueNewsBoxes';
+import { RssdText } from './RssdText';
+import { RssdRaw } from './RssdRaw';
+import { RssdQuote } from './RssdQuote';
 
 export function Root() {
   return (
@@ -72,17 +75,83 @@ export function Root() {
         durationInFrames={140}
         fps={30}
         width={1080}
-        height={1080}
+        height={1920}
         defaultProps={{
           item: {
             props: {
-              line1Text: 'أحد رجال مبارك',
-              line2Text: 'ومن أشد المعادين',
-              line3Text: 'للرئيس الراحل محمد مرسي',
-              line1BgColor: '#0f83f3',
+              line1Text: 'أصول جديدة',
+              line2Text: 'تدخل قائمة البيع',
+              line3Text: 'وتحذيرات تفاقم أزمة الديون',
+              line1BgColor: 'rgba(255, 255, 255, 0.7)',
+              line1TextColor: '#000000',
+              line2BgColor: 'rgba(0, 0, 0, 0.5)',
+              line2TextColor: '#ffffff',
+              line3BgColor: 'rgba(0, 0, 0, 0.5)',
+              line3TextColor: '#ffffff',
+              accentTabColor: '#1283F9',
               showAccentTab: true,
+              showGradientOverlay: true,
             },
           },
+        }}
+      />
+      <Composition
+        id="RssdText"
+        component={RssdText}
+        durationInFrames={150}
+        fps={25}
+        width={1080}
+        height={1440}
+        defaultProps={{
+          line1Text: 'السطر الأول يكتب هنا',
+          line2Text: 'ثم يأتي السطر الثاني',
+          lineCount: 2,
+          accentColor: '#0080F8',
+          line1TextColor: '#ffffff',
+          line2TextColor: '#000000',
+          line2BgColor: '#ffffff',
+          backgroundColor: '#000000',
+          showSource: false,
+          sourceText: 'هنا المصدر',
+        }}
+      />
+      <Composition
+        id="RssdRaw"
+        component={RssdRaw}
+        durationInFrames={150}
+        fps={25}
+        width={1080}
+        height={1440}
+        defaultProps={{
+          line1Text: 'القضية الفلسطينية',
+          line2Text: 'روهات رصد',
+          accentColor: '#0080F8',
+          line1TextColor: '#ffffff',
+          line2TextColor: '#000000',
+          line2BgColor: '#ffffff',
+          backgroundColor: '#000000',
+          showAccentBlock: true,
+        }}
+      />
+      <Composition
+        id="RssdQuote"
+        component={RssdQuote}
+        durationInFrames={375}
+        fps={25}
+        width={1080}
+        height={1440}
+        defaultProps={{
+          quoteText: `اتصلــــــــت للتــــو بالسيناتور كيسي،
+وعضو الكونغرس كارترايت، لإبداء أسفي
+على عدم حضور مناسبة اليوم اتصلت
+للتـــو بالسيناتور كيسي، وعضو الكونغرس
+كارترايت، لإبداء أسفي على عدم حضور
+مناسبة اليوم وشكـــــرًا لـكـم`,
+          speakerName: 'محــمد بن سـلــمـان',
+          speakerTitle: 'ولي العهد السعودي',
+          accentColor: '#0080F8',
+          backgroundColor: '#000000',
+          showAttribution: true,
         }}
       />
     </>
