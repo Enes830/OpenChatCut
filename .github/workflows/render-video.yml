@@ -1,0 +1,80 @@
+name: Headless Video Render
+
+on:
+  workflow_dispatch:
+    inputs:
+      storyboard:
+        description: 'Storyboard to render'
+        required: true
+        default: 'storyboard_1_energy_summit'
+        type: choice
+        options:
+          - 'storyboard_1_energy_summit'
+          - 'storyboard_2_world_isolation'
+          - 'storyboard_3_economic_markets'
+          - 'all'
+      accent_color:
+        description: 'Accent Color (hex)'
+        required: false
+        default: '#0f83f3'
+
+jobs:
+  render:
+    name: Headless Remotion Render (16GB RAM)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install System Dependencies, Headless Chrome & Arabic Fonts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            ffmpeg \
+            fonts-noto-core \
+            fonts-noto-extra \
+            libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+            libpango-1.0-0 libcairo2 libasound2
+          
+          # Install custom Ghroob Arabic font from repository
+          sudo mkdir -p /usr/local/share/fonts
+          if [ -d "assets/fonts" ]; then
+            sudo cp assets/fonts/*.otf /usr/local/share/fonts/ 2>/dev/null || true
+          fi
+          sudo fc-cache -fv
+
+      - name: Install NPM dependencies
+        run: npm ci --loglevel=error
+        env:
+          ONNXRUNTIME_NODE_INSTALL: 'skip'
+
+      - name: Render Selected Video(s)
+        run: |
+          mkdir -p csv-video-pipeline/outputs
+          if [ "${{ github.event.inputs.storyboard }}" = "all" ]; then
+            python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_1_energy_summit.csv --render --accent-color "${{ github.event.inputs.accent_color }}"
+            python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_2_world_isolation.csv --render --accent-color "${{ github.event.inputs.accent_color }}"
+            python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_3_economic_markets.csv --render --accent-color "${{ github.event.inputs.accent_color }}"
+          else
+            python3 csv-video-pipeline/render_pipeline.py --csv "csv-video-pipeline/${{ github.event.inputs.storyboard }}.csv" --render --accent-color "${{ github.event.inputs.accent_color }}"
+          fi
+
+      - name: Upload Rendered Video Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-mp4-${{ github.event.inputs.storyboard }}
+          path: csv-video-pipeline/outputs/*.mp4
+          retention-days: 14
