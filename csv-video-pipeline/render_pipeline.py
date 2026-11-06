@@ -207,10 +207,10 @@ def main():
         line2 = lines[1] if len(lines) > 1 else ''
         line3 = lines[2] if len(lines) > 2 else ''
 
-        # Background Media Item (Track V2 - bottom layer)
+        # Background Media Item (Track V1 - base layer)
         items.append({
             "id": f"item_bg_{idx+1}",
-            "track": "track_v2",
+            "track": "V1",
             "name": media_file,
             "kind": media_kind,
             "startFrame": current_frame,
@@ -300,7 +300,7 @@ def main():
 
         items.append({
             "id": f"item_mg_{idx+1}",
-            "track": "track_v1",
+            "track": "V2",
             "name": tmpl['name'],
             "kind": "motion-graphic",
             "templateId": tmpl['id'],
@@ -328,10 +328,10 @@ def main():
                 "fps": fps,
                 "width": width,
                 "height": height,
-                "trackOrder": ["track_v1", "track_v2"],
+                "trackOrder": ["V2", "V1"],
                 "tracks": {
-                    "track_v1": {"kind": "video"},
-                    "track_v2": {"kind": "video"}
+                    "V2": {"kind": "video"},
+                    "V1": {"kind": "video"}
                 },
                 "items": items
             }
