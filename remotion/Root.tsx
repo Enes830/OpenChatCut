@@ -23,6 +23,7 @@ import { ArabicBlueNewsBoxes } from './ArabicBlueNewsBoxes';
 import { RssdText } from './RssdText';
 import { RssdRaw } from './RssdRaw';
 import { RssdQuote } from './RssdQuote';
+import { RssdLocationHeadline, RssdLocation } from './RssdLocationHeadline';
 
 export function Root() {
   return (
@@ -152,6 +153,41 @@ export function Root() {
           accentColor: '#0080F8',
           backgroundColor: '#000000',
           showAttribution: true,
+        }}
+      />
+      <Composition
+        id="RssdLocationHeadline"
+        component={RssdLocationHeadline}
+        durationInFrames={150}
+        fps={25}
+        width={1080}
+        height={1920}
+        defaultProps={{
+          showLocation: true,
+          locationText: 'القاهرة',
+          line1Text: 'انقلاب سيارة على',
+          line2Text: 'طريق مصر الصحراوي',
+          lineCount: 2,
+          line1BgColor: '#ffffff',
+          line1TextColor: '#000000',
+          line2BgColor: '#1283F9',
+          line2TextColor: '#ffffff',
+          locationColor: '#ffffff',
+          backgroundColor: 'transparent',
+        }}
+      />
+      <Composition
+        id="RssdLocation"
+        component={RssdLocation}
+        durationInFrames={150}
+        fps={25}
+        width={1080}
+        height={1920}
+        defaultProps={{
+          showLocation: true,
+          locationText: 'القاهرة',
+          locationColor: '#ffffff',
+          backgroundColor: 'transparent',
         }}
       />
     </>

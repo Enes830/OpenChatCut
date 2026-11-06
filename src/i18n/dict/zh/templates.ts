@@ -209,4 +209,12 @@ export default {
   'Vertical timeline animation': '垂直时间轴动画',
   'White bold serif text slide-in reveal animation': '白色粗衬线文字滑入动画',
   'Work-Life — Style Showcase HQ': '工作与生活 · 风格总览 HQ',
+  'Arabic Quote (Rasd Quote)': '阿拉伯语引语卡（Rasd 引用）',
+  'Arabic News Headline (Red & White Boxes)': '阿拉伯语新闻标题（红白框）',
+  'Arabic News Headline (3-Line Custom Boxes)': '阿拉伯语新闻标题（三行自定义框）',
+  'Rssd Text - Arabic News Headline': 'Rssd 新闻标题卡 · 阿拉伯语动态文本',
+  'Rssd Raw - Framed Arabic Headline': 'Rssd 话题徽章卡 · 双行边框标题',
+  'Rssd Quote - Editorial Arabic Quote Card': 'Rssd 深度引言卡 · 阿拉伯语名言',
+  'Rssd Location & Headline - Arabic Breaking News': 'Rssd 地点突发新闻卡 · 地图图钉+双行标题',
+  'Rssd Location Badge - City Map Pin': 'Rssd 城市地点徽章 · 动态地图图钉',
 } as Record<string, string>;

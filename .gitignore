@@ -110,3 +110,9 @@ public/whisper-cli/
 
 # Agent tooling local state (Command Code taste captures)
 .commandcode/
+
+# Local IDE metadata and scratch
+.gemini/
+scratch/
+rasd/
+
