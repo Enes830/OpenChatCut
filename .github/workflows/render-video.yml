@@ -12,6 +12,7 @@ on:
           - 'storyboard_1_energy_summit'
           - 'storyboard_2_world_isolation'
           - 'storyboard_3_economic_markets'
+          - 'storyboard_4_breaking_news'
           - 'all'
       accent_color:
         description: 'Accent Color (hex)'

@@ -33,6 +33,10 @@ TEMPLATE_MAP = {
     'quote': 'rssd-quote-card-template',
     'badge': 'rssd-raw-badge-template',
     'quote-single': 'rasd-quote-single',
+    'breaking': 'rssd-location-headline-template',
+    'location-headline': 'rssd-location-headline-template',
+    'rssd-location-headline': 'rssd-location-headline-template',
+    'location': 'rssd-location-headline-template',
 }
 
 def locate_data_dir(custom_dir=None):
@@ -156,16 +160,8 @@ def main():
                         shutil.copyfile(cand, target)
                 break
 
-        asset_id = f"asset_scene_{idx+1}_{uuid.uuid4().hex[:6]}"
-        assets.append({
-            "id": asset_id,
-            "name": media_file,
-            "kind": "image",
-            "src": f"/media/uploads/{media_file}",
-            "durationInFrames": 300,
-            "width": 1024,
-            "height": 1024
-        })
+        is_video = media_file.lower().endswith(('.mp4', '.mov', '.webm', '.mkv'))
+        media_kind = "video" if is_video else "image"
 
         dur_raw = row.get('duration') or row.get('توقيت الاقتطاع') or '4.0'
         try:
@@ -173,6 +169,17 @@ def main():
         except ValueError:
             dur_sec = 4.0
         dur_frames = int(round(dur_sec * fps))
+
+        asset_id = f"asset_scene_{idx+1}_{uuid.uuid4().hex[:6]}"
+        assets.append({
+            "id": asset_id,
+            "name": media_file,
+            "kind": media_kind,
+            "src": f"/media/uploads/{media_file}",
+            "durationInFrames": dur_frames if is_video else 300,
+            "width": 1080 if is_video else 1024,
+            "height": 1920 if is_video else 1024
+        })
 
         raw_text = row.get('text') or row.get('النص') or row.get('line1') or ''
         style = row.get('style') or 'blue-boxes'
@@ -188,21 +195,21 @@ def main():
             "id": f"item_bg_{idx+1}",
             "track": "track_v2",
             "name": media_file,
-            "kind": "image",
+            "kind": media_kind,
             "startFrame": current_frame,
             "durationInFrames": dur_frames,
             "src": f"/media/uploads/{media_file}",
             "sourceAssetId": asset_id,
-            "width": 1024,
-            "height": 1024,
-            "transform": {"scale": 1.88, "scaleX": 1.88, "scaleY": 1.88}
+            "width": 1080 if is_video else 1024,
+            "height": 1920 if is_video else 1024,
+            "transform": {"scale": 1 if is_video else 1.88, "scaleX": 1 if is_video else 1.88, "scaleY": 1 if is_video else 1.88}
         })
 
         # Motion Graphic Overlay (Track V1 - top layer)
         mg_props = dict(tmpl.get('props', {}))
         mg_props['fontFamily'] = args.font_family
         mg_props['enableExitAnimation'] = True
-        mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
+        mg_dur_frames = dur_frames
 
         if tmpl['id'] in ('arabic-blue-news-boxes', 'arabic-headline-boxes'):
             mg_props['line1Text'] = line1
@@ -210,21 +217,48 @@ def main():
             mg_props['line3Text'] = line3
             mg_props['line1BgColor'] = args.accent_color
             mg_props['yOffsetPercent'] = 60
+            mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
+        elif tmpl['id'] == 'rssd-location-headline-template':
+            # Rssd Location & Headline intro: plays only in the beginning (e.g. 4 seconds / 120 frames),
+            # then exits so the background video continues playing cleanly
+            location_val = row.get('location') or 'القاهرة'
+            if ':' in line1 and not row.get('location'):
+                parts = line1.split(':', 1)
+                location_val = parts[0].strip()
+                line1 = parts[1].strip()
+            mg_props['showLocation'] = True
+            mg_props['locationText'] = location_val
+            mg_props['line1Text'] = line1
+            mg_props['line2Text'] = line2 or line1
+            mg_props['line3Text'] = line3
+            mg_props['lineCount'] = 3 if line3 else (2 if line2 else 1)
+            mg_props['line1BgColor'] = '#ffffff'
+            mg_props['line1TextColor'] = '#000000'
+            mg_props['line2BgColor'] = args.accent_color or '#1283F9'
+            mg_props['line2TextColor'] = '#ffffff'
+            mg_props['enableEntrance'] = True
+            mg_props['enableExitGlitch'] = True
+            # Limit motion graphic duration to 4 seconds (120 frames) intro
+            mg_dur_frames = min(dur_frames, 120)
+            mg_props['exitStartFrame'] = max(35, mg_dur_frames - 25)
         elif tmpl['id'] == 'rssd-quote-card-template':
             mg_props['quoteText'] = raw_text
             mg_props['speakerName'] = row.get('speaker', 'رصد')
             mg_props['speakerTitle'] = row.get('title', '')
             mg_props['accentColor'] = args.accent_color
+            mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
         elif tmpl['id'] == 'rssd-text-headline-template':
             mg_props['line1Text'] = line1
             mg_props['line2Text'] = line2 or line1
             mg_props['lineCount'] = 2 if line2 else 1
             mg_props['accentColor'] = args.accent_color
             mg_props['bottomOffset'] = 252
+            mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
         elif tmpl['id'] == 'rssd-raw-badge-template':
             mg_props['line1Text'] = line1
             mg_props['line2Text'] = line2 or 'رصد'
             mg_props['accentColor'] = args.accent_color
+            mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
 
         items.append({
             "id": f"item_mg_{idx+1}",
@@ -234,7 +268,7 @@ def main():
             "templateId": tmpl['id'],
             "code": tmpl['code'],
             "startFrame": current_frame,
-            "durationInFrames": dur_frames,
+            "durationInFrames": mg_dur_frames,
             "width": width,
             "height": height,
             "transform": {"scale": 1, "scaleX": 1, "scaleY": 1},
