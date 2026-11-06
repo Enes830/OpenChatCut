@@ -40,10 +40,14 @@ export interface RssdQuoteProps {
   enableEntrance?: boolean;
 }
 
-export const RssdQuote: React.FC<RssdQuoteProps & { item?: { props?: RssdQuoteProps } }> = (rawProps) => {
+export const RssdQuote: React.FC<
+  RssdQuoteProps & { item?: { props?: RssdQuoteProps; width?: number; height?: number } }
+> = (rawProps) => {
   const props: RssdQuoteProps = { ...rawProps, ...(rawProps.item?.props || {}) };
   const frame = useCurrentFrame();
-  const { durationInFrames, width, height } = useVideoConfig();
+  const { durationInFrames, width: configWidth, height: configHeight } = useVideoConfig();
+  const width = rawProps.item?.width || configWidth || 1080;
+  const height = rawProps.item?.height || configHeight || 1440;
 
   // Content defaults with exact Kashida matching rasd/quotes.mp4
   const defaultQuote = [
@@ -210,6 +214,7 @@ export const RssdQuote: React.FC<RssdQuoteProps & { item?: { props?: RssdQuotePr
     >
       <EmbeddedFonts />
       <div
+        data-occ-bounds="true"
         style={{
           position: 'absolute',
           top: topOffset,

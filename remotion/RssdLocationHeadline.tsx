@@ -11,7 +11,6 @@ export const LocationPinIcon: React.FC<{
   color?: string;
   style?: React.CSSProperties;
 }> = ({ size = 38, color = '#ffffff', style }) => {
-  // Aspect ratio is 26 : 34 (approx 1 : 1.3)
   const width = size;
   const height = Math.round(size * 1.3);
 
@@ -41,7 +40,7 @@ export const LocationPinIcon: React.FC<{
 };
 
 export interface RssdLocationHeadlineProps {
-  // ─── Location Badge Props (extracted from Rssd - Date & Loc & Src.mogrt) ───
+  // ─── Location Props (Up) ───
   showLocation?: boolean;
   locationText?: string;
   locationColor?: string;
@@ -49,46 +48,38 @@ export interface RssdLocationHeadlineProps {
   locationIconSize?: number;
   locationGap?: number;
   locationBottomGap?: number;
+  locationOnly?: boolean;
 
-  // ─── Headline Text Content (matching WhatsApp reference photo) ───
+  // ─── Text Content ───
   line1Text?: string;
   line2Text?: string;
-  line3Text?: string;
-  lineCount?: 1 | 2 | 3;
 
-  // ─── Colors & Styling ───
-  line1BgColor?: string;
-  line1TextColor?: string;
-  line2BgColor?: string;
-  line2TextColor?: string;
-  line3BgColor?: string;
-  line3TextColor?: string;
+  // ─── Colors & Themes ───
+  accentColor?: string; // Brand Blue (#0080F8 / #1283F9)
+  line1BgColor?: string; // default #ffffff
+  line1TextColor?: string; // default #000000
+  line2BgColor?: string; // default #1283F9
+  line2TextColor?: string; // default #ffffff
   backgroundColor?: string;
+  showAccentBlock?: boolean;
 
   // ─── Typography ───
   fontFamily?: string;
-  line1FontSize?: number;
-  line2FontSize?: number;
-  line3FontSize?: number;
-  fontWeight?: number | string;
+  fontSize?: number;
+  fontWeight?: number;
 
-  // ─── Layout & Exact WhatsApp Photo Coordinates ───
-  // Default values calibrated to 1080x1920 (scaled 1.2x from 900x1600 reference)
-  bottomOffset?: number; // px from bottom of composition (default: 648px)
-  rightOffset?: number; // px from right edge of composition (default: 238px)
-  boxPaddingX?: number; // horizontal padding inside boxes (default: 34px)
-  boxPaddingY?: number; // vertical padding inside boxes (default: 14px)
-  boxHeight1?: number; // Line 1 box height (default: 110px)
-  boxHeight2?: number; // Line 2 box height (default: 118px)
-  boxHeight3?: number; // Line 3 box height (default: 118px)
-  gap?: number; // vertical gap between headline boxes (default: 10px)
+  // ─── Layout & Positioning ───
+  topOffset?: number;
+  bottomOffset?: number;
+  rightOffset?: number;
+  boxPaddingX?: number;
+  boxPaddingY?: number;
+  gap?: number;
 
-  // ─── Animation Controls (reused from Rssd suite) ───
+  // ─── Animation Controls ───
   enableEntrance?: boolean;
-  enableRunners?: boolean;
-  enableExitGlitch?: boolean;
+  enableExitAnimation?: boolean;
   exitStartFrame?: number;
-  locationOnly?: boolean; // render only the location badge if true
 }
 
 export const RssdLocationHeadline: React.FC<
@@ -97,67 +88,52 @@ export const RssdLocationHeadline: React.FC<
   const props: RssdLocationHeadlineProps = { ...rawProps, ...(rawProps.item?.props || {}) };
   const frame = useCurrentFrame();
   const { fps, durationInFrames, width, height } = useVideoConfig();
-  const safeFps = fps || 30;
+  const safeFps = fps || 25;
 
-  // ─── Text Content Defaults (Exact WhatsApp Photo Reference) ───
+  // Content defaults matching reference video & layout
   const showLocation = props.showLocation !== false;
   const locationText = props.locationText ?? 'القاهرة';
   const locationColor = props.locationColor || '#ffffff';
   const locationFontSize = props.locationFontSize ?? 42;
   const locationIconSize = props.locationIconSize ?? 36;
   const locationGap = props.locationGap ?? 12;
-  const locationBottomGap = props.locationBottomGap ?? 22;
-
-  const lineCount = props.lineCount ?? 2;
-  const line1Text = props.line1Text ?? 'انقلاب سيارة على';
-  const line2Text = props.line2Text ?? 'طريق مصر الصحراوي';
-  const line3Text = props.line3Text ?? '';
-
-  // ─── Colors (WhatsApp Photo Reference) ───
-  // Line 1: Solid White background with pure black bold text
-  const line1BgColor = props.line1BgColor || '#ffffff';
-  const line1TextColor = props.line1TextColor || '#000000';
-
-  // Line 2: Signature Rasd Vibrant Blue (#1283F9) with white bold text
-  const line2BgColor = props.line2BgColor || '#1283F9';
-  const line2TextColor = props.line2TextColor || '#ffffff';
-
-  const line3BgColor = props.line3BgColor || '#1283F9';
-  const line3TextColor = props.line3TextColor || '#ffffff';
-  const backgroundColor = props.backgroundColor || 'transparent';
-
-  // ─── Typography & Coordinates matching WhatsApp Reference ───
-  const fontFamily =
-    props.fontFamily || "'Ghroob Arabic itf', GhroobArabic, 'Noto Sans Arabic', Cairo, sans-serif";
-  const line1FontSize = props.line1FontSize ?? 74;
-  const line2FontSize = props.line2FontSize ?? 80;
-  const line3FontSize = props.line3FontSize ?? 74;
-  const fontWeight = props.fontWeight ?? 700;
-
-  const boxPaddingX = props.boxPaddingX ?? 34;
-  const boxPaddingY = props.boxPaddingY ?? 14;
-  const boxHeight1 = props.boxHeight1 ?? 110;
-  const boxHeight2 = props.boxHeight2 ?? 118;
-  const boxHeight3 = props.boxHeight3 ?? 118;
-  const gap = props.gap ?? 10;
-
-  // Adaptive coordinate defaults:
-  // - Portrait (1080x1920): WhatsApp photo layout (right: 238px, bottom: 648px)
-  // - Landscape (1920x1080): Broadcast lower-third layout (right: 140px, bottom: 120px)
-  const isPortrait = height > width;
-  const defaultRightOffset = isPortrait ? 238 : 140;
-  const defaultBottomOffset = isPortrait ? 648 : 120;
-  const rightOffset = props.rightOffset !== undefined ? props.rightOffset : defaultRightOffset;
-  const bottomOffset = props.bottomOffset !== undefined ? props.bottomOffset : defaultBottomOffset;
-
-  const enableEntrance = props.enableEntrance !== false;
-  const enableRunners = props.enableRunners !== false;
-  const enableExitGlitch = props.enableExitGlitch !== false;
-  const exitStartFrame = props.exitStartFrame ?? Math.max(35, durationInFrames - 15);
+  const locationBottomGap = props.locationBottomGap ?? 18;
   const locationOnly = props.locationOnly === true;
 
-  // ─── 1. Location Pin & Text Animation (from Rssd - Date & Loc & Src.mogrt) ─
-  // In the MOGRT, pin pops in at frame 4 with elastic overshoot bounce
+  const line1Text = props.line1Text ?? 'انقلاب سيارة على';
+  const line2Text = props.line2Text ?? 'طريق مصر الصحراوي';
+
+  // Colors (matching WhatsApp broadcast reference + RssdRaw palette)
+  const accentColor = props.accentColor || '#1283F9';
+  const line1BgColor = props.line1BgColor || '#ffffff';
+  const line1TextColor = props.line1TextColor || '#000000';
+  const line2BgColor = props.line2BgColor || accentColor;
+  const line2TextColor = props.line2TextColor || '#ffffff';
+  const backgroundColor = props.backgroundColor || 'transparent';
+  const showAccentBlock = props.showAccentBlock !== false;
+
+  // Typography & Layout matching RssdRaw (box height 144px, fontSize 95px)
+  const fontFamily =
+    props.fontFamily || "'Ghroob Arabic itf', GhroobArabic, 'Noto Sans Arabic', Cairo, sans-serif";
+  const fontSize = props.fontSize ?? 95;
+  const fontWeight = props.fontWeight ?? 700;
+  const boxPaddingX = props.boxPaddingX ?? 44;
+  const boxPaddingY = props.boxPaddingY ?? 18;
+  const gap = props.gap ?? 17;
+
+  // Layout coordinates (adaptive to portrait 9:16 vs landscape 16:9)
+  const isPortrait = height > width;
+  const rightOffset =
+    props.rightOffset !== undefined ? props.rightOffset : isPortrait ? 238 : 140;
+  const bottomOffset =
+    props.bottomOffset !== undefined ? props.bottomOffset : isPortrait ? 648 : 120;
+
+  // Animation Timing (identical to RssdRaw)
+  const enableEntrance = props.enableEntrance !== false;
+  const enableExitAnimation = props.enableExitAnimation !== false;
+  const exitStartFrame = props.exitStartFrame ?? Math.max(40, durationInFrames - 12);
+
+  // ─── 0. Location Entrance Animations (Pin pop + RTL text wipe) ──────────────
   const pinSpring = enableEntrance
     ? spring({
         frame: Math.max(0, frame - 4),
@@ -166,7 +142,6 @@ export const RssdLocationHeadline: React.FC<
       })
     : 1;
 
-  // Pin opacity: quick fade in during initial pop
   const pinOpacity = enableEntrance
     ? interpolate(frame, [4, 8], [0, 1], {
         extrapolateLeft: 'clamp',
@@ -174,7 +149,6 @@ export const RssdLocationHeadline: React.FC<
       })
     : 1;
 
-  // Location text wipes in smoothly from right to left (frames 7 to 20)
   const locTextProgress = enableEntrance
     ? interpolate(frame, [7, 21], [0, 1], {
         extrapolateLeft: 'clamp',
@@ -190,9 +164,9 @@ export const RssdLocationHeadline: React.FC<
       })
     : 1;
 
-  // ─── 2. Headline Boxes RTL Wipe Entrance (from RssdText & MOGRT) ──────────
+  // ─── 1. Headline Entrance Animations (Frames 3 – 38, Identical to RssdRaw) ───
   const l1Progress = enableEntrance
-    ? interpolate(frame, [6, 28], [0, 1], {
+    ? interpolate(frame, [3, 28], [0, 1], {
         extrapolateLeft: 'clamp',
         extrapolateRight: 'clamp',
         easing: Easing.bezier(0.16, 1, 0.3, 1),
@@ -200,56 +174,83 @@ export const RssdLocationHeadline: React.FC<
     : 1;
 
   const l2Progress = enableEntrance
-    ? interpolate(frame, [14, 34], [0, 1], {
+    ? interpolate(frame, [11, 36], [0, 1], {
         extrapolateLeft: 'clamp',
         extrapolateRight: 'clamp',
         easing: Easing.bezier(0.16, 1, 0.3, 1),
       })
     : 1;
 
-  const l3Progress = enableEntrance
-    ? interpolate(frame, [20, 40], [0, 1], {
+  // Translucent leading runner block for Line 1 (frames 4 to 24)
+  const showL1Runner = enableEntrance && frame >= 4 && frame <= 24;
+  const l1RunnerRightPercent = interpolate(frame, [4, 14, 24], [25, 92, 100], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
+  });
+  const l1RunnerBg =
+    line1BgColor === '#ffffff' ? 'rgba(255, 255, 255, 0.75)' : 'rgba(255, 255, 255, 0.24)';
+
+  // Detached runner block ahead of Line 2 (frames 12 to 36)
+  const showL2Runner = enableEntrance && frame >= 12 && frame <= 36;
+  const l2RunnerRightPx = interpolate(frame, [12, 24, 36], [110, 686, 686], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
+  });
+  const l2RunnerWidthPx = interpolate(frame, [12, 24, 36], [150, 88, 87], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  const l2RunnerBg = line2BgColor === '#ffffff' ? '#09345a' : line2BgColor;
+
+  // Bottom-left blue accent tab that glides horizontally
+  const showBottomTab = showAccentBlock && (!enableEntrance || frame >= 20);
+  const bottomTabLeftPx = enableEntrance
+    ? interpolate(
+        frame,
+        [20, 35, 50, Math.max(51, exitStartFrame)],
+        [-285, -165, -60, 57],
+        {
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+        }
+      )
+    : -60;
+  const bottomTabWidthPx = enableEntrance
+    ? interpolate(frame, [20, 30, 50], [10, 36, 55], {
         extrapolateLeft: 'clamp',
         extrapolateRight: 'clamp',
-        easing: Easing.bezier(0.16, 1, 0.3, 1),
       })
-    : 1;
+    : 55;
 
-  // ─── 3. Detached Leading Runner Blocks ─────────────────────────────────────
-  // Detached white runner block ahead of Line 1 (frames 5 to 25)
-  const showL1Runner = enableEntrance && enableRunners && frame >= 5 && frame <= 24;
-  const l1RunnerRightPx = interpolate(frame, [5, 18, 24], [25, 480, 520], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.cubic),
-  });
+  // ─── 2. Outro Animation (Leftward Slide -148px + Silhouette Fade, Identical to RssdRaw) ─
+  let exitTranslateX = 0;
+  let exitOpacity = 1;
+  let silhouetteMix = 0;
 
-  // Detached blue runner block ahead of Line 2 (frames 13 to 32)
-  const showL2Runner = enableEntrance && enableRunners && frame >= 13 && frame <= 32;
-  const l2RunnerRightPx = interpolate(frame, [13, 24, 32], [30, 560, 610], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.cubic),
-  });
+  if (enableExitAnimation && frame >= exitStartFrame) {
+    const pExit = interpolate(frame, [exitStartFrame, durationInFrames - 1], [0, 1], {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.bezier(0.35, 0, 0.25, 1),
+    });
 
-  // ─── 4. Outro Strobe & Stepped Cut (reused from Rssd broadcast style) ──────
-  let exitOpacityL1 = 1;
-  let exitOpacityL2 = 1;
-  let exitOpacityL3 = 1;
-  let exitOpacityLoc = 1;
-
-  if (enableExitGlitch && frame >= exitStartFrame) {
-    const fRel = frame - exitStartFrame;
-    const locStrobe = [1, 0.85, 0.5, 0.4, 0.15, 0];
-    const l1Strobe = [1, 0.85, 0.65, 0.72, 0.48, 0.43, 0.39, 0];
-    const l2Strobe = [1, 1, 1, 1, 1, 0.92, 0.76, 0.71, 0.51, 0.4, 0.41, 0.08, 0];
-    const l3Strobe = [1, 1, 1, 0.85, 0.6, 0.4, 0.2, 0];
-
-    exitOpacityLoc = locStrobe[Math.min(fRel, locStrobe.length - 1)];
-    exitOpacityL1 = l1Strobe[Math.min(fRel, l1Strobe.length - 1)];
-    exitOpacityL2 = l2Strobe[Math.min(fRel, l2Strobe.length - 1)];
-    exitOpacityL3 = l3Strobe[Math.min(fRel, l3Strobe.length - 1)];
+    exitTranslateX = interpolate(pExit, [0, 1], [0, -148]);
+    silhouetteMix = interpolate(pExit, [0, 0.45], [0, 1], { extrapolateRight: 'clamp' });
+    exitOpacity = interpolate(pExit, [0, 0.6, 0.8, 0.92, 1], [1, 0.9, 0.7, 0.37, 0]);
   }
+
+  const currentL1Bg =
+    silhouetteMix > 0.65 ? '#e7e7e7' : silhouetteMix > 0.25 ? '#68b4fa' : line1BgColor;
+  const currentL2Bg =
+    silhouetteMix > 0.65 ? '#e7e7e7' : silhouetteMix > 0.25 ? '#68b4fa' : line2BgColor;
+  const currentTabBg =
+    silhouetteMix > 0.65 ? '#d0d0d0' : silhouetteMix > 0.25 ? '#68b4fa' : accentColor;
+  const textOpacityDuringExit = interpolate(silhouetteMix, [0, 0.65], [1, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
   return (
     <div
@@ -265,127 +266,108 @@ export const RssdLocationHeadline: React.FC<
       }}
     >
       <EmbeddedFonts />
-
-      {/* Main Container positioned at exact WhatsApp photo lower-third coordinates */}
       <div
         style={{
           position: 'absolute',
-          bottom: bottomOffset,
+          ...(props.bottomOffset !== undefined || props.topOffset === undefined
+            ? { bottom: bottomOffset }
+            : { top: props.topOffset }),
           right: rightOffset,
+          transform: `translateX(${exitTranslateX}px)`,
+          opacity: exitOpacity,
           display: 'flex',
           flexDirection: 'column',
-          alignItems: 'flex-start', // RTL: flex-start pins right edges flush
+          alignItems: 'flex-start',
           direction: 'rtl',
           fontFamily,
         }}
       >
-        {/* ─── 1. LOCATION BADGE (White Pin + Cairo text, NO background boxes) ─── */}
-        {showLocation && (
+        {/* ─── LOCATION BADGE (UP) ─── */}
+        {showLocation && locationText && (
           <div
             style={{
               position: 'relative',
               display: 'inline-flex',
               alignItems: 'center',
-              flexDirection: 'row',
-              marginBottom: locationOnly ? 0 : locationBottomGap,
-              opacity: exitOpacityLoc,
-              zIndex: 10,
-              paddingRight: 4, // slight optical alignment with headline box edge
+              gap: locationGap,
+              marginBottom: locationBottomGap,
+              direction: 'rtl',
             }}
           >
-            {/* Animated Pin Icon (Overshoot pop-in from Mogrt) */}
-            <div
+            <LocationPinIcon
+              size={locationIconSize}
+              color={locationColor}
               style={{
                 transform: `scale(${pinSpring})`,
-                transformOrigin: 'bottom center',
                 opacity: pinOpacity,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
               }}
-            >
-              <LocationPinIcon size={locationIconSize} color={locationColor} />
-            </div>
-
-            {/* Location Text with RTL reveal wipe */}
-            <div
+            />
+            <span
               style={{
-                marginRight: locationGap,
+                color: locationColor,
+                fontSize: locationFontSize,
+                fontWeight: 700,
+                lineHeight: 1.1,
+                whiteSpace: 'nowrap',
                 clipPath: `inset(0 0 0 ${100 - locTextProgress * 100}%)`,
-                opacity: locTextOpacity,
-                display: 'inline-flex',
-                alignItems: 'center',
+                opacity: locTextOpacity * textOpacityDuringExit,
+                textShadow: '0 2px 8px rgba(0, 0, 0, 0.85)',
               }}
             >
-              <span
-                style={{
-                  color: locationColor,
-                  fontSize: locationFontSize,
-                  fontWeight: 700,
-                  lineHeight: 1,
-                  whiteSpace: 'nowrap',
-                  textShadow:
-                    '0 2px 8px rgba(0, 0, 0, 0.8), 0 1px 3px rgba(0, 0, 0, 0.95)',
-                }}
-              >
-                {locationText}
-              </span>
-            </div>
+              {locationText}
+            </span>
           </div>
         )}
 
-        {/* ─── 2. HEADLINE BOXES (WhatsApp Photo Layout) ─── */}
         {!locationOnly && (
           <>
-            {/* ── LINE 1: TOP WHITE BOX (Black Text) ── */}
+            {/* ─── LINE 1: TOP HEADLINE BOX (Identical structure to RssdRaw) ─── */}
             <div
               style={{
                 position: 'relative',
                 display: 'inline-flex',
                 alignItems: 'center',
-                opacity: exitOpacityL1,
-                marginBottom: lineCount >= 2 ? gap : 0,
+                marginBottom: gap,
               }}
             >
-              {/* Detached Runner Block */}
+              {/* Translucent Leading Runner Block */}
               {showL1Runner && (
                 <div
                   style={{
                     position: 'absolute',
-                    bottom: 0,
-                    right: l1RunnerRightPx,
-                    width: 70,
-                    height: 42,
-                    backgroundColor: line1BgColor,
-                    zIndex: 1,
-                    opacity: 0.9,
+                    bottom: 16,
+                    right: `${l1RunnerRightPercent}%`,
+                    width: 84,
+                    height: 52,
+                    backgroundColor: l1RunnerBg,
+                    transform: 'translateX(35%)',
+                    zIndex: 3,
                   }}
                 />
               )}
 
-              {/* White Headline Box */}
               <div
                 style={{
                   position: 'relative',
-                  backgroundColor: line1BgColor,
+                  backgroundColor: currentL1Bg,
                   padding: `${boxPaddingY}px ${boxPaddingX}px`,
-                  minHeight: boxHeight1,
+                  height: 144,
                   boxSizing: 'border-box',
                   clipPath: `inset(0 0 0 ${100 - l1Progress * 100}%)`,
                   display: 'inline-flex',
                   alignItems: 'center',
                   zIndex: 2,
-                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
                 }}
               >
                 <span
                   style={{
                     color: line1TextColor,
-                    fontSize: line1FontSize,
+                    fontSize,
                     fontWeight,
                     lineHeight: 1.1,
                     whiteSpace: 'nowrap',
-                    transform: 'translateY(-2px)',
+                    opacity: textOpacityDuringExit,
+                    transform: 'translateY(-3px)',
                   }}
                 >
                   {line1Text}
@@ -393,101 +375,73 @@ export const RssdLocationHeadline: React.FC<
               </div>
             </div>
 
-            {/* ── LINE 2: SECONDARY BLUE ACCENT BOX (White Text) ── */}
-            {lineCount >= 2 && (
+            {/* ─── LINE 2: BOTTOM HEADLINE BOX + SLIDING ACCENT TAB (Identical structure to RssdRaw) ─── */}
+            {line2Text && (
               <div
                 style={{
                   position: 'relative',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  opacity: exitOpacityL2,
-                  marginBottom: lineCount >= 3 ? gap : 0,
                 }}
               >
-                {/* Detached Blue Runner Block */}
+                {/* Detached Runner Block on Left */}
                 {showL2Runner && (
                   <div
                     style={{
                       position: 'absolute',
-                      top: 4,
+                      top: 60,
                       right: l2RunnerRightPx,
-                      width: 90,
-                      height: 44,
-                      backgroundColor: line2BgColor,
+                      width: l2RunnerWidthPx,
+                      height: 52,
+                      backgroundColor: l2RunnerBg,
                       zIndex: 1,
                       opacity: 0.95,
                     }}
                   />
                 )}
 
-                {/* Blue Headline Box */}
                 <div
                   style={{
                     position: 'relative',
-                    backgroundColor: line2BgColor,
+                    backgroundColor: currentL2Bg,
                     padding: `${boxPaddingY}px ${boxPaddingX}px`,
-                    minHeight: boxHeight2,
+                    height: 144,
                     boxSizing: 'border-box',
                     clipPath: `inset(0 0 0 ${100 - l2Progress * 100}%)`,
                     display: 'inline-flex',
                     alignItems: 'center',
                     zIndex: 2,
-                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
                   }}
                 >
                   <span
                     style={{
                       color: line2TextColor,
-                      fontSize: line2FontSize,
+                      fontSize,
                       fontWeight,
                       lineHeight: 1.1,
                       whiteSpace: 'nowrap',
-                      transform: 'translateY(-2px)',
+                      opacity: textOpacityDuringExit,
+                      transform: 'translateY(-3px)',
                     }}
                   >
                     {line2Text}
                   </span>
                 </div>
-              </div>
-            )}
 
-            {/* ── LINE 3: OPTIONAL THIRD BOX ── */}
-            {lineCount >= 3 && line3Text && (
-              <div
-                style={{
-                  position: 'relative',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  opacity: exitOpacityL3,
-                }}
-              >
-                <div
-                  style={{
-                    position: 'relative',
-                    backgroundColor: line3BgColor,
-                    padding: `${boxPaddingY}px ${boxPaddingX}px`,
-                    minHeight: boxHeight3,
-                    boxSizing: 'border-box',
-                    clipPath: `inset(0 0 0 ${100 - l3Progress * 100}%)`,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    zIndex: 2,
-                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
-                  }}
-                >
-                  <span
+                {/* Bottom-left small blue accent tab that glides horizontally */}
+                {showBottomTab && (
+                  <div
                     style={{
-                      color: line3TextColor,
-                      fontSize: line3FontSize,
-                      fontWeight,
-                      lineHeight: 1.1,
-                      whiteSpace: 'nowrap',
-                      transform: 'translateY(-2px)',
+                      position: 'absolute',
+                      bottom: -24,
+                      left: bottomTabLeftPx,
+                      width: bottomTabWidthPx,
+                      height: 24,
+                      backgroundColor: currentTabBg,
+                      zIndex: 3,
                     }}
-                  >
-                    {line3Text}
-                  </span>
-                </div>
+                  />
+                )}
               </div>
             )}
           </>
@@ -502,6 +456,4 @@ export const RssdLocationHeadline: React.FC<
  */
 export const RssdLocation: React.FC<
   RssdLocationHeadlineProps & { item?: { props?: RssdLocationHeadlineProps } }
-> = (props) => {
-  return <RssdLocationHeadline {...props} locationOnly={true} />;
-};
+> = (props) => <RssdLocationHeadline {...props} locationOnly />;

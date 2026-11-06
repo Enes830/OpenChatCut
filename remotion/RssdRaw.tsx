@@ -33,10 +33,14 @@ export interface RssdRawProps {
   exitStartFrame?: number;
 }
 
-export const RssdRaw: React.FC<RssdRawProps & { item?: { props?: RssdRawProps } }> = (rawProps) => {
+export const RssdRaw: React.FC<
+  RssdRawProps & { item?: { props?: RssdRawProps; width?: number; height?: number } }
+> = (rawProps) => {
   const props: RssdRawProps = { ...rawProps, ...(rawProps.item?.props || {}) };
   const frame = useCurrentFrame();
-  const { durationInFrames, width, height } = useVideoConfig();
+  const { durationInFrames, width: configWidth, height: configHeight } = useVideoConfig();
+  const width = rawProps.item?.width || configWidth || 1080;
+  const height = rawProps.item?.height || configHeight || 1440;
 
   // Content defaults from rasd/raw.mp4
   const line1Text = props.line1Text ?? 'القضية الفلسطينية';
@@ -170,6 +174,7 @@ export const RssdRaw: React.FC<RssdRawProps & { item?: { props?: RssdRawProps } 
     >
       <EmbeddedFonts />
       <div
+        data-occ-bounds="true"
         style={{
           position: 'absolute',
           top: topOffset,

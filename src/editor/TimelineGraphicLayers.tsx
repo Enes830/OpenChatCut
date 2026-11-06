@@ -162,7 +162,10 @@ export function ItemLayer({ item, canvasW, canvasH, fit, borderRadius }: {
     return (
       <VisualClipSurface item={item} fit={fit} canvasW={canvasW} canvasH={canvasH} borderRadius={borderRadius}>
         <div style={{ position: 'absolute', inset: 0, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          <div style={{ width: dw, height: dh, position: 'relative', flexShrink: 0, transform: `scale(${scale})` }}>
+          <div
+            data-occ-mg-root={item.id}
+            style={{ width: dw, height: dh, position: 'relative', flexShrink: 0, transform: `scale(${scale})` }}
+          >
             <MotionGraphicWindow item={item}>
               <Template item={{ props: item.props ?? {}, width: dw, height: dh }} />
             </MotionGraphicWindow>

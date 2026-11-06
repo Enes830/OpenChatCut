@@ -207,10 +207,10 @@ export const ArabicBlueNewsBoxes: React.FC<{
 
   const containerAlignStyle: React.CSSProperties =
     align === 'right'
-      ? { alignItems: 'flex-end', paddingRight: `${rightMargin}px` }
+      ? { right: `${rightMargin}px`, alignItems: 'flex-start' }
       : align === 'left'
-      ? { alignItems: 'flex-start', paddingLeft: `${rightMargin}px` }
-      : { alignItems: 'center' };
+      ? { left: `${rightMargin}px`, alignItems: 'flex-end' }
+      : { left: 0, right: 0, alignItems: 'center' };
 
   return (
     <div
@@ -243,11 +243,10 @@ export const ArabicBlueNewsBoxes: React.FC<{
       )}
 
       <div
+        data-occ-bounds="true"
         style={{
           position: 'absolute',
           top: `${yOffsetPercent}%`,
-          left: 0,
-          right: 0,
           display: 'flex',
           flexDirection: 'column',
           gap: `${gap}px`,

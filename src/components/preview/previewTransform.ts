@@ -127,6 +127,324 @@ export function visiblePreviewCandidates(state: TimelineState, absoluteFrame: nu
   }));
 }
 
+const approxArabicTextWidth = (text: string, fontSize: number, minWidth = 140): number => (
+  Math.max(minWidth, Math.round(Array.from(text.trim()).length * fontSize * 0.48))
+);
+
+function layoutOffsetRelativeTo(el: HTMLElement, ancestor: HTMLElement): PreviewPoint {
+  let x = 0;
+  let y = 0;
+  let cur: HTMLElement | null = el;
+  while (cur && cur !== ancestor) {
+    x += cur.offsetLeft;
+    y += cur.offsetTop;
+    const parent: HTMLElement | null = cur.offsetParent as HTMLElement | null;
+    if (!parent || !ancestor.contains(parent)) break;
+    cur = parent;
+  }
+  return { x, y };
+}
+
+function measureDomMotionGraphicRect(
+  itemId: string,
+  sourceWidth: number,
+  sourceHeight: number,
+): PreviewRect | null {
+  if (typeof document === 'undefined' || !itemId) return null;
+  const candidates = document.querySelectorAll<HTMLElement>('[data-occ-mg-root]');
+  let rootEl: HTMLElement | null = null;
+  for (const el of candidates) {
+    if (el.getAttribute('data-occ-mg-root') === itemId) {
+      rootEl = el;
+      break;
+    }
+  }
+  if (!rootEl || rootEl.offsetWidth <= 0 || rootEl.offsetHeight <= 0) return null;
+
+  const firstChild = rootEl.firstElementChild as HTMLElement | null;
+  let scaleX = 1;
+  let scaleY = 1;
+  let refW = sourceWidth;
+  let refH = sourceHeight;
+  if (firstChild && firstChild.offsetWidth > 0 && firstChild.offsetHeight > 0) {
+    const scaleMatch = firstChild.style?.transform?.match(/scale\(\s*([+-]?\d*\.?\d+)(?:\s*,\s*([+-]?\d*\.?\d+))?\s*\)/);
+    if (scaleMatch) {
+      const sx = Number(scaleMatch[1]);
+      const sy = Number(scaleMatch[2] ?? scaleMatch[1]);
+      if (Number.isFinite(sx) && sx > 0) scaleX = sx;
+      if (Number.isFinite(sy) && sy > 0) scaleY = sy;
+      refW = firstChild.offsetWidth;
+      refH = firstChild.offsetHeight;
+    }
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  const includeElement = (el: HTMLElement) => {
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    if (w <= 0 || h <= 0) return;
+    const pos = layoutOffsetRelativeTo(el, rootEl!);
+    minX = Math.min(minX, pos.x * scaleX);
+    minY = Math.min(minY, pos.y * scaleY);
+    maxX = Math.max(maxX, (pos.x + w) * scaleX);
+    maxY = Math.max(maxY, (pos.y + h) * scaleY);
+    // Include persistent overflowing badge children (e.g. top quote badge at top: -92px)
+    for (const child of Array.from(el.children) as HTMLElement[]) {
+      if (child.offsetWidth > 0 && child.offsetHeight > 0 && child.offsetTop < 0) {
+        const cPos = layoutOffsetRelativeTo(child, rootEl!);
+        minX = Math.min(minX, cPos.x * scaleX);
+        minY = Math.min(minY, cPos.y * scaleY);
+        maxX = Math.max(maxX, (cPos.x + child.offsetWidth) * scaleX);
+        maxY = Math.max(maxY, (cPos.y + child.offsetHeight) * scaleY);
+      }
+    }
+  };
+
+  const tagged = rootEl.querySelectorAll<HTMLElement>('[data-occ-bounds="true"]');
+  if (tagged.length > 0) {
+    for (const el of tagged) includeElement(el);
+  } else {
+    const walk = (container: HTMLElement) => {
+      for (const child of Array.from(container.children) as HTMLElement[]) {
+        const tag = child.tagName.toLowerCase();
+        if (tag === 'style' || tag === 'defs') continue;
+        const w = child.offsetWidth;
+        const h = child.offsetHeight;
+        if (w <= 0 || h <= 0) continue;
+        const bg = `${child.style?.background ?? ''} ${child.style?.backgroundImage ?? ''}`;
+        if (bg.includes('linear-gradient') && w >= refW * 0.85 && h >= refH * 0.45) continue;
+        const isFullCanvas = w >= refW * 0.92 && h >= refH * 0.85;
+        const isFullWidthWrapper = w >= refW * 0.92 && child.children.length > 0 && !child.style?.backgroundColor;
+        if (isFullCanvas || isFullWidthWrapper) {
+          walk(child);
+        } else {
+          includeElement(child);
+        }
+      }
+    };
+    walk(rootEl);
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || maxX <= minX || maxY <= minY) return null;
+  const clampedX = Math.max(0, Math.min(sourceWidth, minX));
+  const clampedY = Math.max(0, Math.min(sourceHeight, minY));
+  const clampedRight = Math.max(clampedX, Math.min(sourceWidth, maxX));
+  const clampedBottom = Math.max(clampedY, Math.min(sourceHeight, maxY));
+  const boxW = clampedRight - clampedX;
+  const boxH = clampedBottom - clampedY;
+  if (boxW < 16 || boxH < 16) return null;
+  if (boxW >= sourceWidth * 0.98 && boxH >= sourceHeight * 0.98) return null;
+  return {
+    x: clampedX,
+    y: clampedY,
+    width: boxW,
+    height: boxH,
+  };
+}
+
+function estimateMotionGraphicRect(
+  item: TimelineItem,
+  sourceWidth: number,
+  sourceHeight: number,
+): PreviewRect | null {
+  const props = (item.props ?? {}) as Record<string, unknown>;
+  const id = `${item.templateId ?? ''} ${item.name ?? ''}`.toLowerCase();
+  const code = item.code ?? '';
+
+  // 1. Rssd Location Badge (locationOnly)
+  if (
+    id.includes('rssd-location-badge')
+    || id.includes('location badge')
+    || props.locationOnly === true
+  ) {
+    const iconSize = Number(props.locationIconSize ?? 36);
+    const locFontSize = Number(props.locationFontSize ?? 42);
+    const locText = String(props.locationText ?? 'القاهرة');
+    const rightOffset = Number(props.rightOffset ?? 238);
+    const bottomOffset = Number(props.bottomOffset ?? 900);
+    const w = Math.min(sourceWidth - 20, iconSize + 12 + approxArabicTextWidth(locText, locFontSize, 90) + 20);
+    const h = Math.max(Math.round(iconSize * 1.3), Math.round(locFontSize * 1.25)) + 16;
+    return {
+      x: Math.max(0, sourceWidth - rightOffset - w),
+      y: Math.max(0, sourceHeight - bottomOffset - h),
+      width: w,
+      height: h,
+    };
+  }
+
+  // 2. Rssd Location & Headline
+  if (
+    id.includes('rssd-location-headline')
+    || id.includes('rssd location')
+    || code.includes('RssdLocationHeadline')
+    || (props.locationText !== undefined && props.line1Text !== undefined)
+  ) {
+    const lineCount = Number(props.lineCount ?? 2);
+    const f1 = Number(props.line1FontSize ?? 74);
+    const f2 = Number(props.line2FontSize ?? 80);
+    const f3 = Number(props.line3FontSize ?? 74);
+    const padX = Number(props.boxPaddingX ?? 34);
+    const bh1 = Number(props.boxHeight1 ?? 110);
+    const bh2 = Number(props.boxHeight2 ?? 118);
+    const bh3 = Number(props.boxHeight3 ?? 118);
+    const gap = Number(props.gap ?? 10);
+    const showLoc = props.showLocation !== false;
+    const locH = showLoc
+      ? Math.round(Number(props.locationIconSize ?? 36) * 1.3) + Number(props.locationBottomGap ?? 22)
+      : 0;
+    const w1 = approxArabicTextWidth(String(props.line1Text ?? 'انقلاب سيارة على'), f1) + padX * 2;
+    const w2 = lineCount >= 2 ? approxArabicTextWidth(String(props.line2Text ?? 'طريق مصر الصحراوي'), f2) + padX * 2 : 0;
+    const w3 = lineCount >= 3 ? approxArabicTextWidth(String(props.line3Text ?? ''), f3) + padX * 2 : 0;
+    const w = Math.min(sourceWidth - 20, Math.max(w1, w2, w3, 220));
+    const h = locH + bh1 + (lineCount >= 2 ? gap + bh2 : 0) + (lineCount >= 3 ? gap + bh3 : 0);
+    const rightOffset = Number(props.rightOffset ?? 238);
+    const bottomOffset = Number(props.bottomOffset ?? 648);
+    return {
+      x: Math.max(0, sourceWidth - rightOffset - w),
+      y: Math.max(0, sourceHeight - bottomOffset - h),
+      width: w,
+      height: h,
+    };
+  }
+
+  // 3. Rssd Text Headline
+  if (id.includes('rssd-text') || id.includes('rssd text') || code.includes('RssdTextTemplate')) {
+    const lineCount = Number(props.lineCount ?? 2);
+    const fontSize = Number(props.fontSize ?? 80);
+    const padX = Number(props.boxPaddingX ?? 34);
+    const gap = Number(props.gap ?? 12);
+    const rightOffset = Number(props.rightOffset ?? 101);
+    const bottomOffset = Number(props.bottomOffset ?? 253);
+    const w1 = approxArabicTextWidth(String(props.line1Text ?? 'السطر الأول يكتب هنا'), fontSize) + padX * 2;
+    const w2 = lineCount >= 2 ? approxArabicTextWidth(String(props.line2Text ?? 'ثم يأتي السطر الثاني'), fontSize) + padX * 2 : 0;
+    const w3 = lineCount >= 3 ? approxArabicTextWidth(String(props.line3Text ?? 'فالثالث'), fontSize) + padX * 2 : 0;
+    const w = Math.min(sourceWidth - 20, Math.max(w1, w2, w3, 240));
+    const h = 120 + (lineCount >= 2 ? gap + 116 : 0) + (lineCount >= 3 ? gap + 116 : 0) + (props.showSource ? 58 : 0);
+    return {
+      x: Math.max(0, sourceWidth - rightOffset - w),
+      y: Math.max(0, sourceHeight - bottomOffset - h),
+      width: w,
+      height: h,
+    };
+  }
+
+  // 4. Rssd Raw Badge
+  if (id.includes('rssd-raw') || id.includes('rssd raw') || code.includes('RssdRawTemplate')) {
+    const fontSize = Number(props.fontSize ?? 92);
+    const padX = Number(props.boxPaddingX ?? 42);
+    const topOffset = Number(props.topOffset ?? 684);
+    const rightOffset = Number(props.rightOffset ?? 137);
+    const w1 = approxArabicTextWidth(String(props.line1Text ?? 'القضية الفلسطينية'), fontSize) + padX * 2;
+    const w2 = approxArabicTextWidth(String(props.line2Text ?? 'روهات رصد'), fontSize) + padX * 2;
+    const w = Math.min(sourceWidth - 20, Math.max(w1, w2, 260));
+    const h = 144 + 4 + 144 + (props.showAccentBlock !== false ? 24 : 0);
+    return {
+      x: Math.max(0, sourceWidth - rightOffset - w),
+      y: Math.max(0, topOffset),
+      width: w,
+      height: h,
+    };
+  }
+
+  // 5. Rssd Quote Card
+  if (
+    id.includes('rssd-quote')
+    || id.includes('rssd quote')
+    || code.includes('RssdQuoteTemplate')
+    || props.quoteText !== undefined
+  ) {
+    const cardWidth = Number(props.cardWidth ?? 866);
+    const cardHeight = Number(props.cardHeight ?? 544);
+    const topOffset = Number(props.topOffset ?? 415);
+    const rightOffset = Number(props.rightOffset ?? 101);
+    const attrH = props.showAttribution !== false ? 97 : 0;
+    const badgeTop = 92;
+    const w = Math.min(sourceWidth - 20, cardWidth);
+    const h = cardHeight + attrH + badgeTop;
+    return {
+      x: Math.max(0, sourceWidth - rightOffset - w),
+      y: Math.max(0, topOffset - badgeTop),
+      width: w,
+      height: h,
+    };
+  }
+
+  // 6. Arabic Blue News Boxes
+  if (
+    id.includes('arabic-blue-news-boxes')
+    || id.includes('3-line custom boxes')
+    || code.includes('ArabicBlueNewsBoxes')
+  ) {
+    const fontSize = Number(props.fontSize ?? 76);
+    const boxHeight = Number(props.boxHeight ?? 112);
+    const gap = Number(props.gap ?? 26);
+    const yOffsetPercent = Number(props.yOffsetPercent ?? 54.4);
+    const rightMargin = Number(props.rightMargin ?? 54);
+    const lines = [
+      props.line1Text ?? 'أصول جديدة',
+      props.line2Text ?? 'تدخل قائمة البيع',
+      props.line3Text ?? 'وتحذيرات تفاقم أزمة الديون',
+    ]
+      .map((s) => String(s ?? ''))
+      .filter((s) => s.trim().length > 0);
+    const count = Math.max(1, lines.length);
+    const w = Math.min(
+      sourceWidth - rightMargin,
+      Math.max(...lines.map((l) => approxArabicTextWidth(l, fontSize) + 80), 260),
+    );
+    const h = count * boxHeight + (count - 1) * gap + 22;
+    return {
+      x: Math.max(0, sourceWidth - rightMargin - w),
+      y: Math.max(0, Math.round(sourceHeight * (yOffsetPercent / 100)) - 22),
+      width: w,
+      height: h,
+    };
+  }
+
+  // 7. Arabic Headline Boxes (Red & White)
+  if (
+    id.includes('arabic-headline-boxes')
+    || id.includes('red & white boxes')
+    || code.includes('ArabicHeadlineBoxes')
+    || props.topText !== undefined
+  ) {
+    const fontSize = Number(props.fontSize ?? 64);
+    const gap = Number(props.gap ?? 14);
+    const yOffsetPercent = Number(props.yOffsetPercent ?? 68);
+    const topText = String(props.topText ?? 'أشيلكم إنتوا التلاتة');
+    const bottomText = String(props.bottomText ?? 'ربنا يخليك لينا يا بابا');
+    const w = Math.min(
+      sourceWidth - 60,
+      Math.max(approxArabicTextWidth(topText, fontSize) + 68, approxArabicTextWidth(bottomText, fontSize) + 68, 260),
+    );
+    const h = 108 * 2 + gap + (props.showSubtitle !== false ? 64 : 0);
+    return {
+      x: Math.max(0, sourceWidth - 60 - w),
+      y: Math.max(0, Math.round(sourceHeight * (yOffsetPercent / 100))),
+      width: w,
+      height: h,
+    };
+  }
+
+  // 8. Rasd Quote Single
+  if (id.includes('rasd-quote-single') || id.includes('rasd quote') || code.includes('CONNECTABLE_LETTERS')) {
+    const w = Number(props.width ?? Math.round(sourceWidth * 0.85));
+    const h = Number(props.max_height ?? Math.round(sourceHeight * 0.4));
+    return {
+      x: Math.max(0, Math.round((sourceWidth - w) / 2)),
+      y: Math.max(0, Math.round(sourceHeight * 0.45)),
+      width: Math.min(sourceWidth, w),
+      height: Math.min(sourceHeight, h),
+    };
+  }
+
+  return null;
+}
+
 function previewBaseRect(state: TimelineState, item: TimelineItem): PreviewRect {
   if (state.width <= 0 || state.height <= 0) return { x: 0, y: 0, width: 0, height: 0 };
   const canvas = { x: 0, y: 0, width: state.width, height: state.height };
@@ -139,6 +457,20 @@ function previewBaseRect(state: TimelineState, item: TimelineItem): PreviewRect 
       { width: sourceWidth, height: sourceHeight },
       isBackgroundFillActive(state, item) ? 'contain' : (state.fit ?? 'contain'),
     );
+    if (item.kind === 'motion-graphic' && content.width > 0 && content.height > 0) {
+      const localBounds = measureDomMotionGraphicRect(item.id, sourceWidth, sourceHeight)
+        ?? estimateMotionGraphicRect(item, sourceWidth, sourceHeight);
+      if (localBounds) {
+        const sx = content.width / sourceWidth;
+        const sy = content.height / sourceHeight;
+        content = {
+          x: Math.round(content.x + localBounds.x * sx),
+          y: Math.round(content.y + localBounds.y * sy),
+          width: Math.max(16, Math.round(localBounds.width * sx)),
+          height: Math.max(16, Math.round(localBounds.height * sy)),
+        };
+      }
+    }
   }
 
   const crop = item.transform?.crop;

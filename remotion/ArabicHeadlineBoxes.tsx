@@ -115,10 +115,10 @@ export const ArabicHeadlineBoxes: React.FC<{ item?: { props?: ArabicHeadlineBoxe
 
   const containerAlignStyle: React.CSSProperties =
     align === 'right'
-      ? { alignItems: 'flex-end', paddingRight: 60 }
+      ? { right: 60, alignItems: 'flex-start' }
       : align === 'left'
-      ? { alignItems: 'flex-start', paddingLeft: 60 }
-      : { alignItems: 'center' };
+      ? { left: 60, alignItems: 'flex-end' }
+      : { left: 0, right: 0, alignItems: 'center' };
 
   return (
     <div
@@ -136,11 +136,10 @@ export const ArabicHeadlineBoxes: React.FC<{ item?: { props?: ArabicHeadlineBoxe
       }}
     >
       <div
+        data-occ-bounds="true"
         style={{
           position: 'absolute',
           top: `${yOffsetPercent}%`,
-          left: 0,
-          right: 0,
           display: 'flex',
           flexDirection: 'column',
           gap: `${gap}px`,

@@ -42,10 +42,14 @@ export interface RssdTextProps {
   exitStartFrame?: number;
 }
 
-export const RssdText: React.FC<RssdTextProps & { item?: { props?: RssdTextProps } }> = (rawProps) => {
+export const RssdText: React.FC<
+  RssdTextProps & { item?: { props?: RssdTextProps; width?: number; height?: number } }
+> = (rawProps) => {
   const props: RssdTextProps = { ...rawProps, ...(rawProps.item?.props || {}) };
   const frame = useCurrentFrame();
-  const { durationInFrames, width, height } = useVideoConfig();
+  const { durationInFrames, width: configWidth, height: configHeight } = useVideoConfig();
+  const width = rawProps.item?.width || configWidth || 1080;
+  const height = rawProps.item?.height || configHeight || 1440;
 
   // Text content defaults matching reference video & MOGRT
   const lineCount = props.lineCount ?? 2;
@@ -196,6 +200,7 @@ export const RssdText: React.FC<RssdTextProps & { item?: { props?: RssdTextProps
     >
       <EmbeddedFonts />
       <div
+        data-occ-bounds="true"
         style={{
           position: 'absolute',
           bottom: bottomOffset,

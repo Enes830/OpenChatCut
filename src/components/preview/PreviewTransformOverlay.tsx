@@ -158,9 +158,19 @@ export function PreviewTransformOverlay({
       : null,
     [candidates, state.height, state.selectedId, state.width],
   );
+  const [mgLayoutTick, setMgLayoutTick] = useState(0);
+  useEffect(() => {
+    if (selectedCandidate?.item.kind !== 'motion-graphic' || typeof requestAnimationFrame === 'undefined') return undefined;
+    const raf = requestAnimationFrame(() => setMgLayoutTick((n) => n + 1));
+    return () => cancelAnimationFrame(raf);
+  }, [selectedCandidate?.item.id, selectedCandidate?.item.kind, selectedCandidate?.item.props]);
+
   const selection = useMemo(
-    () => selectedCandidate ? previewCandidateGeometry(state, selectedCandidate) : null,
-    [selectedCandidate, state],
+    () => {
+      void mgLayoutTick;
+      return selectedCandidate ? previewCandidateGeometry(state, selectedCandidate) : null;
+    },
+    [mgLayoutTick, selectedCandidate, state],
   );
 
   useEffect(() => {
