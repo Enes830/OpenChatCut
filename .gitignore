@@ -41,6 +41,7 @@ backups/
 /*.fcpxml
 *.mov
 *.mp4
+!csv-video-pipeline/media/*.mp4
 
 # secrets
 .env

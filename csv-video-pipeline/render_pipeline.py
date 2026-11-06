@@ -147,8 +147,10 @@ def main():
             PROJECT_ROOT / 'backups' / 'backup_20261009_111607' / 'uploads' / 'uploads' / media_file
         ]
 
+        found = False
         for cand in candidates:
             if cand and cand.exists():
+                found = True
                 targets = [
                     workspace_uploads / media_file,
                     data_uploads / media_file,
@@ -159,6 +161,21 @@ def main():
                         target.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(cand, target)
                 break
+
+        if not found:
+            # Fallback: Download directly from public VPS editor media uploads if missing on the runner
+            import urllib.request
+            vps_url = f"https://editor.kashida.io/media/uploads/{media_file}"
+            print(f"🌐 Media file {media_file} not found locally, downloading from VPS: {vps_url}...")
+            try:
+                temp_dl = workspace_uploads / media_file
+                urllib.request.urlretrieve(vps_url, temp_dl)
+                data_target = data_uploads / media_file
+                if temp_dl.resolve() != data_target.resolve():
+                    shutil.copyfile(temp_dl, data_target)
+                print(f"✅ Successfully downloaded {media_file} from VPS!")
+            except Exception as e:
+                print(f"⚠️ Failed to download {media_file} from VPS: {e}")
 
         is_video = media_file.lower().endswith(('.mp4', '.mov', '.webm', '.mkv'))
         media_kind = "video" if is_video else "image"
