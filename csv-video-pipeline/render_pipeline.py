@@ -243,12 +243,33 @@ def main():
                 parts = line1.split(':', 1)
                 location_val = parts[0].strip()
                 line1 = parts[1].strip()
+
+            # Dynamic font size and layout calculation to prevent any text clipping on 1080x1920
+            max_line_len = max(len(line1), len(line2))
+            if max_line_len >= 26:
+                dynamic_font_size = 56
+                dynamic_padding_x = 30
+                dynamic_right_offset = 60
+            elif max_line_len >= 19:
+                dynamic_font_size = 66
+                dynamic_padding_x = 34
+                dynamic_right_offset = 75
+            elif max_line_len >= 14:
+                dynamic_font_size = 76
+                dynamic_padding_x = 38
+                dynamic_right_offset = 95
+            else:
+                dynamic_font_size = 88
+                dynamic_padding_x = 42
+                dynamic_right_offset = 120
+
             mg_props['showLocation'] = True
             mg_props['locationText'] = location_val
             mg_props['line1Text'] = line1
             mg_props['line2Text'] = line2 or line1
-            mg_props['line3Text'] = line3
-            mg_props['lineCount'] = 3 if line3 else (2 if line2 else 1)
+            mg_props['fontSize'] = dynamic_font_size
+            mg_props['boxPaddingX'] = dynamic_padding_x
+            mg_props['rightOffset'] = dynamic_right_offset
             mg_props['line1BgColor'] = '#ffffff'
             mg_props['line1TextColor'] = '#000000'
             mg_props['line2BgColor'] = args.accent_color or '#1283F9'
