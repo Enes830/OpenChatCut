@@ -82,7 +82,7 @@ export function ClipMediaLayers({ item, px, fps, height, clipStartFrame, duratio
   const strip = isVideo ? filmstripBackground(preview, {
     px, fps, srcInFrame: geometry.srcInFrame, playbackRate,
   }) : null;
-  const hasWave = preview.peaks.length > 0;
+  const hasWave = preview.peaks.length > 0 && !(isVideo && item.volume === 0);
   const waveH = strip && hasWave ? Math.max(6, height * (1 - STRIP_RATIO)) : height;
   const d = hasWave
     ? peaksPath(preview, {

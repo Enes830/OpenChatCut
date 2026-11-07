@@ -60,6 +60,7 @@ export interface RssdLocationHeadlineProps {
   headlineDurationFrames?: number;
 
   // ─── Source Badge (Top-Left, e.g. @anas_habib) ───
+  sourceOnly?: boolean;
   showSource?: boolean;
   sourceText?: string;
   sourceTop?: number;
@@ -120,8 +121,10 @@ export const RssdLocationHeadline: React.FC<
   const { fps, durationInFrames, width, height } = useVideoConfig();
   const safeFps = fps || 30;
 
+  const sourceOnly = props.sourceOnly === true;
+
   // ─── 1. Location & Headline Defaults (Exact match to reference 1080x1920) ───
-  const showLocation = props.showLocation !== false;
+  const showLocation = sourceOnly ? false : props.showLocation !== false;
   const locationText = props.locationText ?? 'القاهرة';
   const locationColor = props.locationColor || '#ffffff';
   const locationFontSize = props.locationFontSize ?? 42;
@@ -133,10 +136,10 @@ export const RssdLocationHeadline: React.FC<
 
   const line1Text = props.line1Text ?? 'انقلاب سيارة على';
   const line2Text = props.line2Text ?? 'طريق مصر الصحراوي';
-  const showHeadline = props.showHeadline !== false && Boolean(line1Text || line2Text);
+  const showHeadline = !sourceOnly && props.showHeadline !== false && Boolean(line1Text || line2Text);
 
   // ─── 2. Source Badge Defaults (Top-left @anas_habib at x=106, y=207, h=52) ───
-  const sourceText = (props.sourceText ?? '').trim();
+  const sourceText = (props.sourceText ?? (sourceOnly ? '@anas_habib' : '')).trim();
   const showSource = props.showSource !== undefined ? Boolean(props.showSource && sourceText) : Boolean(sourceText);
   const sourceLeft = props.sourceLeft ?? 106;
   const sourceTop = props.sourceTop ?? 207;
@@ -185,11 +188,11 @@ export const RssdLocationHeadline: React.FC<
   const bottomOffset =
     props.bottomOffset !== undefined ? props.bottomOffset : isPortrait ? 647 : 120;
 
-  // Animation Timing: Headline stays for headlineDurationFrames (default 120 = 4s) then exits,
+  // Animation Timing: Headline stays for headlineDurationFrames (or clip durationInFrames) then exits,
   // while Source, Logo, and Subtitle stay for the full durationInFrames!
   const enableEntrance = props.enableEntrance !== false;
   const enableExitAnimation = props.enableExitAnimation !== false;
-  const headlineDuration = props.headlineDurationFrames ?? Math.min(durationInFrames, 120);
+  const headlineDuration = props.headlineDurationFrames ?? durationInFrames;
   const exitStartFrame = props.exitStartFrame ?? Math.max(35, headlineDuration - 15);
 
   // ─── Location Entrance Animations ──────────────────────────────────────────
