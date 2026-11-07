@@ -2,42 +2,134 @@
 """
 render_pipeline.py
 
-Takes a storyboard CSV file, maps its media & texts into OpenChatCut's
-motion graphics engine (Arabic News / Videograph templates), updates the
-SQLite project store, and headlessly renders the final vertical (1080x1920) MP4.
+Takes a storyboard CSV file OR a Google Docs URL, maps its media, headlines,
+source credit (@anas_habib), and Arabic translation subtitles into OpenChatCut's
+motion graphics engine, updates the SQLite project store, and headlessly renders
+the final vertical (1080x1920) MP4.
 
 Usage:
-  python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_1_energy_summit.csv
-  python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_2_world_isolation.csv --render
-  python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_3_economic_markets.csv --render
+  python3 csv-video-pipeline/render_pipeline.py --doc "https://docs.google.com/document/d/1G9QF-PDb6aWvwxu9BmYxj_AqaTdDwa1Ydpe0KO2eqd0/edit" --render
+  python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_1_energy_summit.csv --render
 """
 
 import os
+import re
 import sys
+import csv
 import json
 import uuid
+import time
 import shutil
 import sqlite3
 import argparse
 import subprocess
+import urllib.request
 from pathlib import Path
+from html.parser import HTMLParser
 
-# Resolve project repository root (parent of this script if placed in csv-video-pipeline/)
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent if (SCRIPT_DIR.parent / 'package.json').exists() else SCRIPT_DIR
 
 TEMPLATE_MAP = {
     'blue-boxes': 'arabic-blue-news-boxes',
+    'مربعات زرقاء': 'arabic-blue-news-boxes',
     'red-boxes': 'arabic-headline-boxes',
     'headline': 'rssd-text-headline-template',
     'quote': 'rssd-quote-card-template',
+    'اقتباس': 'rssd-quote-card-template',
     'badge': 'rssd-raw-badge-template',
     'quote-single': 'rasd-quote-single',
     'breaking': 'rssd-location-headline-template',
     'location-headline': 'rssd-location-headline-template',
     'rssd-location-headline': 'rssd-location-headline-template',
     'location': 'rssd-location-headline-template',
+    'أزرق': 'rssd-location-headline-template',
+    'أحمر': 'rssd-location-headline-template',
+    'أخضر': 'rssd-location-headline-template',
+    'عاجل': 'rssd-location-headline-template',
 }
+
+
+class GoogleDocTableParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_td = False
+        self.rows = []
+        self.current_row = []
+        self.current_cell = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'tr':
+            self.current_row = []
+        elif tag in ('td', 'th'):
+            self.in_td = True
+            self.current_cell = []
+        elif tag in ('p', 'br') and self.in_td and self.current_cell:
+            if self.current_cell[-1] != '\n':
+                self.current_cell.append('\n')
+
+    def handle_endtag(self, tag):
+        if tag in ('td', 'th'):
+            self.in_td = False
+            cell_text = ''.join(self.current_cell).replace('\xa0', ' ').strip()
+            self.current_row.append(cell_text)
+        elif tag == 'tr':
+            if any(c.strip() for c in self.current_row):
+                self.rows.append(self.current_row)
+
+    def handle_data(self, data):
+        if self.in_td:
+            self.current_cell.append(data)
+
+
+def parse_google_doc(doc_url: str):
+    match = re.search(r'/document/d/([a-zA-Z0-9_-]+)', doc_url)
+    if not match:
+        raise ValueError(f"Invalid Google Docs URL: {doc_url}")
+    doc_id = match.group(1)
+    export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=html"
+    print(f"🌐 Fetching Google Doc table from: {export_url} ...")
+    req = urllib.request.Request(export_url, headers={'User-Agent': 'Mozilla/5.0'})
+    html = urllib.request.urlopen(req, timeout=20).read().decode('utf-8')
+
+    parser = GoogleDocTableParser()
+    parser.feed(html)
+    if len(parser.rows) < 2:
+        raise ValueError("Google Doc does not contain a valid table with header and data rows.")
+
+    headers = [re.sub(r'\s+', ' ', h).strip() for h in parser.rows[0]]
+    records = []
+    for raw_row in parser.rows[1:]:
+        row_dict = {}
+        for idx, h in enumerate(headers):
+            val = raw_row[idx].strip() if idx < len(raw_row) else ''
+            row_dict[h] = val
+        if any(row_dict.values()):
+            records.append(row_dict)
+    return records
+
+
+def parse_csv(csv_path):
+    with open(csv_path, 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        return list(reader)
+
+
+def parse_duration(dur_raw: str, default_dur: float = 8.0) -> float:
+    if not dur_raw:
+        return default_dur
+    dur_str = str(dur_raw).strip()
+    # Support MM:SS - MM:SS range format
+    range_match = re.match(r'(\d+):(\d+(?:\.\d+)?)\s*[-–—]\s*(\d+):(\d+(?:\.\d+)?)', dur_str)
+    if range_match:
+        m1, s1, m2, s2 = map(float, range_match.groups())
+        diff = (m2 * 60 + s2) - (m1 * 60 + s1)
+        return diff if diff > 0 else default_dur
+    try:
+        return float(dur_str)
+    except ValueError:
+        return default_dur
+
 
 def locate_data_dir(custom_dir=None):
     if custom_dir and os.path.exists(custom_dir):
@@ -51,6 +143,7 @@ def locate_data_dir(custom_dir=None):
     default_dir = home / '.openchatcut'
     return str(default_dir), None
 
+
 def load_templates():
     tpl_path = PROJECT_ROOT / 'assets' / 'templates' / 'openchatcut-templates.json'
     if not tpl_path.exists():
@@ -58,52 +151,65 @@ def load_templates():
     with open(tpl_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
+
 def get_template(templates, style_key):
     tpl_id = TEMPLATE_MAP.get(style_key.lower().strip(), style_key)
     for t in templates:
         if t['id'] == tpl_id:
             return t
     for t in templates:
-        if t['id'] == 'arabic-blue-news-boxes':
+        if t['id'] == 'rssd-location-headline-template':
             return t
     raise ValueError(f"Template {style_key} not found")
 
-def parse_csv(csv_path):
-    import csv
-    with open(csv_path, 'r', encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f)
-        return list(reader)
 
 def main():
-    parser = argparse.ArgumentParser(description="Render OpenChatCut Video from Storyboard CSV")
-    parser.add_argument('--csv', required=True, help='Path to storyboard CSV file')
+    parser = argparse.ArgumentParser(description="Render OpenChatCut Video from Storyboard CSV or Google Doc")
+    parser.add_argument('--csv', default=None, help='Path to storyboard CSV file (or Google Docs URL)')
+    parser.add_argument('--doc', default=None, help='Google Docs URL containing the storyboard table')
     parser.add_argument('--project-id', default=None, help='Project ID (default: random 8-char)')
     parser.add_argument('--project-name', default=None, help='Project Name')
-    parser.add_argument('--accent-color', default='#0f83f3', help='Accent Color (default: #0f83f3)')
+    parser.add_argument('--accent-color', default='#1283F9', help='Accent Color (default: #1283F9)')
     parser.add_argument('--font-family', default='GhroobArabic', help='Arabic Font Family')
+    parser.add_argument('--default-media', default='news_footage.mp4', help='Fallback media if cell is empty')
+    parser.add_argument('--default-source', default='', help='Fallback source handle if كتابة المصدر is selected but empty')
     parser.add_argument('--render', action='store_true', help='Execute Remotion headless render to MP4')
-    parser.add_argument('--out', default=None, help='Output MP4 destination (default: csv-video-pipeline/outputs/<csv_name>.mp4)')
+    parser.add_argument('--out', default=None, help='Output MP4 destination')
     parser.add_argument('--data-dir', default=None, help='Custom OpenChatCut data directory')
     args = parser.parse_args()
 
-    csv_path = Path(args.csv).resolve()
-    if not csv_path.exists():
-        print(f"❌ CSV file not found: {csv_path}", file=sys.stderr)
+    source_input = args.doc or args.csv
+    if not source_input:
+        print("❌ Please provide either --doc <google_doc_url> or --csv <csv_path>", file=sys.stderr)
+        sys.exit(1)
+
+    is_gdoc = source_input.startswith('http://') or source_input.startswith('https://')
+    if is_gdoc:
+        rows = parse_google_doc(source_input)
+        stem_name = f"gdoc_{uuid.uuid4().hex[:6]}"
+    else:
+        csv_path = Path(source_input).resolve()
+        if not csv_path.exists():
+            print(f"❌ CSV file not found: {csv_path}", file=sys.stderr)
+            sys.exit(1)
+        rows = parse_csv(csv_path)
+        stem_name = csv_path.stem
+
+    if not rows:
+        print("❌ No rows found in input", file=sys.stderr)
         sys.exit(1)
 
     project_id = args.project_id or uuid.uuid4().hex[:8]
-    project_name = args.project_name or f"فيديو {csv_path.stem}"
+    project_name = args.project_name or f"فيديو {stem_name}"
 
-    # Default output directory: csv-video-pipeline/outputs/
     output_dir = SCRIPT_DIR / 'outputs'
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = Path(args.out).resolve() if args.out else (output_dir / f"{csv_path.stem}.mp4")
+    out_path = Path(args.out).resolve() if args.out else (output_dir / f"{stem_name}.mp4")
 
     data_dir, profile_media_dir = locate_data_dir(args.data_dir)
     Path(data_dir).mkdir(parents=True, exist_ok=True)
     db_path = os.path.join(data_dir, 'project-store-v1.sqlite3')
 
-    # If database doesn't exist yet, initialize it cleanly via occ
     if not os.path.exists(db_path):
         occ_cli = PROJECT_ROOT / 'cli' / 'occ.mjs'
         init_cmd = ['node', str(occ_cli), '--data-dir', data_dir, 'project', 'new', 'Init']
@@ -118,14 +224,9 @@ def main():
 
     print(f"📂 Using Data Dir: {data_dir}")
     print(f"🗄️ Database: {db_path}")
+    print(f"📋 Parsed {len(rows)} scenes from {'Google Doc' if is_gdoc else stem_name}")
 
     templates = load_templates()
-    rows = parse_csv(csv_path)
-    if not rows:
-        print(f"❌ No rows found in {csv_path}", file=sys.stderr)
-        sys.exit(1)
-    print(f"📋 Parsed {len(rows)} scenes from {csv_path.name}")
-
     fps = 30
     width = 1080
     height = 1920
@@ -135,26 +236,33 @@ def main():
     current_frame = 0
 
     for idx, row in enumerate(rows):
-        media_val = row.get('media') or row.get('نوع المادة') or row.get('لينك المادة') or row.get('image') or f"scene_{idx+1}.jpg"
-        media_file = Path(media_val.strip()).name
+        media_val = (
+            row.get('media')
+            or row.get('لينك المادة')
+            or row.get('نوع المادة')
+            or row.get('image')
+            or args.default_media
+        ).strip()
+        if not media_val:
+            media_val = args.default_media
 
-        # Search candidates
+        media_file = Path(media_val.split('?')[0]).name
+
         candidates = [
-            PROJECT_ROOT / media_val.strip(),
+            PROJECT_ROOT / media_val,
             SCRIPT_DIR / 'media' / media_file,
             workspace_uploads / media_file,
             Path(profile_media_dir) / media_file if profile_media_dir else None,
-            PROJECT_ROOT / 'backups' / 'backup_20261009_111607' / 'uploads' / 'uploads' / media_file
         ]
 
         found = False
         for cand in candidates:
-            if cand and cand.exists():
+            if cand and cand.exists() and cand.is_file():
                 found = True
                 targets = [
                     workspace_uploads / media_file,
                     data_uploads / media_file,
-                    (Path(profile_media_dir) / media_file) if profile_media_dir else None
+                    (Path(profile_media_dir) / media_file) if profile_media_dir else None,
                 ]
                 for target in targets:
                     if target and cand.resolve() != target.resolve():
@@ -163,29 +271,31 @@ def main():
                 break
 
         if not found:
-            # Fallback: Download directly from public VPS editor media uploads if missing on the runner
-            import urllib.request
-            vps_url = f"https://editor.kashida.io/media/uploads/{media_file}"
-            print(f"🌐 Media file {media_file} not found locally, downloading from VPS: {vps_url}...")
+            vps_url = (
+                media_val
+                if media_val.startswith(('http://', 'https://'))
+                else f"https://editor.kashida.io/media/uploads/{media_file}"
+            )
+            print(f"🌐 Downloading media {media_file} from: {vps_url}...")
             try:
                 temp_dl = workspace_uploads / media_file
                 urllib.request.urlretrieve(vps_url, temp_dl)
                 data_target = data_uploads / media_file
                 if temp_dl.resolve() != data_target.resolve():
                     shutil.copyfile(temp_dl, data_target)
-                print(f"✅ Successfully downloaded {media_file} from VPS!")
+                print(f"✅ Downloaded {media_file}")
             except Exception as e:
-                print(f"⚠️ Failed to download {media_file} from VPS: {e}")
+                print(f"⚠️ Failed to download {media_file}: {e}")
 
         is_video = media_file.lower().endswith(('.mp4', '.mov', '.webm', '.mkv'))
         media_kind = "video" if is_video else "image"
 
-        dur_raw = row.get('duration') or row.get('توقيت الاقتطاع') or '4.0'
-        try:
-            dur_sec = float(dur_raw)
-        except ValueError:
-            dur_sec = 4.0
+        dur_raw = row.get('duration') or row.get('توقيت الاقتطاع') or ''
+        dur_sec = parse_duration(dur_raw, default_dur=8.0 if is_gdoc else 4.0)
         dur_frames = int(round(dur_sec * fps))
+
+        notes_val = (row.get('notes') or row.get('ملاحظات ومؤثرات') or '').strip()
+        mute_audio = 'بدون صوت' in notes_val or row.get('mute') == 'true'
 
         asset_id = f"asset_scene_{idx+1}_{uuid.uuid4().hex[:6]}"
         assets.append({
@@ -195,20 +305,11 @@ def main():
             "src": f"/media/uploads/{media_file}",
             "durationInFrames": dur_frames if is_video else 300,
             "width": 1080 if is_video else 1024,
-            "height": 1920 if is_video else 1024
+            "height": 1920 if is_video else 1024,
         })
 
-        raw_text = row.get('text') or row.get('النص') or row.get('line1') or ''
-        style = row.get('style') or 'blue-boxes'
-        tmpl = get_template(templates, style)
-
-        lines = [x.strip() for x in raw_text.replace('\n', '|').split('|') if x.strip()]
-        line1 = lines[0] if len(lines) > 0 else raw_text
-        line2 = lines[1] if len(lines) > 1 else ''
-        line3 = lines[2] if len(lines) > 2 else ''
-
-        # Background Media Item (Track V1 - base layer)
-        items.append({
+        # Track V1: Background Video/Image
+        bg_item = {
             "id": f"item_bg_{idx+1}",
             "track": "V1",
             "name": media_file,
@@ -219,10 +320,59 @@ def main():
             "sourceAssetId": asset_id,
             "width": 1080 if is_video else 1024,
             "height": 1920 if is_video else 1024,
-            "transform": {"scale": 1 if is_video else 1.88, "scaleX": 1 if is_video else 1.88, "scaleY": 1 if is_video else 1.88}
-        })
+            "transform": {
+                "scale": 1 if is_video else 1.88,
+                "scaleX": 1 if is_video else 1.88,
+                "scaleY": 1 if is_video else 1.88,
+            },
+        }
+        if mute_audio:
+            bg_item["muted"] = True
+            bg_item["volume"] = 0
+        items.append(bg_item)
 
-        # Motion Graphic Overlay (Track V1 - top layer)
+        # Determine Style & Texts from CSV or Google Doc columns
+        spoken_text = re.sub(r'\s*\n\s*', ' ', (row.get('النص') or row.get('text') or '').strip())
+        cover_text = (row.get('نص الغلاف') or row.get('cover_text') or '').strip()
+        style = (row.get('style') or row.get('نوع الغلاف') or 'breaking').strip()
+        tmpl = get_template(templates, style)
+
+        # Headline text: prefer نص الغلاف if provided, else use النص
+        headline_raw = cover_text if cover_text else spoken_text
+        lines = [x.strip() for x in headline_raw.replace('\n', '|').split('|') if x.strip()]
+        line1 = lines[0] if len(lines) > 0 else headline_raw
+        line2 = lines[1] if len(lines) > 1 else ''
+        line3 = lines[2] if len(lines) > 2 else ''
+
+        # If a single long sentence was put in headline without '|', split it balanced into 2 lines
+        if not line2 and len(line1) > 18 and ' ' in line1:
+            words = line1.split()
+            mid = len(words) // 2
+            line1 = ' '.join(words[:mid])
+            line2 = ' '.join(words[mid:])
+
+        # Source badge (كتابة المصدر)
+        source_mode = (row.get('المصدر') or '').strip()
+        source_text = (
+            row.get('source')
+            or row.get('كتابة المصدر')
+            or (args.default_source if 'كتابة المصدر' in source_mode else '')
+        ).strip()
+        show_source = bool(source_text) and ('بدون مصدر' not in source_mode)
+
+        # Subtitle / Arabic Translation (أضف ترجمة)
+        explicit_sub = (row.get('subtitle') or row.get('translation') or row.get('الترجمة') or '').strip()
+        wants_translation = 'أضف ترجمة' in notes_val or bool(explicit_sub)
+        subtitle_text = explicit_sub if explicit_sub else (spoken_text if wants_translation else '')
+        show_subtitle = bool(subtitle_text)
+
+        # Brand color theme from نوع الغلاف
+        accent_color = args.accent_color or '#1283F9'
+        if 'أحمر' in style:
+            accent_color = '#f22d2d'
+        elif 'أخضر' in style:
+            accent_color = '#00b8a7'
+
         mg_props = dict(tmpl.get('props', {}))
         mg_props['fontFamily'] = args.font_family
         mg_props['enableExitAnimation'] = True
@@ -232,70 +382,84 @@ def main():
             mg_props['line1Text'] = line1
             mg_props['line2Text'] = line2
             mg_props['line3Text'] = line3
-            mg_props['line1BgColor'] = args.accent_color
+            mg_props['line1BgColor'] = accent_color
             mg_props['yOffsetPercent'] = 60
             mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
         elif tmpl['id'] == 'rssd-location-headline-template':
-            # Rssd Location & Headline intro: plays only in the beginning (e.g. 4 seconds / 120 frames),
-            # then exits so the background video continues playing cleanly
-            location_val = row.get('location') or 'القاهرة'
-            if ':' in line1 and not row.get('location'):
+            location_val = (row.get('location') or row.get('الموقع') or '').strip()
+            if ':' in line1 and not location_val:
                 parts = line1.split(':', 1)
                 location_val = parts[0].strip()
                 line1 = parts[1].strip()
+                # Re-balance if line2 was empty after stripping location
+                if not line2 and len(line1) > 20 and ' ' in line1:
+                    words = line1.split()
+                    mid = len(words) // 2
+                    line1 = ' '.join(words[:mid])
+                    line2 = ' '.join(words[mid:])
 
-            # Dynamic font size and layout calculation to prevent any text clipping on 1080x1920
+            show_location = bool(location_val) or (row.get('showLocation') is True)
+            if not location_val:
+                location_val = 'القاهرة'
+                # Show location by default if style is breaking/location, or if explicitly provided
+                show_location = ('breaking' in style.lower() or 'location' in style.lower() or 'عاجل' in style)
+
+            # Exact pixel sizing matching 1080x1920 reference (fontSize=72, rightOffset=238 for <=18 chars)
             max_line_len = max(len(line1), len(line2))
-            if max_line_len >= 26:
-                dynamic_font_size = 56
-                dynamic_padding_x = 30
-                dynamic_right_offset = 60
-            elif max_line_len >= 19:
+            if max_line_len >= 25:
+                dynamic_font_size = 58
+                dynamic_right_offset = 90
+            elif max_line_len >= 20:
                 dynamic_font_size = 66
-                dynamic_padding_x = 34
-                dynamic_right_offset = 75
-            elif max_line_len >= 14:
-                dynamic_font_size = 76
-                dynamic_padding_x = 38
-                dynamic_right_offset = 95
+                dynamic_right_offset = 155
             else:
-                dynamic_font_size = 88
-                dynamic_padding_x = 42
-                dynamic_right_offset = 120
+                dynamic_font_size = 72
+                dynamic_right_offset = 238
 
-            mg_props['showLocation'] = True
+            mg_props['showLocation'] = show_location
             mg_props['locationText'] = location_val
             mg_props['line1Text'] = line1
-            mg_props['line2Text'] = line2 or line1
+            mg_props['line2Text'] = line2
+            mg_props['showSource'] = show_source
+            mg_props['sourceText'] = source_text
+            mg_props['showSubtitle'] = show_subtitle
+            mg_props['subtitleText'] = subtitle_text
+            mg_props['showBrandLogo'] = True
+            mg_props['gap'] = 0
+            mg_props['showAccentBlock'] = False
             mg_props['fontSize'] = dynamic_font_size
-            mg_props['boxPaddingX'] = dynamic_padding_x
+            mg_props['boxPaddingX'] = 24
+            mg_props['boxPaddingY'] = 16
             mg_props['rightOffset'] = dynamic_right_offset
+            mg_props['bottomOffset'] = 647
             mg_props['line1BgColor'] = '#ffffff'
             mg_props['line1TextColor'] = '#000000'
-            mg_props['line2BgColor'] = args.accent_color or '#1283F9'
+            mg_props['line2BgColor'] = accent_color
             mg_props['line2TextColor'] = '#ffffff'
             mg_props['enableEntrance'] = True
-            mg_props['enableExitGlitch'] = True
-            # Limit motion graphic duration to 4 seconds (120 frames) intro
-            mg_dur_frames = min(dur_frames, 120)
-            mg_props['exitStartFrame'] = max(35, mg_dur_frames - 25)
+            mg_props['enableExitAnimation'] = True
+            # Headline stays for 4 seconds (120 frames) then exits, while Source, Logo & Subtitle stay for full clip!
+            headline_dur = min(dur_frames, 120)
+            mg_props['headlineDurationFrames'] = headline_dur
+            mg_props['exitStartFrame'] = max(35, headline_dur - 15)
+            mg_dur_frames = dur_frames
         elif tmpl['id'] == 'rssd-quote-card-template':
-            mg_props['quoteText'] = raw_text
+            mg_props['quoteText'] = headline_raw
             mg_props['speakerName'] = row.get('speaker', 'رصد')
             mg_props['speakerTitle'] = row.get('title', '')
-            mg_props['accentColor'] = args.accent_color
+            mg_props['accentColor'] = accent_color
             mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
         elif tmpl['id'] == 'rssd-text-headline-template':
             mg_props['line1Text'] = line1
             mg_props['line2Text'] = line2 or line1
             mg_props['lineCount'] = 2 if line2 else 1
-            mg_props['accentColor'] = args.accent_color
+            mg_props['accentColor'] = accent_color
             mg_props['bottomOffset'] = 252
             mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
         elif tmpl['id'] == 'rssd-raw-badge-template':
             mg_props['line1Text'] = line1
             mg_props['line2Text'] = line2 or 'رصد'
-            mg_props['accentColor'] = args.accent_color
+            mg_props['accentColor'] = accent_color
             mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
 
         items.append({
@@ -310,7 +474,7 @@ def main():
             "width": width,
             "height": height,
             "transform": {"scale": 1, "scaleX": 1, "scaleY": 1},
-            "props": mg_props
+            "props": mg_props,
         })
 
         current_frame += dur_frames
@@ -331,25 +495,24 @@ def main():
                 "trackOrder": ["V2", "V1"],
                 "tracks": {
                     "V2": {"kind": "video"},
-                    "V1": {"kind": "video"}
+                    "V1": {"kind": "video"},
                 },
-                "items": items
+                "items": items,
             }
-        ]
+        ],
     }
 
-    # Save to SQLite
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
     cur.execute("INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)", (f"project:{project_id}", json.dumps(project_doc)))
 
-    row = cur.execute("SELECT v FROM kv WHERE k = ?", ("projects",)).fetchone()
-    project_list = json.loads(row[0]) if (row and row[0]) else []
+    row_p = cur.execute("SELECT v FROM kv WHERE k = ?", ("projects",)).fetchone()
+    project_list = json.loads(row_p[0]) if (row_p and row_p[0]) else []
     project_list = [p for p in project_list if p.get('id') != project_id]
     project_list.insert(0, {
         "id": project_id,
         "name": project_name,
-        "updatedAt": int(csv_path.stat().st_mtime * 1000)
+        "updatedAt": int(time.time() * 1000),
     })
     cur.execute("INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)", ("projects", json.dumps(project_list)))
     conn.commit()
@@ -368,11 +531,11 @@ def main():
             '--data-dir', data_dir,
             'render', project_id,
             '--out', str(out_path),
-            '--resolution', '1080p'
+            '--resolution', '1080p',
         ]
         subprocess.run(cmd, check=True)
         print(f"\n🎉 Render Completed! Saved to: {out_path}")
 
+
 if __name__ == '__main__':
     main()
-
