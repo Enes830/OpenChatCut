@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  openchatcut:
+    image: ${DOCKER_IMAGE:-ghcr.io/enes830/openchatcut:latest}
+    container_name: openchatcut-editor
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5174:5174"
+    environment:
+      - NODE_ENV=production
+      - OPENCHATCUT_ALLOW_REMOTE_HOSTS=1
+      - OPENCHATCUT_EDITOR_URL=https://editor.kashida.io
+      - OPENCHATCUT_DATA_DIR=/data
+      - BROWSER=none
+    volumes:
+      - /home/deploy/.openchatcut:/data
+      - /home/deploy/openchatcut/public/media/uploads:/app/public/media/uploads
+      - /home/deploy/openchatcut/.env.local:/app/.env.local:ro

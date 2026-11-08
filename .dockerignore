@@ -1,0 +1,16 @@
+node_modules
+dist
+desktop-dist
+cli-dist
+.git
+.github
+.cache
+.npm-cache
+scratch
+scratch-preview
+rasd
+.gemini
+.env.local
+.DS_Store
+*.mp4
+*.tar.gz
