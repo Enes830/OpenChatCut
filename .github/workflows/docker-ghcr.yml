@@ -101,4 +101,5 @@ jobs:
               sleep 2
             done
             curl -f -I http://127.0.0.1:5174 || (echo "❌ Server healthcheck failed. Container logs:" && docker compose logs --tail 50 && exit 1)
+            docker image prune -f || true
             echo "✅ OpenChatCut Docker deployment completed successfully!"

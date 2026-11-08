@@ -12,7 +12,9 @@ services:
       - OPENCHATCUT_ALLOW_REMOTE_HOSTS=1
       - OPENCHATCUT_EDITOR_URL=https://editor.kashida.io
       - OPENCHATCUT_DATA_DIR=/data
+      - MEDIA_DIR=/app/public/media/uploads
       - BROWSER=none
     volumes:
       - /home/deploy/.openchatcut:/data
       - /home/deploy/openchatcut/public/media/uploads:/app/public/media/uploads
+      - /home/deploy/openchatcut/public/media/uploads:/data/media/uploads
