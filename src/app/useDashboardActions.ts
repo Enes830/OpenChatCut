@@ -1,5 +1,5 @@
 import { useT } from '../i18n/locale';
-import { purgeProjectCascade } from '../persist/mediaCleanup';
+import { purgeAllProjectsCascade, purgeProjectCascade } from '../persist/mediaCleanup';
 import {
   createProject,
   duplicateProject,
@@ -18,6 +18,7 @@ export interface DashboardActions {
   onRename: (id: string, name: string) => Promise<void>;
   onDuplicate: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onDeleteAll: () => Promise<string>;
   onExport: (id: string, name: string) => Promise<string>;
   onImport: (file: File) => Promise<string>;
 }
@@ -74,6 +75,11 @@ export function useDashboardActions(refresh: () => Promise<void>): DashboardActi
     onRename: async (id, name) => { await renameProject(id, name); refresh(); },
     onDuplicate: async (id) => { await duplicateProject(id); refresh(); },
     onDelete: async (id) => { await purgeProjectCascade(id); refresh(); },
+    onDeleteAll: async () => {
+      const result = await purgeAllProjectsCascade();
+      await refresh();
+      return t('已清空全部工程(共 {n} 个工程,{m} 个素材文件)', { n: result.projectsDeleted, m: result.filesDeleted });
+    },
     onExport: (id, name) => exportProject(t, id, name),
     onImport: (file) => importProject(t, file, refresh),
   };

@@ -1,8 +1,8 @@
 // 素材清理纯逻辑检查:引用做差、级联删的独占判定语义(经内存态 projectStore 走真流程)。
 // 跑法:npx tsx src/persist/mediaCleanup.check.ts(已挂 verify:persist,随 pretest 执行)。
 import assert from 'node:assert/strict';
-import { collectAllUploadRefs, orphanDocIdsToPurge, unreferencedOf } from './mediaCleanup';
-import { createProject, listProjectDocIds, purgeProject } from './projectStore';
+import { collectAllUploadRefs, orphanDocIdsToPurge, purgeAllProjectsCascade, unreferencedOf } from './mediaCleanup';
+import { createProject, listProjectDocIds, listProjects, purgeProject } from './projectStore';
 import { kvGet, kvSet } from './sharedKv';
 import { listVersions, saveVersion } from './versionStore';
 import type { ProjectDoc } from '../editor/types';
@@ -86,4 +86,22 @@ import type { ProjectDoc } from '../editor/types';
   assert.ok(!(await collectAllUploadRefs(project.id)).has(futureSrc), 'excluded projects exclude their snapshots too');
   await purgeProject(project.id);
 }
+
+// ── purgeAllProjectsCascade:一键清空所有工程 ────────────────────────────
+{
+  const doc: ProjectDoc = {
+    version: 3, assets: [], mediaFolders: [],
+    timelines: [{ id: 'tl1', name: 'sequence', fps: 30, width: 1920, height: 1080, selectedId: null, items: [] } as never],
+    activeTimelineId: 'tl1',
+  } as never;
+  await createProject('Project A', doc);
+  await createProject('Project B', doc);
+  assert.equal((await listProjects()).length >= 2, true, 'created at least 2 projects');
+  const res = await purgeAllProjectsCascade();
+  assert.equal(res.projectsDeleted >= 2, true, 'purged all projects');
+  assert.equal((await listProjects()).length, 0, 'no projects remain after purgeAllProjectsCascade');
+  assert.equal((await listProjectDocIds()).length, 0, 'no project docs remain after purgeAllProjectsCascade');
+  console.log('purgeAllProjectsCascade: OK');
+}
+
 console.log('\nmediaCleanup.check: ALL PASSED');

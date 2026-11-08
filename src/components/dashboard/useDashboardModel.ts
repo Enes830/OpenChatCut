@@ -12,6 +12,7 @@ export interface DashboardProps {
   onRename: (id: string, name: string) => void;
   onDuplicate: (id: string) => void;
   onDelete: (id: string) => Promise<void>;
+  onDeleteAll?: () => Promise<string>;
   onExport: (id: string, name: string) => Promise<string>;
   onImport: (file: File) => Promise<string>;
 }

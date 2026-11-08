@@ -133,3 +133,23 @@ export async function purgeProjectCascade(id: string): Promise<{ filesDeleted: n
   }
   return { filesDeleted };
 }
+
+/** Delete all projects and cascade delete all their uploaded assets. */
+export async function purgeAllProjectsCascade(): Promise<{ projectsDeleted: number; filesDeleted: number }> {
+  const metas = await listProjects({ includeDeleted: true });
+  const docIds = await listProjectDocIds();
+  const allIds = Array.from(new Set([...metas.map((m) => m.id), ...docIds]));
+  for (const id of allIds) {
+    await purgeProject(id);
+  }
+  let filesDeleted = 0;
+  try {
+    const files = await listUploadFiles();
+    for (const file of files) {
+      if (await deleteUploadFile(file.name).catch(() => false)) filesDeleted += 1;
+    }
+  } catch {
+    // Ignore fetch/disk listing failures in offline or headless/test environments
+  }
+  return { projectsDeleted: metas.length, filesDeleted };
+}

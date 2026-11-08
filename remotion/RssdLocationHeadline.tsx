@@ -83,10 +83,10 @@ export interface RssdLocationHeadlineProps {
   logoRight?: number;
 
   // ─── Colors & Themes ───
-  accentColor?: string; // Brand Blue (#1283F9), Red (#f22d2d), Green (#00b8a7)
+  accentColor?: string; // Brand Dark Teal (#004d52), Red (#f22d2d), Green (#00b8a7)
   line1BgColor?: string; // default #ffffff
   line1TextColor?: string; // default #000000
-  line2BgColor?: string; // default #1283F9
+  line2BgColor?: string; // default linear-gradient(to left, #004d52, #002345)
   line2TextColor?: string; // default #ffffff
   backgroundColor?: string;
   showAccentBlock?: boolean;
@@ -162,10 +162,10 @@ export const RssdLocationHeadline: React.FC<
   const logoRight = props.logoRight ?? 134;
 
   // ─── 5. Colors & Typography ───
-  const accentColor = props.accentColor || '#1283F9';
+  const accentColor = props.accentColor || '#004d52';
   const line1BgColor = props.line1BgColor || '#ffffff';
   const line1TextColor = props.line1TextColor || '#000000';
-  const line2BgColor = props.line2BgColor || accentColor;
+  const line2BgColor = props.line2BgColor || 'linear-gradient(to left, #004d52, #002345)';
   const line2TextColor = props.line2TextColor || '#ffffff';
   const backgroundColor = props.backgroundColor || 'transparent';
   const showAccentBlock = props.showAccentBlock === true;
@@ -276,7 +276,9 @@ export const RssdLocationHeadline: React.FC<
   // Right edge hugs the wipe edge; the block extends ahead (left) of it.
   const l1RunnerRight = `${l1Lead}%`;
   const l1RunnerWidth = `calc(${L1_RUNNER_W * l1RunnerScale}px + ${l1StretchPct}%)`;
-  const l1RunnerBg = line1IsWhite ? (line2IsWhite ? accentColor : line2BgColor) : '#ffffff';
+  const l1RunnerBg = line1IsWhite
+    ? (line2IsWhite ? accentColor : (String(line2BgColor).includes('gradient') ? accentColor : line2BgColor))
+    : '#ffffff';
 
   // L2 detached runner (87 × 52) — appears at f8, rides ahead of the Line 2 wipe (wipe: f11→36)
   const L2_RUNNER_W = 87;
@@ -335,11 +337,11 @@ export const RssdLocationHeadline: React.FC<
   }
 
   const currentL1Bg =
-    silhouetteMix > 0.65 ? '#e7e7e7' : silhouetteMix > 0.25 ? '#68b4fa' : line1BgColor;
+    silhouetteMix > 0.65 ? '#e7e7e7' : silhouetteMix > 0.25 ? '#00384c' : line1BgColor;
   const currentL2Bg =
-    silhouetteMix > 0.65 ? '#e7e7e7' : silhouetteMix > 0.25 ? '#68b4fa' : line2BgColor;
+    silhouetteMix > 0.65 ? '#e7e7e7' : silhouetteMix > 0.25 ? '#00384c' : line2BgColor;
   const currentTabBg =
-    silhouetteMix > 0.65 ? '#d0d0d0' : silhouetteMix > 0.25 ? '#68b4fa' : accentColor;
+    silhouetteMix > 0.65 ? '#d0d0d0' : silhouetteMix > 0.25 ? '#00384c' : accentColor;
   const textOpacityDuringExit = interpolate(silhouetteMix, [0, 0.65], [1, 0], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
@@ -423,8 +425,8 @@ export const RssdLocationHeadline: React.FC<
                 opacity: srcRunnerProgress,
               }}
             >
-              <div style={{ width: 32, height: 11, backgroundColor: '#555555' }} />
-              <div style={{ width: 32, height: 11, backgroundColor: accentColor }} />
+              <div style={{ width: 32, height: 11, background: '#555555' }} />
+              <div style={{ width: 32, height: 11, background: accentColor }} />
             </div>
           )}
 
@@ -567,7 +569,7 @@ export const RssdLocationHeadline: React.FC<
                         right: l1RunnerRight,
                         width: l1RunnerWidth,
                         height: 52,
-                        backgroundColor: l1RunnerBg,
+                        background: l1RunnerBg,
                         opacity: 0.55,
                         boxShadow: '0 3px 10px rgba(0, 0, 0, 0.18)',
                         willChange: 'right, width, opacity',
@@ -579,7 +581,7 @@ export const RssdLocationHeadline: React.FC<
                   <div
                     style={{
                       position: 'relative',
-                      backgroundColor: currentL1Bg,
+                      background: currentL1Bg,
                       padding: `${boxPaddingY}px ${boxPaddingX}px`,
                       height: line1Height,
                       boxSizing: 'border-box',
@@ -623,7 +625,7 @@ export const RssdLocationHeadline: React.FC<
                         right: l2RunnerRight,
                         width: l2RunnerWidth,
                         height: 52,
-                        backgroundColor: l2RunnerBg,
+                        background: l2RunnerBg,
                         opacity: 0.55,
                         boxShadow: '0 3px 12px rgba(0, 0, 0, 0.22)',
                         willChange: 'right, width, opacity',
@@ -635,7 +637,7 @@ export const RssdLocationHeadline: React.FC<
                   <div
                     style={{
                       position: 'relative',
-                      backgroundColor: currentL2Bg,
+                      background: currentL2Bg,
                       padding: `${boxPaddingY}px ${boxPaddingX}px`,
                       height: line2Height,
                       boxSizing: 'border-box',
@@ -668,7 +670,7 @@ export const RssdLocationHeadline: React.FC<
                         left: bottomTabLeftPx,
                         width: bottomTabWidthPx,
                         height: 24,
-                        backgroundColor: currentTabBg,
+                        background: currentTabBg,
                         zIndex: 3,
                       }}
                     />

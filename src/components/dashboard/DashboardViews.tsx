@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import type { ProjectMeta } from '../../persist/projectStoreCoordinators';
 import { theme } from '../../theme';
 import { useT } from '../../i18n/locale';
@@ -75,14 +75,57 @@ export function DashboardTitlebarContent({ model }: { model: DashboardModel }) {
   );
 }
 
-function ProjectToolbar({ projects, model }: { projects: ProjectMeta[]; model: DashboardModel }) {
+function ProjectToolbar({
+  projects,
+  model,
+  props,
+}: {
+  projects: ProjectMeta[];
+  model: DashboardModel;
+  props?: DashboardProps;
+}) {
   const t = useT();
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
       <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em' }}>{t('工程')}</h1>
       {model.transfer.note && <span style={{ color: theme.textDim, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{model.transfer.note}</span>}
       <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 10 }}>
         <ProjectSearch value={model.query} onChange={model.setQuery} />
+        {props?.onDeleteAll && projects.length > 0 && (
+          confirmDeleteAll ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <button
+                onClick={() => {
+                  setConfirmDeleteAll(false);
+                  if (props.onDeleteAll) void model.transfer.run(props.onDeleteAll());
+                }}
+                disabled={model.transfer.busy}
+                style={{ ...importBtn, color: theme.danger, borderColor: theme.danger, fontWeight: 600 }}
+                title={t('确认彻底清空所有工程？此操作不可撤销')}
+              >
+                <Icon name="trash" size={13} /> {t('确认删除全部 ({n})', { n: projects.length })}
+              </button>
+              <button
+                onClick={() => setConfirmDeleteAll(false)}
+                disabled={model.transfer.busy}
+                style={{ ...importBtn, padding: '4px 7px' }}
+                title={t('取消')}
+              >
+                ✕
+              </button>
+            </span>
+          ) : (
+            <button
+              onClick={() => setConfirmDeleteAll(true)}
+              disabled={model.transfer.busy}
+              style={importBtn}
+              title={t('清空所有工程及关联素材')}
+            >
+              <Icon name="trash" size={13} /> {t('清空所有工程')}
+            </button>
+          )
+        )}
         <button onClick={() => model.setDialog('cleanup', true)} style={importBtn} title={t('清理所有工程都不引用的上传素材(测试/已删工程残留)')}><Icon name="trash" size={13} /> {t('清理素材')}</button>
         <button onClick={() => model.transfer.fileRef.current?.click()} disabled={model.transfer.busy} style={importBtn} title={t('导入 .ccproj 工程文件(兼容旧 .ccproj.json)')}><Icon name="upload" size={13} /> {t('导入工程')}</button>
         <input ref={model.transfer.fileRef} type="file" accept=".ccproj,.json,application/json,application/x-openchatcut-project" onChange={model.transfer.pickImport} style={{ display: 'none' }} />
@@ -185,7 +228,7 @@ export function DashboardContent({ props, model }: { props: DashboardProps; mode
     <main style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       <div style={{ maxWidth: 1120, margin: '0 auto', padding: '28px 24px 80px' }}>
         {model.modelSnapshot.loaded && model.modelSnapshot.choices.length === 0 && <ModelSetupCard onOpen={() => model.setDialog('settings', true)} />}
-        <ProjectToolbar projects={props.projects} model={model} />
+        <ProjectToolbar projects={props.projects} model={model} props={props} />
         <ProjectGrid props={props} model={model} />
       </div>
     </main>

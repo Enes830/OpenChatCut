@@ -27,7 +27,7 @@ export const RssdSourceBadge: React.FC<
   const sourceBgColor = props.sourceBgColor || '#000000';
   const sourceTextColor = props.sourceTextColor || '#ffffff';
   const sourceFontSize = props.sourceFontSize ?? 31;
-  const accentColor = props.accentColor || '#1283F9';
+  const accentColor = props.accentColor || '#004d52';
   const enableEntrance = props.enableEntrance !== false;
 
   // ─── Source Badge Entrance Wipe (Frames 3 – 19) ───

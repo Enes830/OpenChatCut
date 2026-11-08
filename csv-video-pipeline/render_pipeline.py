@@ -366,12 +366,34 @@ def main():
         subtitle_text = explicit_sub if explicit_sub else (spoken_text if wants_translation else '')
         show_subtitle = bool(subtitle_text)
 
-        # Brand color theme from نوع الغلاف
-        accent_color = args.accent_color or '#1283F9'
-        if 'أحمر' in style:
+        # Brand color theme from لون النص or نوع الغلاف
+        color_val = (row.get('لون النص') or row.get('color') or '').strip()
+        accent_color = args.accent_color if args.accent_color != '#1283F9' else '#004d52'
+        line2_bg = 'linear-gradient(to left, #004d52, #002345)'
+
+        if color_val:
+            hexes = re.findall(r'#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b', color_val)
+            if len(hexes) >= 2:
+                c1 = hexes[0] if hexes[0].startswith('#') else f"#{hexes[0]}"
+                c2 = hexes[1] if hexes[1].startswith('#') else f"#{hexes[1]}"
+                line2_bg = f"linear-gradient(to left, {c1}, {c2})"
+                accent_color = c1
+            elif len(hexes) == 1:
+                c = hexes[0] if hexes[0].startswith('#') else f"#{hexes[0]}"
+                line2_bg = c
+                accent_color = c
+            elif 'أحمر' in color_val:
+                line2_bg = '#f22d2d'
+                accent_color = '#f22d2d'
+            elif 'أخضر' in color_val:
+                line2_bg = '#00b8a7'
+                accent_color = '#00b8a7'
+        elif 'أحمر' in style:
             accent_color = '#f22d2d'
+            line2_bg = '#f22d2d'
         elif 'أخضر' in style:
             accent_color = '#00b8a7'
+            line2_bg = '#00b8a7'
 
         mg_props = dict(tmpl.get('props', {}))
         mg_props['fontFamily'] = args.font_family
@@ -434,7 +456,8 @@ def main():
             mg_props['bottomOffset'] = 647
             mg_props['line1BgColor'] = '#ffffff'
             mg_props['line1TextColor'] = '#000000'
-            mg_props['line2BgColor'] = accent_color
+            mg_props['line2BgColor'] = line2_bg
+            mg_props['accentColor'] = accent_color
             mg_props['line2TextColor'] = '#ffffff'
             mg_props['enableEntrance'] = True
             mg_props['enableExitAnimation'] = True
