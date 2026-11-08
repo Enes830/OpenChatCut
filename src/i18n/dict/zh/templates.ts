@@ -217,4 +217,6 @@ export default {
   'Rssd Quote - Editorial Arabic Quote Card': 'Rssd 深度引言卡 · 阿拉伯语名言',
   'Rssd Location & Headline - Arabic Breaking News': 'Rssd 地点突发新闻卡 · 地图图钉+双行标题',
   'Rssd Location Badge - City Map Pin': 'Rssd 城市地点徽章 · 动态地图图钉',
+  'Rssd Source Badge (@source)': 'Rssd 来源信息徽章 · 左上角账号',
+  'Rssd Brand Logo (ر ص د)': 'Rssd 品牌标志 · 右上角Logo',
 } as Record<string, string>;

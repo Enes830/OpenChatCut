@@ -140,7 +140,7 @@ export const RssdLocationHeadline: React.FC<
 
   // ─── 2. Source Badge Defaults (Top-left @anas_habib at x=106, y=207, h=52) ───
   const sourceText = (props.sourceText ?? (sourceOnly ? '@anas_habib' : '')).trim();
-  const showSource = props.showSource !== undefined ? Boolean(props.showSource && sourceText) : Boolean(sourceText);
+  const showSource = Boolean(props.showSource && sourceText);
   const sourceLeft = props.sourceLeft ?? 106;
   const sourceTop = props.sourceTop ?? 207;
   const sourceBgColor = props.sourceBgColor || '#000000';
@@ -157,7 +157,7 @@ export const RssdLocationHeadline: React.FC<
   const subtitleFontSize = props.subtitleFontSize ?? 44;
 
   // ─── 4. Brand Logo Defaults (Top-right ر ص د at right=134, top=502, 149x46) ───
-  const showBrandLogo = props.showBrandLogo !== false;
+  const showBrandLogo = props.showBrandLogo === true;
   const logoTop = props.logoTop ?? 502;
   const logoRight = props.logoRight ?? 134;
 
@@ -228,7 +228,7 @@ export const RssdLocationHeadline: React.FC<
 
   // ─── Headline Entrance Animations ──────────────────────────────────────────
   const l1Progress = enableEntrance
-    ? interpolate(frame, [3, 26], [0, 1], {
+    ? interpolate(frame, [3, 28], [0, 1], {
         extrapolateLeft: 'clamp',
         extrapolateRight: 'clamp',
         easing: Easing.bezier(0.16, 1, 0.3, 1),
@@ -236,33 +236,62 @@ export const RssdLocationHeadline: React.FC<
     : 1;
 
   const l2Progress = enableEntrance
-    ? interpolate(frame, [10, 34], [0, 1], {
+    ? interpolate(frame, [11, 36], [0, 1], {
         extrapolateLeft: 'clamp',
         extrapolateRight: 'clamp',
         easing: Easing.bezier(0.16, 1, 0.3, 1),
       })
     : 1;
 
-  const showL1Runner = enableEntrance && frame >= 4 && frame <= 22;
-  const l1RunnerRightPercent = interpolate(frame, [4, 13, 22], [25, 92, 100], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.cubic),
-  });
-  const l1RunnerBg =
-    line1BgColor === '#ffffff' ? 'rgba(255, 255, 255, 0.75)' : 'rgba(255, 255, 255, 0.24)';
+  // ─── Runner Blocks (lead the box wipes, start a few frames earlier) ───────
+  // Colors are swapped against their boxes for contrast: the runner on the white
+  // Line 1 box is brand blue, the runner on the blue Line 2 box is white.
+  // Each runner rides exactly on its box's wipe edge (block extends ahead of it),
+  // grows in from zero width a few frames before the wipe starts, stretches
+  // forward with speed, and collapses back into the box edge as the wipe lands —
+  // no opacity fades, so colors stay crisp on any footage.
+  // NOTE: keep this block free of TypeScript-only syntax — the template registry
+  // (scratch/register_templates.mjs) compiles this file as plain JSX.
+  const line1IsWhite = /^#?(fff|ffffff)$/i.test(String(line1BgColor).trim());
+  const line2IsWhite = /^#?(fff|ffffff)$/i.test(String(line2BgColor).trim());
+  const wipeEase = Easing.bezier(0.16, 1, 0.3, 1);
+  const clampOpts = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' };
+  // Wipe-edge position (in % of box width) at a given frame for a [from, to] wipe.
+  function leadCurve(f, from, to) {
+    return interpolate(f, [from, to], [0, 100], { ...clampOpts, easing: wipeEase });
+  }
+  // Per-frame speed (in % of box width) — drives a subtle motion stretch.
+  function speedOf(from, to) {
+    return leadCurve(frame + 0.5, from, to) - leadCurve(frame - 0.5, from, to);
+  }
 
-  const showL2Runner = enableEntrance && frame >= 11 && frame <= 32;
-  const l2RunnerRightPx = interpolate(frame, [11, 22, 32], [110, 560, 580], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.cubic),
-  });
-  const l2RunnerWidthPx = interpolate(frame, [11, 22, 32], [140, 82, 80], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-  const l2RunnerBg = line2BgColor === '#ffffff' ? '#09345a' : line2BgColor;
+  // L1 runner (84 × 52) — appears at f1, rides the Line 1 wipe edge (wipe: f3→28)
+  const L1_RUNNER_W = 84;
+  const l1Lead = leadCurve(frame, 3, 28);
+  const l1Grow = interpolate(frame, [0, 3], [0, 1], { ...clampOpts, easing: Easing.out(Easing.cubic) });
+  const l1Collapse = interpolate(frame, [11, 18], [0, 1], { ...clampOpts, easing: Easing.inOut(Easing.cubic) });
+  const l1StretchPct = Math.min(7, speedOf(3, 28) * 0.6) * (1 - l1Collapse);
+  const l1RunnerScale = enableEntrance ? l1Grow * (1 - l1Collapse) : 0;
+  const showL1Runner = l1RunnerScale > 0.01;
+  // Right edge hugs the wipe edge; the block extends ahead (left) of it.
+  const l1RunnerRight = `${l1Lead}%`;
+  const l1RunnerWidth = `calc(${L1_RUNNER_W * l1RunnerScale}px + ${l1StretchPct}%)`;
+  const l1RunnerBg = line1IsWhite ? (line2IsWhite ? accentColor : line2BgColor) : '#ffffff';
+
+  // L2 detached runner (87 × 52) — appears at f8, rides ahead of the Line 2 wipe (wipe: f11→36)
+  const L2_RUNNER_W = 87;
+  const l2Lead = leadCurve(frame, 11, 36);
+  const l2Grow = interpolate(frame, [8, 11], [0, 1], { ...clampOpts, easing: Easing.out(Easing.cubic) });
+  const l2Collapse = interpolate(frame, [18, 25], [0, 1], { ...clampOpts, easing: Easing.inOut(Easing.cubic) });
+  const l2RunnerScale = enableEntrance ? l2Grow * (1 - l2Collapse) : 0;
+  const showL2Runner = l2RunnerScale > 0.01;
+  // Detached: small gap ahead of the wipe edge that closes as it lands.
+  const l2GapPx = 18 * (1 - l2Collapse);
+  // It sits behind the box, so the stretch extends forward (leading edge).
+  const l2StretchPct = Math.min(9, speedOf(11, 36) * 0.7) * (1 - l2Collapse);
+  const l2RunnerRight = `calc(${l2Lead}% + ${l2GapPx}px)`;
+  const l2RunnerWidth = `calc(${L2_RUNNER_W * l2RunnerScale}px + ${l2StretchPct}%)`;
+  const l2RunnerBg = line2IsWhite ? accentColor : '#ffffff';
 
   const showBottomTab = showAccentBlock && (!enableEntrance || frame >= 20);
   const bottomTabLeftPx = enableEntrance
@@ -502,7 +531,13 @@ export const RssdLocationHeadline: React.FC<
                   fontWeight: 700,
                   lineHeight: 1.1,
                   whiteSpace: 'nowrap',
-                  clipPath: `inset(0 0 0 ${100 - locTextProgress * 100}%)`,
+                  display: 'inline-block',
+                  paddingLeft: 12,
+                  paddingRight: 4,
+                  clipPath:
+                    locTextProgress < 1
+                      ? `inset(-12px -12px -12px ${Math.max(0, 100 - locTextProgress * 100)}%)`
+                      : undefined,
                   opacity: locTextOpacity * textOpacityDuringExit,
                   textShadow: '0 2px 8px rgba(0, 0, 0, 0.85)',
                 }}
@@ -529,11 +564,12 @@ export const RssdLocationHeadline: React.FC<
                       style={{
                         position: 'absolute',
                         bottom: 12,
-                        right: `${l1RunnerRightPercent}%`,
-                        width: 84,
-                        height: 44,
+                        right: l1RunnerRight,
+                        width: l1RunnerWidth,
+                        height: 52,
                         backgroundColor: l1RunnerBg,
-                        transform: 'translateX(35%)',
+                        boxShadow: '0 3px 10px rgba(0, 0, 0, 0.18)',
+                        willChange: 'right, width, opacity',
                         zIndex: 3,
                       }}
                     />
@@ -583,12 +619,13 @@ export const RssdLocationHeadline: React.FC<
                       style={{
                         position: 'absolute',
                         top: 32,
-                        right: l2RunnerRightPx,
-                        width: l2RunnerWidthPx,
-                        height: 44,
+                        right: l2RunnerRight,
+                        width: l2RunnerWidth,
+                        height: 52,
                         backgroundColor: l2RunnerBg,
+                        boxShadow: '0 3px 12px rgba(0, 0, 0, 0.22)',
+                        willChange: 'right, width, opacity',
                         zIndex: 1,
-                        opacity: 0.95,
                       }}
                     />
                   )}

@@ -115,5 +115,6 @@ public/whisper-cli/
 # Local IDE metadata and scratch
 .gemini/
 scratch/
+scratch-preview/
 rasd/
 
