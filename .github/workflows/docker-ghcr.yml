@@ -66,6 +66,7 @@ jobs:
           username: ${{ secrets.VPS_USERNAME || secrets.VPS_USER || 'deploy' }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 22
+          command_timeout: 30m
           script: |
             echo "🔐 Logging into GHCR on VPS..."
             echo ${{ secrets.GITHUB_TOKEN }} | docker login -u ${{ github.actor }} --password-stdin ${{ env.REGISTRY }}
