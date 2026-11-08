@@ -162,10 +162,17 @@ export const RssdLocationHeadline: React.FC<
   const logoRight = props.logoRight ?? 134;
 
   // ─── 5. Colors & Typography ───
-  const accentColor = props.accentColor || '#004d52';
+  const rawLine2Bg = props.line2BgColor || 'linear-gradient(to left, #004d52, #002345)';
+  const isLine2Blue = String(rawLine2Bg).includes('1283F9') || String(rawLine2Bg).toLowerCase() === 'blue' || rawLine2Bg === 'أزرق';
+  const isLine2Gradient = String(rawLine2Bg).includes('gradient') || String(rawLine2Bg).includes('004d52') || rawLine2Bg === 'أزرق كحلي';
+
+  const line2BgColor = isLine2Blue
+    ? '#1283F9'
+    : (isLine2Gradient ? 'linear-gradient(to left, #004d52, #002345)' : rawLine2Bg);
+
+  const accentColor = props.accentColor || (isLine2Blue ? '#1283F9' : '#004d52');
   const line1BgColor = props.line1BgColor || '#ffffff';
   const line1TextColor = props.line1TextColor || '#000000';
-  const line2BgColor = props.line2BgColor || 'linear-gradient(to left, #004d52, #002345)';
   const line2TextColor = props.line2TextColor || '#ffffff';
   const backgroundColor = props.backgroundColor || 'transparent';
   const showAccentBlock = props.showAccentBlock === true;
@@ -637,6 +644,8 @@ export const RssdLocationHeadline: React.FC<
                   <div
                     style={{
                       position: 'relative',
+                      backgroundColor: String(currentL2Bg).includes('gradient') ? '#004d52' : currentL2Bg,
+                      backgroundImage: String(currentL2Bg).includes('gradient') ? currentL2Bg : undefined,
                       background: currentL2Bg,
                       padding: `${boxPaddingY}px ${boxPaddingX}px`,
                       height: line2Height,
