@@ -32,6 +32,7 @@ import {
 export interface EditorProps {
   initial: ProjectDoc;
   project: ProjectMeta;
+  mode?: 'full' | 'simple';
   onHome: () => void;
   onRename: (name: string) => void;
 }

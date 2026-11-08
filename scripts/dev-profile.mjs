@@ -217,7 +217,12 @@ export async function profileChildEnvironment(
   ensureBrowserImpl,
 ) {
   const saved = await readProfileEnv(profile.keystorePath);
-  const environment = { ...baseEnvironment, ...saved, [DEV_PROFILE_ID_ENV]: profile.id };
+  const environment = {
+    ...baseEnvironment,
+    ...saved,
+    [DEV_PROFILE_ID_ENV]: profile.id,
+    VITE_CONFIG_NATIVE_IGNORE_WARNING: 'true',
+  };
   if (!environment.CC_BROWSER_EXECUTABLE) {
     const shellPath = await resolveDevHeadlessShell(environment, ensureBrowserImpl);
     if (shellPath) environment.CC_BROWSER_EXECUTABLE = shellPath;

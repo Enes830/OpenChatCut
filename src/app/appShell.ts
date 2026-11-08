@@ -18,7 +18,10 @@ import type { ProjectMeta } from '../persist/projectStoreCoordinators';
 import { kvRemoteMode } from '../persist/sharedKv';
 import { projectStoreWriteCredential } from '../persist/projectStoreTransport';
 
-export type AppRoute = { name: 'dashboard' } | { name: 'editor'; id: string };
+export type EditorViewMode = 'full' | 'simple';
+export type AppRoute =
+  | { name: 'dashboard' }
+  | { name: 'editor'; id: string; mode?: EditorViewMode };
 
 interface LiveAgentStatus {
   readonly caps?: Record<string, boolean>;
@@ -40,9 +43,11 @@ export const emptyProjectDoc = (): ProjectDoc => docFromTimeline(emptyState());
 // Keep the sample timeline out of established users' startup bundle; it is needed only on first run.
 const seedDoc = async (): Promise<ProjectDoc> => docFromTimeline((await import('../editor/initial')).INITIAL);
 
-function parseHash(): AppRoute {
-  const match = window.location.hash.match(/^#\/editor\/(.+)$/);
-  return match ? { name: 'editor', id: match[1] } : { name: 'dashboard' };
+export function parseHash(hash = window.location.hash): AppRoute {
+  const simpleMatch = hash.match(/^#\/simple\/(.+)$/);
+  if (simpleMatch) return { name: 'editor', id: simpleMatch[1], mode: 'simple' };
+  const match = hash.match(/^#\/editor\/(.+)$/);
+  return match ? { name: 'editor', id: match[1], mode: 'full' } : { name: 'dashboard' };
 }
 
 export function navigateTo(hash: string): void {

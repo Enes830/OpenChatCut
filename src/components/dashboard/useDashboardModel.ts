@@ -7,6 +7,7 @@ import type { ProjectMeta } from '../../persist/projectStoreCoordinators';
 export interface DashboardProps {
   projects: ProjectMeta[];
   onOpen: (id: string) => void;
+  onOpenSimple?: (id: string) => void;
   onNew: () => void;
   onRename: (id: string, name: string) => void;
   onDuplicate: (id: string) => void;

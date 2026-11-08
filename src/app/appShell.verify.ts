@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { loadInitialProjects, syncAgentBackends, type ProjectStartupSource } from './appShell';
+import { loadInitialProjects, parseHash, syncAgentBackends, type ProjectStartupSource } from './appShell';
 import { getActiveAgentModelChoice, getAgentModelSnapshot, subscribeAgentModels } from '../agent/model-selection';
 import type { ProjectMeta } from '../persist/projectStoreCoordinators';
 import { syncDesktopNativeInferenceEnabled } from '../transcript/desktop-inference-preference';
@@ -174,5 +174,17 @@ try {
 } finally {
   globalThis.fetch = startupFetch;
 }
+
+assert.deepEqual(parseHash('#/'), { name: 'dashboard' }, 'root hash routes to dashboard');
+assert.deepEqual(
+  parseHash('#/editor/b1313b06-b12f-4a17-9326-775390f9acc0'),
+  { name: 'editor', id: 'b1313b06-b12f-4a17-9326-775390f9acc0', mode: 'full' },
+  'editor hash routes to full editor mode with project id',
+);
+assert.deepEqual(
+  parseHash('#/simple/b1313b06-b12f-4a17-9326-775390f9acc0'),
+  { name: 'editor', id: 'b1313b06-b12f-4a17-9326-775390f9acc0', mode: 'simple' },
+  'simple hash routes to simple editor mode with the exact same project id',
+);
 
 console.log('appShell.verify: project startup and optional-backend isolation passed');

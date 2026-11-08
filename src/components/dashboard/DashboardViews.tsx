@@ -129,6 +129,11 @@ function ProjectActions({ project, props, model }: { project: ProjectMeta; props
   }
   return (
     <>
+      {props.onOpenSimple && (
+        <button onClick={() => props.onOpenSimple?.(project.id)} style={{ ...miniBtn, width: 'auto', padding: '0 6px', fontSize: 10.5, fontWeight: 600, color: theme.accent }} title={t('在简洁模式中打开')}>
+          {t('简洁版')}
+        </button>
+      )}
       <button onClick={() => model.rename.start(project)} style={miniBtn} title={t('重命名')}><Icon name="pencil" size={13} /></button>
       <button onClick={() => props.onDuplicate(project.id)} style={miniBtn} title={t('复制')}><Icon name="copy" size={13} /></button>
       <button onClick={() => void model.transfer.run(props.onExport(project.id, project.name))} disabled={model.transfer.busy} style={miniBtn} title={t('导出为流式 .ccproj(含素材,可在桌面版/其它机器导入)')}><Icon name="download" size={13} /></button>

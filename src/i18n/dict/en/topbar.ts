@@ -17,4 +17,9 @@ export default {
   '关闭窗口': 'Close window',
   '最小化窗口': 'Minimize window',
   '缩放窗口': 'Zoom window',
+  '简洁版': 'Simple UI',
+  '切换到简洁模式': 'Switch to Simple UI',
+  '在简洁模式中打开': 'Open in Simple UI',
+  '切换到完整编辑器': 'Switch to Full Editor',
+  '完整编辑器': 'Full Editor',
 } as Record<string, string>;

@@ -13,6 +13,7 @@ type Translate = (zh: string, params?: Record<string, string | number>) => strin
 
 export interface DashboardActions {
   onOpen: (id: string) => void;
+  onOpenSimple?: (id: string) => void;
   onNew: () => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
   onDuplicate: (id: string) => Promise<void>;
@@ -64,6 +65,7 @@ export function useDashboardActions(refresh: () => Promise<void>): DashboardActi
   const t = useT();
   return {
     onOpen: (id) => navigateTo(`#/editor/${id}`),
+    onOpenSimple: (id) => navigateTo(`#/simple/${id}`),
     onNew: async () => {
       const project = await createProject(randomProjectName(), emptyProjectDoc());
       await refresh();

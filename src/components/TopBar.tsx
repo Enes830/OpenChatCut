@@ -100,6 +100,19 @@ export function TopBar({ projectId, projectName, canUndo, canRedo, exporting, ex
       <ExportHistory />
       <LocaleToggle />
       <TopBarIconButton icon="layoutPanel" label={t('切换面板布局')} onClick={() => invokeAction('toggle-layout', undefined, 'toolbar')} />
+      <button
+        type="button"
+        onClick={() => { window.location.hash = `#/simple/${projectId}`; }}
+        className="cc-tip cc-tip-r"
+        data-tip={t('切换到简洁模式')}
+        aria-label={t('切换到简洁模式')}
+        style={{ height: 24, background: 'transparent', color: theme.textDim, border: `0.5px solid ${theme.border}`, borderRadius: 4, padding: '0 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = theme.text; e.currentTarget.style.background = theme.panelAlt; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = theme.textDim; e.currentTarget.style.background = 'transparent'; }}
+      >
+        <Icon name="sliders" size={12} />
+        <span>{t('简洁版')}</span>
+      </button>
       <button onClick={() => invokeAction('open-export', undefined, 'toolbar')}
         className="cc-tip cc-tip-r"
         data-tip={exporting ? t('查看后台导出任务') : t('导出 MP4')}

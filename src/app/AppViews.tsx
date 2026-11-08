@@ -5,7 +5,7 @@ import { useT } from '../i18n/locale';
 import { loadProjectForEditing, renameProject } from '../persist/projectStore';
 import type { ProjectMeta } from '../persist/projectStoreCoordinators';
 import { theme } from '../theme';
-import { emptyProjectDoc, navigateTo, type AppRoute } from './appShell';
+import { emptyProjectDoc, navigateTo, type AppRoute, type EditorViewMode } from './appShell';
 import { editorAccess } from './editorAccess';
 import { EditorErrorBoundary, SecureContextRequiredView } from './EditorGuards';
 import { useDashboardActions } from './useDashboardActions';
@@ -25,6 +25,7 @@ export function AppSplash({ text }: { text: string }) {
 
 interface EditorLoaderProps {
   meta: ProjectMeta;
+  mode?: EditorViewMode;
   onHome: () => void;
   onRename: (name: string) => void;
 }
@@ -34,7 +35,7 @@ type EditorLoadState =
   | { kind: 'ready'; doc: ProjectDoc }
   | { kind: 'unreadable' };
 
-function EditorLoader({ meta, onHome, onRename }: EditorLoaderProps) {
+function EditorLoader({ meta, mode = 'full', onHome, onRename }: EditorLoaderProps) {
   const t = useT();
   const [load, setLoad] = useState<EditorLoadState>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
@@ -92,7 +93,7 @@ function EditorLoader({ meta, onHome, onRename }: EditorLoaderProps) {
   return (
     <EditorErrorBoundary translate={t} onHome={onHome}>
       <Suspense fallback={<AppSplash text={t('加载编辑器…')} />}>
-        <Editor initial={load.doc} project={meta} onHome={onHome} onRename={onRename} />
+        <Editor initial={load.doc} project={meta} mode={mode} onHome={onHome} onRename={onRename} />
       </Suspense>
     </EditorErrorBoundary>
   );
@@ -120,6 +121,7 @@ export function EditorRoute({ route, projects, refresh }: EditorRouteProps) {
     <EditorLoader
       key={meta.id}
       meta={meta}
+      mode={route.mode ?? 'full'}
       onHome={() => navigateTo('#/')}
       onRename={async (name) => { await renameProject(meta.id, name); refresh(); }}
     />
