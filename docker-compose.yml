@@ -14,6 +14,8 @@ services:
       - OPENCHATCUT_DATA_DIR=/data
       - MEDIA_DIR=/app/public/media/uploads
       - BROWSER=none
+      - FFPROBE_PATH=/usr/bin/ffprobe
+      - FFMPEG_PATH=/usr/bin/ffmpeg
     volumes:
       - /home/deploy/.openchatcut:/data
       - /home/deploy/openchatcut/public/media/uploads:/app/public/media/uploads

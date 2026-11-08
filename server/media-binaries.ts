@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { existsSync } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { join, sep } from 'node:path';
 
 const require = createRequire(import.meta.url);
@@ -25,23 +25,38 @@ export function unpackedPath(path: string): string {
   return existsSync(twin) ? twin : path;
 }
 
+/** Check that a path points to an existing file with executable permissions. */
+export function isExecutableFile(path: string | null | undefined): boolean {
+  if (!path) return false;
+  const real = unpackedPath(path);
+  if (!existsSync(real)) return false;
+  try {
+    accessSync(real, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Prefer explicit overrides for developers who need a custom FFmpeg build.
  * Packaged desktop builds fall back to the platform binaries shipped through
  * production dependencies, so media import does not depend on the user's PATH.
+ * If vendored package binaries lack executable permissions (e.g. npm ci --ignore-scripts in Docker),
+ * gracefully fallback to system binaries on PATH.
  */
 export function ffmpegBin(): string {
-  return process.env.OPENCHATCUT_FFMPEG
-    ?? process.env.FFMPEG_PATH
-    ?? (ffmpegStatic ? unpackedPath(ffmpegStatic) : null)
-    ?? 'ffmpeg';
+  if (process.env.OPENCHATCUT_FFMPEG) return process.env.OPENCHATCUT_FFMPEG;
+  if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
+  if (isExecutableFile(ffmpegStatic)) return unpackedPath(ffmpegStatic!);
+  return 'ffmpeg';
 }
 
 export function ffprobeBin(): string {
-  return process.env.OPENCHATCUT_FFPROBE
-    ?? process.env.FFPROBE_PATH
-    ?? (ffprobeInstaller.path ? unpackedPath(ffprobeInstaller.path) : null)
-    ?? 'ffprobe';
+  if (process.env.OPENCHATCUT_FFPROBE) return process.env.OPENCHATCUT_FFPROBE;
+  if (process.env.FFPROBE_PATH) return process.env.FFPROBE_PATH;
+  if (isExecutableFile(ffprobeInstaller.path)) return unpackedPath(ffprobeInstaller.path!);
+  return 'ffprobe';
 }
 
 /**

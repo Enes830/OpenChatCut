@@ -16,7 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package.json package-lock.json ./
 
 # Install clean dependencies
-RUN npm ci --ignore-scripts
+RUN npm ci --ignore-scripts && \
+    chmod -R +x node_modules/@ffprobe-installer/ node_modules/ffmpeg-static/ 2>/dev/null || true
 
 # Copy application source
 COPY . .
@@ -30,7 +31,9 @@ RUN npm run sync:mediapipe && \
 ENV NODE_ENV=production \
     PORT=5174 \
     HOST=0.0.0.0 \
-    OPENCHATCUT_ALLOW_REMOTE_HOSTS=1
+    OPENCHATCUT_ALLOW_REMOTE_HOSTS=1 \
+    FFPROBE_PATH=/usr/bin/ffprobe \
+    FFMPEG_PATH=/usr/bin/ffmpeg
 
 EXPOSE 5174
 
