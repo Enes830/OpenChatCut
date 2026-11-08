@@ -115,20 +115,75 @@ def parse_csv(csv_path):
         return list(reader)
 
 
-def parse_duration(dur_raw: str, default_dur: float = 8.0) -> float:
+def parse_duration_and_start(dur_raw: str, default_dur: float = 8.0) -> tuple[float, float]:
+    """Returns (duration_seconds, start_seconds)"""
     if not dur_raw:
-        return default_dur
+        return default_dur, 0.0
     dur_str = str(dur_raw).strip()
-    # Support MM:SS - MM:SS range format
+    # Support MM:SS - MM:SS or SS - SS range format
     range_match = re.match(r'(\d+):(\d+(?:\.\d+)?)\s*[-–—]\s*(\d+):(\d+(?:\.\d+)?)', dur_str)
     if range_match:
         m1, s1, m2, s2 = map(float, range_match.groups())
-        diff = (m2 * 60 + s2) - (m1 * 60 + s1)
-        return diff if diff > 0 else default_dur
+        start_sec = m1 * 60 + s1
+        end_sec = m2 * 60 + s2
+        diff = end_sec - start_sec
+        return (diff if diff > 0 else default_dur), start_sec
+    sec_range = re.match(r'(\d+(?:\.\d+)?)\s*[-–—]\s*(\d+(?:\.\d+)?)', dur_str)
+    if sec_range:
+        s1, s2 = map(float, sec_range.groups())
+        diff = s2 - s1
+        return (diff if diff > 0 else default_dur), s1
     try:
-        return float(dur_str)
+        return float(dur_str), 0.0
     except ValueError:
-        return default_dur
+        return default_dur, 0.0
+
+
+def parse_duration(dur_raw: str, default_dur: float = 8.0) -> float:
+    dur, _ = parse_duration_and_start(dur_raw, default_dur)
+    return dur
+
+
+def is_youtube_url(url: str) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    return bool(re.search(r'(youtube\.com/(watch\?v=|shorts/|embed/)|youtu\.be/)', url))
+
+
+def extract_youtube_id(url: str) -> str:
+    m = re.search(r'(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
+    return m.group(1) if m else "yt_video"
+
+
+def download_youtube_video(url: str, dest_path: Path):
+    yt_bin = shutil.which('yt-dlp') or os.path.expanduser('~/.local/bin/yt-dlp')
+    if not yt_bin or (not os.path.exists(yt_bin) and not shutil.which('yt-dlp')):
+        raise RuntimeError("yt-dlp is not installed. Please install yt-dlp first.")
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_template = str(dest_path.with_suffix('')) + ".%(ext)s"
+    cmd = [
+        yt_bin,
+        '-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best',
+        '--merge-output-format', 'mp4',
+        '--no-playlist',
+        '--no-warnings',
+        '-o', str(dest_path),
+        url
+    ]
+    print(f"🎬 Downloading YouTube video: {url} -> {dest_path.name} ...")
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if res.returncode != 0:
+        print(f"⚠️ Primary format failed: {res.stderr.strip()[:100]}... Trying fallback...")
+        cmd_fallback = [
+            yt_bin,
+            '-f', 'best[ext=mp4]/best',
+            '--recode-video', 'mp4',
+            '--no-playlist',
+            '-o', str(dest_path),
+            url
+        ]
+        subprocess.run(cmd_fallback, check=True)
+    print(f"✅ Downloaded YouTube video successfully: {dest_path.name}")
 
 
 def locate_data_dir(custom_dir=None):
@@ -246,53 +301,73 @@ def main():
         if not media_val:
             media_val = args.default_media
 
-        media_file = Path(media_val.split('?')[0]).name
-
-        candidates = [
-            PROJECT_ROOT / media_val,
-            SCRIPT_DIR / 'media' / media_file,
-            workspace_uploads / media_file,
-            Path(profile_media_dir) / media_file if profile_media_dir else None,
-        ]
-
         found = False
-        for cand in candidates:
-            if cand and cand.exists() and cand.is_file():
+        if is_youtube_url(media_val):
+            yt_id = extract_youtube_id(media_val)
+            media_file = f"yt_{yt_id}.mp4"
+            dest_target = workspace_uploads / media_file
+            if not dest_target.exists():
+                try:
+                    download_youtube_video(media_val, dest_target)
+                except Exception as e:
+                    print(f"⚠️ Failed to download YouTube video {media_val}: {e}")
+            if dest_target.exists():
                 found = True
-                targets = [
-                    workspace_uploads / media_file,
-                    data_uploads / media_file,
-                    (Path(profile_media_dir) / media_file) if profile_media_dir else None,
-                ]
-                for target in targets:
-                    if target and cand.resolve() != target.resolve():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copyfile(cand, target)
-                break
-
-        if not found:
-            vps_url = (
-                media_val
-                if media_val.startswith(('http://', 'https://'))
-                else f"https://editor.kashida.io/media/uploads/{media_file}"
-            )
-            print(f"🌐 Downloading media {media_file} from: {vps_url}...")
-            try:
-                temp_dl = workspace_uploads / media_file
-                urllib.request.urlretrieve(vps_url, temp_dl)
                 data_target = data_uploads / media_file
-                if temp_dl.resolve() != data_target.resolve():
-                    shutil.copyfile(temp_dl, data_target)
-                print(f"✅ Downloaded {media_file}")
-            except Exception as e:
-                print(f"⚠️ Failed to download {media_file}: {e}")
+                if dest_target.resolve() != data_target.resolve():
+                    shutil.copyfile(dest_target, data_target)
+                if profile_media_dir:
+                    prof_target = Path(profile_media_dir) / media_file
+                    if dest_target.resolve() != prof_target.resolve():
+                        shutil.copyfile(dest_target, prof_target)
+        else:
+            media_file = Path(media_val.split('?')[0]).name
+
+            candidates = [
+                PROJECT_ROOT / media_val,
+                SCRIPT_DIR / 'media' / media_file,
+                workspace_uploads / media_file,
+                Path(profile_media_dir) / media_file if profile_media_dir else None,
+            ]
+
+            for cand in candidates:
+                if cand and cand.exists() and cand.is_file():
+                    found = True
+                    targets = [
+                        workspace_uploads / media_file,
+                        data_uploads / media_file,
+                        (Path(profile_media_dir) / media_file) if profile_media_dir else None,
+                    ]
+                    for target in targets:
+                        if target and cand.resolve() != target.resolve():
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(cand, target)
+                    break
+
+            if not found:
+                vps_url = (
+                    media_val
+                    if media_val.startswith(('http://', 'https://'))
+                    else f"https://editor.kashida.io/media/uploads/{media_file}"
+                )
+                print(f"🌐 Downloading media {media_file} from: {vps_url}...")
+                try:
+                    temp_dl = workspace_uploads / media_file
+                    urllib.request.urlretrieve(vps_url, temp_dl)
+                    data_target = data_uploads / media_file
+                    if temp_dl.resolve() != data_target.resolve():
+                        shutil.copyfile(temp_dl, data_target)
+                    print(f"✅ Downloaded {media_file}")
+                except Exception as e:
+                    print(f"⚠️ Failed to download {media_file}: {e}")
 
         is_video = media_file.lower().endswith(('.mp4', '.mov', '.webm', '.mkv'))
         media_kind = "video" if is_video else "image"
 
         dur_raw = row.get('duration') or row.get('توقيت الاقتطاع') or ''
-        dur_sec = parse_duration(dur_raw, default_dur=8.0 if is_gdoc else 4.0)
+        dur_sec, start_sec = parse_duration_and_start(dur_raw, default_dur=8.0 if is_gdoc else 4.0)
         dur_frames = int(round(dur_sec * fps))
+        src_in_frame = int(round(start_sec * fps))
 
         notes_val = (row.get('notes') or row.get('ملاحظات ومؤثرات') or '').strip()
         mute_audio = 'بدون صوت' in notes_val or row.get('mute') == 'true'
@@ -316,6 +391,8 @@ def main():
             "kind": media_kind,
             "startFrame": current_frame,
             "durationInFrames": dur_frames,
+            "srcInFrame": src_in_frame,
+            "sourceStartFrame": src_in_frame,
             "src": f"/media/uploads/{media_file}",
             "sourceAssetId": asset_id,
             "width": 1080 if is_video else 1024,
@@ -556,7 +633,7 @@ def main():
             '--out', str(out_path),
             '--resolution', '1080p',
         ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, cwd=str(PROJECT_ROOT))
         print(f"\n🎉 Render Completed! Saved to: {out_path}")
 
 
