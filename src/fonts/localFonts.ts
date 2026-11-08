@@ -70,8 +70,11 @@ export const LOCAL_CJK_FONTS: readonly LocalCjkFont[] = [
     files: { 400: '/fonts/douyin-meihaoti/DouyinMeihaoti-Bold.woff2',
              700: '/fonts/douyin-meihaoti/DouyinMeihaoti-Bold.woff2' } },
   // Ghroob Arabic — Arabic Headline & Display Font
-  { family: 'GhroobArabic', importName: 'GhroobArabic', aliasZh: ['Ghroob', 'Ghroob Arabic', 'GhroobArabicBold'],
-    files: { 700: '/fonts/GhroobArabicitf-Bold.otf',
+  { family: 'GhroobArabic', importName: 'GhroobArabic', aliasZh: ['Ghroob', 'Ghroob Arabic', 'Ghroob Arabic itf', 'GhroobArabicitf-Bold', 'GhroobArabicitf-Medium', 'GhroobArabicitf'],
+    files: { 800: '/fonts/GhroobArabicitf-ExtraBold.otf',
+             700: '/fonts/GhroobArabicitf-Bold.otf',
+             500: '/fonts/GhroobArabicitf-Medium.otf',
+             400: '/fonts/GhroobArabicitf-Medium.otf',
              300: '/fonts/GhroobArabicitf-Light.otf' } },
 ];
 

@@ -438,8 +438,8 @@ def main():
         show_source = bool(source_text) and ('بدون مصدر' not in source_mode)
 
         # Subtitle / Arabic Translation (أضف ترجمة)
-        explicit_sub = (row.get('subtitle') or row.get('translation') or row.get('الترجمة') or '').strip()
-        wants_translation = 'أضف ترجمة' in notes_val or bool(explicit_sub)
+        explicit_sub = (row.get('نص المقطع') or row.get('subtitle') or row.get('translation') or row.get('الترجمة') or '').strip().replace('\n', ' | ')
+        wants_translation = 'أضف ترجمة' in notes_val or 'إضافة ترجمة' in notes_val or bool(explicit_sub)
         subtitle_text = explicit_sub if explicit_sub else (spoken_text if wants_translation else '')
         show_subtitle = bool(subtitle_text)
 
@@ -485,7 +485,7 @@ def main():
             mg_props['yOffsetPercent'] = 60
             mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
         elif tmpl['id'] == 'rssd-location-headline-template':
-            location_val = (row.get('location') or row.get('الموقع') or '').strip()
+            location_val = (row.get('اللوكيشن') or row.get('location') or row.get('الموقع') or '').strip()
             if ':' in line1 and not location_val:
                 parts = line1.split(':', 1)
                 location_val = parts[0].strip()

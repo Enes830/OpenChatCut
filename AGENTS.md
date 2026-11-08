@@ -81,3 +81,4 @@ OpenChatCut uses an **Upload Write-Through + Read-Through Hydration Cache**:
 - **Internal Preview Proxy**:
   - `/api/preview-proxy?src=/media/uploads/<filename>` spawns `/usr/bin/ffprobe` to compute duration, dimensions, and audio peaks.
   - If ffprobe fails or lacks execute permissions, video files will fail to load in the editor. Always verify this endpoint returns `HTTP 200`.
+

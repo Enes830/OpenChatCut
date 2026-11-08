@@ -63,6 +63,62 @@
   font-style: normal;
   font-display: swap;
 }
+@font-face {
+  font-family: 'GhroobArabic';
+  src: url('/fonts/GhroobArabicitf-Light.otf') format('opentype');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GhroobArabic';
+  src: url('/fonts/GhroobArabicitf-Medium.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GhroobArabic';
+  src: url('/fonts/GhroobArabicitf-Medium.otf') format('opentype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GhroobArabic';
+  src: url('/fonts/GhroobArabicitf-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GhroobArabic';
+  src: url('/fonts/GhroobArabicitf-ExtraBold.otf') format('opentype');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Ghroob Arabic itf';
+  src: url('/fonts/GhroobArabicitf-Medium.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Ghroob Arabic itf';
+  src: url('/fonts/GhroobArabicitf-Medium.otf') format('opentype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Ghroob Arabic itf';
+  src: url('/fonts/GhroobArabicitf-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
 :root { color-scheme: dark; }   /* tell the browser we're already dark → skip force-dark-mode */
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; }
