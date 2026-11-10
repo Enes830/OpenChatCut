@@ -137,9 +137,16 @@ def parse_csv(csv_path):
         return list(reader)
 
 
+def is_full_video_indicator(val: str) -> bool:
+    if not val:
+        return True
+    c = str(val).strip().lower()
+    return c in {'-', '—', '–', 'كامل', 'الكامل', 'الفيديو كامل', 'كامل الفيديو', 'بدون اقتطاع', 'بدون', 'full', 'all'}
+
+
 def parse_duration_and_start(dur_raw: str, default_dur: float = 8.0) -> tuple[float, float]:
     """Returns (duration_seconds, start_seconds)"""
-    if not dur_raw:
+    if not dur_raw or is_full_video_indicator(dur_raw):
         return default_dur, 0.0
     dur_str = str(dur_raw).strip()
     # Support MM:SS - MM:SS or SS - SS range format
@@ -468,6 +475,7 @@ def main():
         media_kind = "video" if is_video else "image"
 
         dur_raw = row.get('duration') or row.get('توقيت الاقتطاع') or ''
+        has_explicit_trim = bool(dur_raw.strip() and not is_full_video_indicator(dur_raw))
         dur_sec, start_sec = parse_duration_and_start(dur_raw, default_dur=8.0 if is_url else 4.0)
         dur_frames = int(round(dur_sec * fps))
         src_in_frame = int(round(start_sec * fps))
@@ -475,30 +483,55 @@ def main():
         notes_val = (row.get('notes') or row.get('ملاحظات ومؤثرات') or '').strip()
         mute_audio = 'بدون صوت' in notes_val or row.get('mute') == 'true'
 
-        # Auto-detect real dimensions with ffprobe
+        # Auto-detect real dimensions and full duration with ffprobe
         media_w = 1080 if is_video else 1024
         media_h = 1920 if is_video else 1024
         is_landscape = False
+        video_dur_sec = None
         if src_path.exists() and src_path.stat().st_size > 1000 and is_video:
             try:
                 probe_cmd = [
                     'ffprobe', '-v', 'error',
                     '-select_streams', 'v:0',
-                    '-show_entries', 'stream=width,height',
-                    '-of', 'csv=s=x:p=0',
+                    '-show_entries', 'stream=width,height,duration:format=duration',
+                    '-of', 'json',
                     str(src_path)
                 ]
                 p_res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 if p_res.returncode == 0 and p_res.stdout.strip():
-                    clean_dim = p_res.stdout.strip().replace('x', ' ').split()
-                    if len(clean_dim) >= 2:
-                        pw, ph = int(clean_dim[0]), int(clean_dim[1])
+                    p_info = json.loads(p_res.stdout.strip())
+                    streams = p_info.get('streams', [])
+                    if streams:
+                        s0 = streams[0]
+                        pw = int(s0.get('width', 0) or 0)
+                        ph = int(s0.get('height', 0) or 0)
                         if pw > 0 and ph > 0:
                             media_w, media_h = pw, ph
                             if media_w > media_h:
                                 is_landscape = True
+                        if s0.get('duration'):
+                            try:
+                                vd = float(s0['duration'])
+                                if vd > 0:
+                                    video_dur_sec = vd
+                            except Exception:
+                                pass
+                    if not video_dur_sec and p_info.get('format', {}).get('duration'):
+                        try:
+                            vd = float(p_info['format']['duration'])
+                            if vd > 0:
+                                video_dur_sec = vd
+                        except Exception:
+                            pass
             except Exception:
                 pass
+
+        asset_dur_frames = max(1, int(round(video_dur_sec * fps))) if (is_video and video_dur_sec and video_dur_sec > 0) else (dur_frames if is_video else 300)
+
+        # If 'توقيت الاقتطاع' was empty, take full video duration
+        if is_video and not has_explicit_trim and video_dur_sec and video_dur_sec > 0:
+            dur_frames = asset_dur_frames
+            src_in_frame = 0
 
         asset_id = f"asset_scene_{idx+1}_{uuid.uuid4().hex[:6]}"
         assets.append({
@@ -506,7 +539,7 @@ def main():
             "name": media_file,
             "kind": media_kind,
             "src": f"/media/uploads/{media_file}",
-            "durationInFrames": dur_frames if is_video else 300,
+            "durationInFrames": asset_dur_frames,
             "width": media_w,
             "height": media_h,
         })
