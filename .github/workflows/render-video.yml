@@ -4,20 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       storyboard:
-        description: 'Storyboard to render'
+        description: 'Storyboard name (e.g. storyboard_1_energy_summit), or Google Doc/Sheet URL, or CSV path'
         required: true
+        type: string
         default: 'storyboard_1_energy_summit'
-        type: choice
-        options:
-          - 'storyboard_1_energy_summit'
-          - 'storyboard_2_world_isolation'
-          - 'storyboard_3_economic_markets'
-          - 'storyboard_4_breaking_news'
-          - 'all'
       accent_color:
         description: 'Accent Color (hex)'
         required: false
-        default: '#0f83f3'
+        default: '#1283F9'
 
 jobs:
   render:
@@ -25,6 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -57,17 +52,26 @@ jobs:
       - name: Render Selected Video(s)
         run: |
           mkdir -p csv-video-pipeline/outputs
-          if [ "${{ github.event.inputs.storyboard }}" = "all" ]; then
-            python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_1_energy_summit.csv --render --accent-color "${{ github.event.inputs.accent_color }}"
-            python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_2_world_isolation.csv --render --accent-color "${{ github.event.inputs.accent_color }}"
-            python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_3_economic_markets.csv --render --accent-color "${{ github.event.inputs.accent_color }}"
+          SB="${{ github.event.inputs.storyboard }}"
+          COLOR="${{ github.event.inputs.accent_color }}"
+
+          if [ "$SB" = "all" ]; then
+            python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_1_energy_summit.csv --render --accent-color "$COLOR"
+            python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_2_world_isolation.csv --render --accent-color "$COLOR"
+            python3 csv-video-pipeline/render_pipeline.py --csv csv-video-pipeline/storyboard_3_economic_markets.csv --render --accent-color "$COLOR"
+          elif [[ "$SB" == http* ]]; then
+            python3 csv-video-pipeline/render_pipeline.py --doc "$SB" --render --accent-color "$COLOR"
+          elif [ -f "csv-video-pipeline/${SB}.csv" ]; then
+            python3 csv-video-pipeline/render_pipeline.py --csv "csv-video-pipeline/${SB}.csv" --render --accent-color "$COLOR"
+          elif [ -f "$SB" ]; then
+            python3 csv-video-pipeline/render_pipeline.py --csv "$SB" --render --accent-color "$COLOR"
           else
-            python3 csv-video-pipeline/render_pipeline.py --csv "csv-video-pipeline/${{ github.event.inputs.storyboard }}.csv" --render --accent-color "${{ github.event.inputs.accent_color }}"
+            python3 csv-video-pipeline/render_pipeline.py --csv "$SB" --render --accent-color "$COLOR"
           fi
 
       - name: Upload Rendered Video Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: rendered-mp4-${{ github.event.inputs.storyboard }}
+          name: rendered-mp4-${{ github.run_id }}
           path: csv-video-pipeline/outputs/*.mp4
           retention-days: 14

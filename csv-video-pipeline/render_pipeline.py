@@ -82,6 +82,28 @@ class GoogleDocTableParser(HTMLParser):
             self.current_cell.append(data)
 
 
+def parse_google_sheet(sheet_url: str):
+    match = re.search(r'/spreadsheets/d/([a-zA-Z0-9_-]+)', sheet_url)
+    if not match:
+        raise ValueError(f"Invalid Google Sheet URL: {sheet_url}")
+    sheet_id = match.group(1)
+    gid_match = re.search(r'[#&?]gid=([0-9]+)', sheet_url)
+    gid_param = f"&gid={gid_match.group(1)}" if gid_match else ""
+    export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_param}"
+    print(f"🌐 Fetching Google Sheet CSV from: {export_url} ...")
+    req = urllib.request.Request(export_url, headers={'User-Agent': 'Mozilla/5.0'})
+    csv_bytes = urllib.request.urlopen(req, timeout=20).read()
+    import io
+    reader = csv.DictReader(io.StringIO(csv_bytes.decode('utf-8-sig', errors='replace')))
+    records = []
+    for row in reader:
+        # Strip all whitespace from keys and values
+        clean_row = {re.sub(r'\s+', ' ', k).strip(): v.strip() for k, v in row.items() if k}
+        if any(clean_row.values()):
+            records.append(clean_row)
+    return records
+
+
 def parse_google_doc(doc_url: str):
     match = re.search(r'/document/d/([a-zA-Z0-9_-]+)', doc_url)
     if not match:
@@ -186,6 +208,50 @@ def download_youtube_video(url: str, dest_path: Path):
     print(f"✅ Downloaded YouTube video successfully: {dest_path.name}")
 
 
+def download_social_media_video(url: str, dest_path: Path):
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    rapid_key = os.environ.get('RAPIDAPI_KEY', 'a8ed900b3cmsh8a96db2c3f934ffp1d6eaejsn11ea8098850d')
+    # 1. Try RapidAPI Auto Download All In One
+    try:
+        req = urllib.request.Request(
+            'https://auto-download-all-in-one.p.rapidapi.com/v1/social/autolink',
+            headers={
+                'Content-Type': 'application/json',
+                'x-rapidapi-host': 'auto-download-all-in-one.p.rapidapi.com',
+                'x-rapidapi-key': rapid_key
+            },
+            data=json.dumps({'url': url}).encode('utf-8')
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            rdata = json.loads(resp.read().decode('utf-8'))
+            medias = rdata.get('medias', [])
+            v_url = None
+            for m in medias:
+                if m.get('type') == 'video':
+                    v_url = m.get('url')
+                    if 'no_watermark' in m.get('quality', ''):
+                        break
+            if v_url:
+                dl_req = urllib.request.Request(v_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(dl_req, timeout=40) as dresp, open(dest_path, 'wb') as out_f:
+                    out_f.write(dresp.read())
+                if dest_path.exists() and dest_path.stat().st_size > 1000:
+                    print(f"✅ Downloaded social media via RapidAPI: {dest_path.name}")
+                    return
+    except Exception as e:
+        print(f"⚠️ RapidAPI resolution notice ({e}), trying yt-dlp fallback...")
+
+    # 2. Fallback to yt-dlp
+    yt_bin = shutil.which('yt-dlp') or os.path.expanduser('~/.local/bin/yt-dlp')
+    if yt_bin:
+        cmd = [yt_bin, '-f', 'best[ext=mp4]/best', '--no-playlist', '-o', str(dest_path), url]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if dest_path.exists() and dest_path.stat().st_size > 1000:
+            print(f"✅ Downloaded social media via yt-dlp: {dest_path.name}")
+            return
+    print(f"⚠️ Could not download social video: {url}")
+
+
 def locate_data_dir(custom_dir=None):
     if custom_dir and os.path.exists(custom_dir):
         return custom_dir, None
@@ -238,10 +304,23 @@ def main():
         print("❌ Please provide either --doc <google_doc_url> or --csv <csv_path>", file=sys.stderr)
         sys.exit(1)
 
-    is_gdoc = source_input.startswith('http://') or source_input.startswith('https://')
-    if is_gdoc:
-        rows = parse_google_doc(source_input)
-        stem_name = f"gdoc_{uuid.uuid4().hex[:6]}"
+    is_url = source_input.startswith('http://') or source_input.startswith('https://')
+    if is_url:
+        if 'spreadsheets/d/' in source_input:
+            rows = parse_google_sheet(source_input)
+            stem_name = f"gsheet_{uuid.uuid4().hex[:6]}"
+            input_label = "Google Sheet"
+        elif 'document/d/' in source_input:
+            rows = parse_google_doc(source_input)
+            stem_name = f"gdoc_{uuid.uuid4().hex[:6]}"
+            input_label = "Google Doc"
+        else:
+            req = urllib.request.Request(source_input, headers={'User-Agent': 'Mozilla/5.0'})
+            csv_bytes = urllib.request.urlopen(req, timeout=20).read()
+            import io
+            rows = list(csv.DictReader(io.StringIO(csv_bytes.decode('utf-8-sig', errors='replace'))))
+            stem_name = f"csv_url_{uuid.uuid4().hex[:6]}"
+            input_label = "CSV URL"
     else:
         csv_path = Path(source_input).resolve()
         if not csv_path.exists():
@@ -249,6 +328,7 @@ def main():
             sys.exit(1)
         rows = parse_csv(csv_path)
         stem_name = csv_path.stem
+        input_label = stem_name
 
     if not rows:
         print("❌ No rows found in input", file=sys.stderr)
@@ -279,7 +359,7 @@ def main():
 
     print(f"📂 Using Data Dir: {data_dir}")
     print(f"🗄️ Database: {db_path}")
-    print(f"📋 Parsed {len(rows)} scenes from {'Google Doc' if is_gdoc else stem_name}")
+    print(f"📋 Parsed {len(rows)} scenes from {input_label}")
 
     templates = load_templates()
     fps = 30
@@ -302,24 +382,39 @@ def main():
             media_val = args.default_media
 
         found = False
-        if is_youtube_url(media_val):
+        is_yt = is_youtube_url(media_val)
+        is_ig = any(k in media_val.lower() for k in ['instagram.com/reels/', 'instagram.com/p/', 'instagram.com/reel/'])
+        is_tt = any(k in media_val.lower() for k in ['tiktok.com/', 'tiktokv.com/'])
+
+        if is_yt:
             yt_id = extract_youtube_id(media_val)
             media_file = f"yt_{yt_id}.mp4"
             dest_target = workspace_uploads / media_file
-            if not dest_target.exists():
+            if not dest_target.exists() or dest_target.stat().st_size < 1000:
                 try:
                     download_youtube_video(media_val, dest_target)
                 except Exception as e:
                     print(f"⚠️ Failed to download YouTube video {media_val}: {e}")
-            if dest_target.exists():
+            if dest_target.exists() and dest_target.stat().st_size > 1000:
                 found = True
-                data_target = data_uploads / media_file
-                if dest_target.resolve() != data_target.resolve():
-                    shutil.copyfile(dest_target, data_target)
-                if profile_media_dir:
-                    prof_target = Path(profile_media_dir) / media_file
-                    if dest_target.resolve() != prof_target.resolve():
-                        shutil.copyfile(dest_target, prof_target)
+        elif is_ig:
+            m_ig = re.search(r'instagram\.com\/(?:reels?|p)\/([a-zA-Z0-9_-]+)', media_val)
+            ig_id = m_ig.group(1) if m_ig else f"ig_{idx+1}"
+            media_file = f"instagram_{ig_id}.mp4"
+            dest_target = workspace_uploads / media_file
+            if not dest_target.exists() or dest_target.stat().st_size < 1000:
+                download_social_media_video(media_val, dest_target)
+            if dest_target.exists() and dest_target.stat().st_size > 1000:
+                found = True
+        elif is_tt:
+            m_tt = re.search(r'(?:video\/|v\/|watch\/)?([0-9]{15,22})', media_val)
+            tt_id = m_tt.group(1) if m_tt else f"tiktok_{idx+1}"
+            media_file = f"tiktok_{tt_id}.mp4"
+            dest_target = workspace_uploads / media_file
+            if not dest_target.exists() or dest_target.stat().st_size < 1000:
+                download_social_media_video(media_val, dest_target)
+            if dest_target.exists() and dest_target.stat().st_size > 1000:
+                found = True
         else:
             media_file = Path(media_val.split('?')[0]).name
 
@@ -361,16 +456,49 @@ def main():
                 except Exception as e:
                     print(f"⚠️ Failed to download {media_file}: {e}")
 
+        # Ensure synced across data directories
+        src_path = workspace_uploads / media_file
+        if src_path.exists():
+            for sync_dest in [data_uploads / media_file, (Path(profile_media_dir) / media_file) if profile_media_dir else None]:
+                if sync_dest and src_path.resolve() != sync_dest.resolve():
+                    sync_dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src_path, sync_dest)
+
         is_video = media_file.lower().endswith(('.mp4', '.mov', '.webm', '.mkv'))
         media_kind = "video" if is_video else "image"
 
         dur_raw = row.get('duration') or row.get('توقيت الاقتطاع') or ''
-        dur_sec, start_sec = parse_duration_and_start(dur_raw, default_dur=8.0 if is_gdoc else 4.0)
+        dur_sec, start_sec = parse_duration_and_start(dur_raw, default_dur=8.0 if is_url else 4.0)
         dur_frames = int(round(dur_sec * fps))
         src_in_frame = int(round(start_sec * fps))
 
         notes_val = (row.get('notes') or row.get('ملاحظات ومؤثرات') or '').strip()
         mute_audio = 'بدون صوت' in notes_val or row.get('mute') == 'true'
+
+        # Auto-detect real dimensions with ffprobe
+        media_w = 1080 if is_video else 1024
+        media_h = 1920 if is_video else 1024
+        is_landscape = False
+        if src_path.exists() and src_path.stat().st_size > 1000 and is_video:
+            try:
+                probe_cmd = [
+                    'ffprobe', '-v', 'error',
+                    '-select_streams', 'v:0',
+                    '-show_entries', 'stream=width,height',
+                    '-of', 'csv=s=x:p=0',
+                    str(src_path)
+                ]
+                p_res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if p_res.returncode == 0 and p_res.stdout.strip():
+                    clean_dim = p_res.stdout.strip().replace('x', ' ').split()
+                    if len(clean_dim) >= 2:
+                        pw, ph = int(clean_dim[0]), int(clean_dim[1])
+                        if pw > 0 and ph > 0:
+                            media_w, media_h = pw, ph
+                            if media_w > media_h:
+                                is_landscape = True
+            except Exception:
+                pass
 
         asset_id = f"asset_scene_{idx+1}_{uuid.uuid4().hex[:6]}"
         assets.append({
@@ -379,8 +507,8 @@ def main():
             "kind": media_kind,
             "src": f"/media/uploads/{media_file}",
             "durationInFrames": dur_frames if is_video else 300,
-            "width": 1080 if is_video else 1024,
-            "height": 1920 if is_video else 1024,
+            "width": media_w,
+            "height": media_h,
         })
 
         # Track V1: Background Video/Image
@@ -395,14 +523,18 @@ def main():
             "sourceStartFrame": src_in_frame,
             "src": f"/media/uploads/{media_file}",
             "sourceAssetId": asset_id,
-            "width": 1080 if is_video else 1024,
-            "height": 1920 if is_video else 1024,
+            "width": media_w,
+            "height": media_h,
             "transform": {
                 "scale": 1 if is_video else 1.88,
                 "scaleX": 1 if is_video else 1.88,
                 "scaleY": 1 if is_video else 1.88,
             },
         }
+        if is_landscape:
+            bg_item["backgroundFill"] = True
+            bg_item["backgroundFillStrength"] = 65
+
         if mute_audio:
             bg_item["muted"] = True
             bg_item["volume"] = 0
