@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ffmpegThreadArgs } from './media-process.ts';
 
@@ -63,16 +64,17 @@ const hwAccelsCache = new Map<string, Promise<Set<string>>>();
 /** 平台感知的解码硬加速参数。软件编码必须使用系统内存帧；
  * 硬件编码器已知时使用匹配 API，否则按平台选择通用解码器。 */
 export function hwDecodeArgs(encoder?: H264Encoder): string[] {
+  if (disabledByEnvironment()) return [];
   if (encoder === 'libx264') return [];
   if (encoder === 'h264_videotoolbox') return ['-hwaccel', 'videotoolbox'];
   if (encoder === 'h264_nvenc') return ['-hwaccel', 'cuda'];
   if (encoder === 'h264_qsv') return ['-hwaccel', 'qsv'];
   if (encoder === 'h264_amf') return ['-hwaccel', 'd3d11va'];
-  if (encoder === 'h264_vaapi') return ['-hwaccel', 'vaapi'];
+  if (encoder === 'h264_vaapi') return existsSync(resolveVaapiDevice()) ? ['-hwaccel', 'vaapi'] : [];
   switch (process.platform) {
     case 'darwin': return ['-hwaccel', 'videotoolbox'];
     case 'win32': return ['-hwaccel', 'd3d11va'];
-    case 'linux': return ['-hwaccel', 'vaapi'];
+    case 'linux': return existsSync(resolveVaapiDevice()) ? ['-hwaccel', 'vaapi'] : [];
     default: return [];
   }
 }
