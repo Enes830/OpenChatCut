@@ -48,11 +48,14 @@ export function TimelineReadinessGate({ state, dependencies = [], children }: Ti
       }
     };
     Promise.resolve()
-      .then(() => Promise.all(readinessStates.flatMap((entry) => [loadTimelineFonts(entry), prepareTimelineTemplates(entry)])))
+      .then(() => Promise.all(readinessStates.flatMap((entry) => [
+        loadTimelineFonts(entry).catch((e) => console.warn('loadTimelineFonts warning:', e)),
+        prepareTimelineTemplates(entry)
+      ])))
       .then(
-      () => { if (active) setReady(true); release(); },
-      (reason: unknown) => fail(reason),
-    );
+        () => { if (active) setReady(true); release(); },
+        (reason: unknown) => fail(reason),
+      );
     return () => { active = false; release(); };
   }, [handle, readinessStates]);
 

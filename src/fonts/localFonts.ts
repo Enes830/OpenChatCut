@@ -104,15 +104,19 @@ function getFontFormat(url: string): string {
 function facesOf(font: LocalCjkFont): FontFace[] {
   let faces = registeredFaces.get(font.family);
   if (!faces) {
-    faces = Object.entries(font.files ?? {}).map(
-      ([weight, url]) =>
-        new FontFace(font.family, `url(${url}) format('${getFontFormat(url)}')`, {
+    const families = [font.family, ...(font.aliasZh || [])];
+    faces = [];
+    for (const fam of families) {
+      for (const [weight, url] of Object.entries(font.files ?? {})) {
+        const face = new FontFace(fam, `url(${url}) format('${getFontFormat(url)}')`, {
           weight,
           style: 'normal',
           display: 'swap',
-        }),
-    );
-    for (const face of faces) (document.fonts as any).add(face);
+        });
+        faces.push(face);
+        (document.fonts as any).add(face);
+      }
+    }
     registeredFaces.set(font.family, faces);
   }
   return faces;
@@ -143,7 +147,13 @@ function registerStylesheet(font: LocalCjkFont): Promise<void> {
 
 async function loadFaces(font: LocalCjkFont): Promise<void> {
   if (!font.stylesheet) {
-    await Promise.all(facesOf(font).map((face) => face.load()));
+    await Promise.all(facesOf(font).map(async (face) => {
+      try {
+        await face.load();
+      } catch (err) {
+        console.warn(`Local font ${font.family} load skipped or failed:`, err);
+      }
+    }));
     return;
   }
   await registerStylesheet(font);

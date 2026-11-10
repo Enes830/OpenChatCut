@@ -119,6 +119,7 @@
     "@remotion/bundler": "4.0.537",
     "@remotion/fonts": "4.0.537",
     "@remotion/google-fonts": "4.0.537",
+    "@remotion/lambda": "^4.0.537",
     "@remotion/media": "4.0.537",
     "@remotion/player": "4.0.537",
     "@remotion/renderer": "4.0.537",

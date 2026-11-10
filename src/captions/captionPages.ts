@@ -1,5 +1,5 @@
 import type { TimelineItem } from '../editor/types.js';
-import { isStableIdentity } from '../transcript/identity.js';
+import { isStableIdentity } from '../transcript/identity';
 import { isManualCaptionEntry } from './manualCaptions.js';
 import { effectivePreset } from './renderStyles.js';
 import {
