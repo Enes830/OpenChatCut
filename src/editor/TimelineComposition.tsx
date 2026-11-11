@@ -294,9 +294,10 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
     return runs.filter((run) => run.length > 1);
   });
   const sharedVisualIds = new Set(sharedVisualGroups.flatMap((group) => group.map((item) => item.id)));
+  const canvasBg = transparent ? undefined : (environment.isPlayer ? GRID : '#000000');
 
   return (
-    <AbsoluteFill style={{ background: transparent ? undefined : GRID }}>
+    <AbsoluteFill style={{ background: canvasBg }}>
       {staticPreviewStatuses.map((status) => (
         <SelectedPreviewStatusReporter
           key={`${status.kind}:${status.targetId}`}
