@@ -79,7 +79,7 @@ export function isCustomUploadDir(profile: RuntimeProfile = runtimeProfile()): b
   return uploadDir(profile) !== profile.mediaDir;
 }
 
-export const PROTECTED_MEDIA_DIR = join(process.cwd(), 'assets', 'protected');
+export const PROTECTED_MEDIA_DIR = join(process.cwd(), 'protected-media');
 export const PROTECTED_MEDIA_NAMES = new Set([
   'outro.mp4',
   'outro.mov',
