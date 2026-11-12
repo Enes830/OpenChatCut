@@ -217,7 +217,7 @@ def download_youtube_video(url: str, dest_path: Path):
 
 def download_social_media_video(url: str, dest_path: Path):
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    rapid_key = os.environ.get('RAPIDAPI_KEY', 'a8ed900b3cmsh8a96db2c3f934ffp1d6eaejsn11ea8098850d')
+    rapid_key = os.environ.get('RAPIDAPI_KEY', '')
     # 1. Try RapidAPI Auto Download All In One
     try:
         req = urllib.request.Request(

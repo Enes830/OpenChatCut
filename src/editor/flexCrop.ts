@@ -1,7 +1,7 @@
 import type { FlexCrop } from './clipTypes';
 
 /** Minimum remaining visible span while edge-cropping (canvas fraction). */
-export const PREVIEW_CROP_MIN_SPAN = 0.05;
+export const PREVIEW_CROP_MIN_SPAN = 0.015;
 
 export type FlexCropEdge = keyof Required<FlexCrop>;
 

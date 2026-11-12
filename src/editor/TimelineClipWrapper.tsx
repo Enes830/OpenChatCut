@@ -22,12 +22,32 @@ export function ClipWrapper({ item, frameOffset = 0, hiddenByCaptions = false, c
       </AbsoluteFill>
     );
   }
-  const { clipPath, ...rest } = appearance.foregroundStyle;
+  const { clipPath, filter, ...rest } = appearance.foregroundStyle;
+  if (clipPath && filter) {
+    return (
+      <AbsoluteFill
+        style={{
+          opacity: appearance.opacity,
+          clipPath,
+        }}
+      >
+        <AbsoluteFill
+          style={{
+            ...rest,
+            filter,
+          }}
+        >
+          {foreground}
+        </AbsoluteFill>
+      </AbsoluteFill>
+    );
+  }
   return (
     <AbsoluteFill
       style={{
         opacity: appearance.opacity,
         ...rest,
+        filter,
         clipPath,
       }}
     >
