@@ -11,7 +11,7 @@ import {
   deleteUploadObject, putUploadFile, r2Config, UploadTooLargeError,
 } from '../r2.ts';
 import {
-  enqueueUploadMutation, isSafeUploadName, resolveUploadFile, uploadReadDirs,
+  enqueueUploadMutation, isProtectedMedia, isSafeUploadName, resolveUploadFile, uploadReadDirs,
 } from '../media-dir.ts';
 import { deleteMediaReference } from '../media-references.ts';
 import { deleteMediaPreviewDerivatives } from './media-preview.ts';
@@ -51,6 +51,17 @@ async function handleDeleteUpload(req: IncomingMessage, res: ServerResponse): Pr
     const url = new URL(req.url ?? '/', 'http://localhost');
     const name = url.searchParams.get('name') ?? '';
     if (!isSafeUploadName(name)) { sendError(res, 400, 'unsafe or missing name'); return; }
+    if (isProtectedMedia(name)) {
+      sendJson(res, 200, {
+        ok: true,
+        protected: true,
+        removed: 0,
+        r2Removed: false,
+        derivativesRemoved: 0,
+        ownershipMatched: true,
+      });
+      return;
+    }
     const rollbackToken = url.searchParams.get('rollbackToken') ?? undefined;
     if (url.searchParams.has('rollbackToken') && !/^[A-Za-z0-9-]{1,128}$/.test(rollbackToken ?? '')) {
       sendError(res, 400, 'invalid rollback token');

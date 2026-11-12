@@ -2,7 +2,7 @@
 // The default profile preserves MEDIA_DIR → worktree default → R2 read-through semantics
 // and legacy-copy behavior. Isolated development profiles use only their profile media
 // directory: no legacy fallback, legacy copy, MEDIA_DIR override, or R2 read-through.
-import { createReadStream, existsSync } from 'node:fs';
+import { copyFileSync, createReadStream, existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
@@ -79,6 +79,18 @@ export function isCustomUploadDir(profile: RuntimeProfile = runtimeProfile()): b
   return uploadDir(profile) !== profile.mediaDir;
 }
 
+export const PROTECTED_MEDIA_DIR = join(process.cwd(), 'assets', 'protected');
+export const PROTECTED_MEDIA_NAMES = new Set([
+  'outro.mp4',
+  'outro.mov',
+  'outro (1).mov',
+  'rassd_video_thumbnail_bg.png',
+]);
+
+export function isProtectedMedia(name: string): boolean {
+  return PROTECTED_MEDIA_NAMES.has(name.toLowerCase());
+}
+
 /** Resolve an upload only through the active profile's ordered local read roots. */
 export function resolveUploadFile(
   name: string,
@@ -91,6 +103,18 @@ export function resolveUploadFile(
     if (existsSync(file)) return file;
     const referenced = resolveMediaReference(d, name);
     if (referenced) return referenced;
+  }
+  if (isProtectedMedia(name)) {
+    const protectedFile = join(PROTECTED_MEDIA_DIR, name);
+    if (existsSync(protectedFile)) {
+      // Self-heal: ensure writable directory also gets a copy if missing
+      const writableDir = uploadDir(profile, configuredMediaDir);
+      const target = join(writableDir, name);
+      if (!existsSync(target)) {
+        try { copyFileSync(protectedFile, target); } catch {}
+      }
+      return protectedFile;
+    }
   }
   return null;
 }

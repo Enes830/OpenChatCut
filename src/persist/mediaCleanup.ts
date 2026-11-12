@@ -13,6 +13,17 @@ import { collectUploadSrcs, rawUploadSrcs } from './projectTransfer';
 
 const MEDIA_PREFIX = '/media/uploads/';
 
+export const PROTECTED_MEDIA_NAMES = new Set([
+  'outro.mp4',
+  'outro.mov',
+  'outro (1).mov',
+  'rassd_video_thumbnail_bg.png',
+]);
+
+export function isProtectedMedia(name: string): boolean {
+  return PROTECTED_MEDIA_NAMES.has(name.toLowerCase());
+}
+
 export interface UploadFileInfo {
   name: string;
   bytes: number;
@@ -66,7 +77,7 @@ export async function collectAllUploadRefs(excludeId?: string): Promise<Set<stri
 
 /** Pure function: disk list − reference set = no owner file.*/
 export function unreferencedOf(files: UploadFileInfo[], refs: Set<string>): UploadFileInfo[] {
-  return files.filter((f) => !refs.has(MEDIA_PREFIX + f.name));
+  return files.filter((f) => !refs.has(MEDIA_PREFIX + f.name) && !isProtectedMedia(f.name));
 }
 
 /** Delete an uploaded file (disk + IDB cache). Returns whether the server confirms.*/
@@ -127,8 +138,10 @@ export async function purgeProjectCascade(id: string): Promise<{ filesDeleted: n
   if (own.length) {
     const refs = await collectAllUploadRefs();
     for (const src of own) {
+      const name = src.slice(MEDIA_PREFIX.length);
+      if (isProtectedMedia(name)) continue;
       if (refs.has(src)) continue;
-      if (await deleteUploadFile(src.slice(MEDIA_PREFIX.length))) filesDeleted += 1;
+      if (await deleteUploadFile(name)) filesDeleted += 1;
     }
   }
   return { filesDeleted };
@@ -146,6 +159,7 @@ export async function purgeAllProjectsCascade(): Promise<{ projectsDeleted: numb
   try {
     const files = await listUploadFiles();
     for (const file of files) {
+      if (isProtectedMedia(file.name)) continue;
       if (await deleteUploadFile(file.name).catch(() => false)) filesDeleted += 1;
     }
   } catch {

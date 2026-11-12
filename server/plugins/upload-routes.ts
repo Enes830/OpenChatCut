@@ -7,7 +7,7 @@ import {
   presignGetUpload, presignPutUpload, r2Config, r2PresignEnabled, UploadTooLargeError,
 } from '../r2.ts';
 import {
-  isSafeUploadName, resolveOrHydrateUploadFile, serveDiskFile, syncLegacyUploads,
+  isProtectedMedia, isSafeUploadName, resolveOrHydrateUploadFile, serveDiskFile, syncLegacyUploads,
   uploadReadDirs,
 } from '../media-dir.ts';
 import { isIsolatedDevProfile } from '../runtime-profile.ts';
@@ -94,12 +94,12 @@ async function handleUploadList(req: IncomingMessage, res: ServerResponse): Prom
     const seen = new Map<string, { name: string; bytes: number; mtimeMs: number }>();
     for (const directory of directories) {
       for (const name of await readdir(directory).catch(() => [] as string[])) {
-        if (!isSafeUploadName(name) || seen.has(name)) continue;
+        if (!isSafeUploadName(name) || seen.has(name) || isProtectedMedia(name)) continue;
         const info = await stat(join(directory, name)).catch(() => null);
         if (info?.isFile()) seen.set(name, { name, bytes: info.size, mtimeMs: info.mtimeMs });
       }
       for (const reference of await listMediaReferences(directory)) {
-        if (isSafeUploadName(reference.name) && !seen.has(reference.name)) {
+        if (isSafeUploadName(reference.name) && !seen.has(reference.name) && !isProtectedMedia(reference.name)) {
           seen.set(reference.name, reference);
         }
       }
