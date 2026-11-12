@@ -651,22 +651,7 @@ def main():
             mg_props['exitDelayFrames'] = max(10, dur_frames - 25)
         elif tmpl['id'] == 'rssd-location-headline-template':
             location_val = (row.get('اللوكيشن') or row.get('location') or row.get('الموقع') or '').strip()
-            if ':' in line1 and not location_val:
-                parts = line1.split(':', 1)
-                location_val = parts[0].strip()
-                line1 = parts[1].strip()
-                # Re-balance if line2 was empty after stripping location
-                if not line2 and len(line1) > 20 and ' ' in line1:
-                    words = line1.split()
-                    mid = len(words) // 2
-                    line1 = ' '.join(words[:mid])
-                    line2 = ' '.join(words[mid:])
-
-            show_location = bool(location_val) or (row.get('showLocation') is True)
-            if not location_val:
-                location_val = 'القاهرة'
-                # Show location by default if style is breaking/location, or if explicitly provided
-                show_location = ('breaking' in style.lower() or 'location' in style.lower() or 'عاجل' in style)
+            show_location = bool(location_val)
 
             # Exact pixel sizing matching 1080x1920 reference (fontSize=72, rightOffset=238 for <=18 chars)
             max_line_len = max(len(line1), len(line2))

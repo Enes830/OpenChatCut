@@ -292,7 +292,7 @@ function estimateMotionGraphicRect(
     const bh2 = Number(props.boxHeight2 ?? 118);
     const bh3 = Number(props.boxHeight3 ?? 118);
     const gap = Number(props.gap ?? 10);
-    const showLoc = props.showLocation !== false;
+    const showLoc = props.showLocation !== false && Boolean(props.locationText && String(props.locationText).trim());
     const locH = showLoc
       ? Math.round(Number(props.locationIconSize ?? 36) * 1.3) + Number(props.locationBottomGap ?? 22)
       : 0;

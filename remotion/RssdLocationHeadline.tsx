@@ -124,8 +124,8 @@ export const RssdLocationHeadline: React.FC<
   const sourceOnly = props.sourceOnly === true;
 
   // ─── 1. Location & Headline Defaults (Exact match to reference 1080x1920) ───
-  const showLocation = sourceOnly ? false : props.showLocation !== false;
-  const locationText = props.locationText ?? 'القاهرة';
+  const locationText = typeof props.locationText === 'string' ? props.locationText.trim() : (props.locationText ?? '');
+  const showLocation = sourceOnly ? false : (props.showLocation !== false && Boolean(locationText));
   const locationColor = props.locationColor || '#ffffff';
   const locationFontSize = props.locationFontSize ?? 42;
   const locationIconSize = props.locationIconSize ?? 36;
