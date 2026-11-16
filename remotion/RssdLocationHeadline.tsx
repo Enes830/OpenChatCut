@@ -185,8 +185,8 @@ export const RssdLocationHeadline: React.FC<
   const boxPaddingY = props.boxPaddingY ?? 16;
   const gap = props.gap ?? 0;
 
-  const line1Height = props.line1Height ?? props.boxHeight ?? 97;
-  const line2Height = props.line2Height ?? props.boxHeight ?? 116;
+  const line1Height = props.line1Height ?? props.boxHeight ?? 110;
+  const line2Height = props.line2Height ?? props.boxHeight ?? 110;
 
   // Layout coordinates (exact 1080x1920 reference: rightOffset=238, bottomOffset=647)
   const isPortrait = height > width;
