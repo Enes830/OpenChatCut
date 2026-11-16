@@ -14,3 +14,7 @@ rasd
 .DS_Store
 *.mp4
 *.tar.gz
+public/media/uploads
+protected-media
+csv-video-pipeline
+backups

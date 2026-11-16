@@ -93,6 +93,7 @@ MODEL-OPT-PLAN.md
 # `git add -A`, and CI died with MODULE_NOT_FOUND on a file that exists locally.
 /scripts/*
 !/scripts/sync-mediapipe.mjs
+!/scripts/fly-render-worker.mjs
 # Stable regressions are *.verify.* by convention (see the *.check.* rule
 # above), so they are never local-only.
 !/scripts/*.verify.mjs
