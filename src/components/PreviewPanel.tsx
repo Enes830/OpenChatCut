@@ -105,6 +105,8 @@ interface PreviewPanelProps {
   onSelectedPreviewStatus?: SelectedPreviewStatusListener;
   slipPreview?: SlipPreview | null;
   hoverPreviewFrame?: number | null;
+  hideComments?: boolean;
+  customOverlay?: React.ReactNode;
 }
 
 export const PreviewPanel = memo(function PreviewPanel({
@@ -114,6 +116,8 @@ export const PreviewPanel = memo(function PreviewPanel({
   projectId, timelineId, reviewState, selectedItem, reviewRequest, inspectorOpen, onToggleInspector,
   selectedPreviewStatuses, onSelectedPreviewStatus, slipPreview,
   hoverPreviewFrame = null,
+  hideComments,
+  customOverlay,
 }: PreviewPanelProps) {
   const t = useT();
   const renderProject = useMemo<ProjectDoc>(() => ({
@@ -293,15 +297,17 @@ export const PreviewPanel = memo(function PreviewPanel({
           </span>
         )}
         <div className="cc-preview-header-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <ReviewCommentsButton
-            projectId={projectId}
-            timelineId={timelineId}
-            state={reviewState}
-            selectedItem={selectedItem}
-            openRequest={reviewRequest}
-            getCurrentFrame={() => playerRef.current?.getCurrentFrame() ?? 0}
-            onSeek={(frame) => playerRef.current?.seekTo(frame)}
-          />
+          {!hideComments && (
+            <ReviewCommentsButton
+              projectId={projectId}
+              timelineId={timelineId}
+              state={reviewState}
+              selectedItem={selectedItem}
+              openRequest={reviewRequest}
+              getCurrentFrame={() => playerRef.current?.getCurrentFrame() ?? 0}
+              onSeek={(frame) => playerRef.current?.seekTo(frame)}
+            />
+          )}
           {state.items.length > 0 && (
             <PreviewSourceToggle />
           )}
@@ -330,6 +336,11 @@ export const PreviewPanel = memo(function PreviewPanel({
         </div>
       </div>
       <div ref={stageRef} className="cc-preview-stage"
+        onPointerDown={(event) => {
+          if (!videoBoxRef.current?.contains(event.target as Node)) {
+            onSelectItem?.(null);
+          }
+        }}
         // Suppress the browser's native <video> context menu (download / picture-in-picture
         // / loop) because the preview is a canvas, not an exposed HTML5 video element.
         onContextMenu={(event) => event.preventDefault()}
@@ -453,6 +464,7 @@ export const PreviewPanel = memo(function PreviewPanel({
                 onAutoEditHandled={() => setAutoEditCaption(null)}
               />
             ) : null)}
+            {customOverlay}
           </div>
         )}
       </div>

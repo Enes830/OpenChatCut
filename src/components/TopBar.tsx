@@ -104,14 +104,29 @@ export function TopBar({ projectId, projectName, canUndo, canRedo, exporting, ex
         type="button"
         onClick={() => { window.location.hash = `#/simple/${projectId}`; }}
         className="cc-tip cc-tip-r"
-        data-tip={t('切换到简洁模式')}
-        aria-label={t('切换到简洁模式')}
-        style={{ height: 24, background: 'transparent', color: theme.textDim, border: `0.5px solid ${theme.border}`, borderRadius: 4, padding: '0 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-        onMouseEnter={(e) => { e.currentTarget.style.color = theme.text; e.currentTarget.style.background = theme.panelAlt; }}
-        onMouseLeave={(e) => { e.currentTarget.style.color = theme.textDim; e.currentTarget.style.background = 'transparent'; }}
+        data-tip="واجهة المحرر المبسطة"
+        aria-label="واجهة المحرر المبسطة"
+        style={{
+          height: 26,
+          background: '#16a34a',
+          color: '#ffffff',
+          border: '1px solid rgba(34, 197, 94, 0.4)',
+          borderRadius: 5,
+          padding: '0 10px',
+          fontSize: 11.5,
+          fontWeight: 700,
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          boxShadow: '0 1px 4px rgba(22, 163, 74, 0.3)',
+          transition: 'all 0.15s ease',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = '#15803d'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = '#16a34a'; }}
       >
-        <Icon name="sliders" size={12} />
-        <span>{t('简洁版')}</span>
+        <Icon name="sliders" size={13} />
+        <span>واجهة المحرر المبسطة</span>
       </button>
       <button onClick={() => invokeAction('open-export', undefined, 'toolbar')}
         className="cc-tip cc-tip-r"

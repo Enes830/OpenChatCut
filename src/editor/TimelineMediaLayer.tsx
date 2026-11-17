@@ -20,7 +20,7 @@ import { clipFadeFactor, clipOpacityAt } from './clipFade';
 import { volumeAtFrame } from './keyframes';
 import { sourceFrameAt } from './sourceLimit';
 import { offthreadTrimBefore, offthreadVideoTransparent, useRuntimeVideoDecoder } from './serverVideoDecoder';
-import type { AspectFit, TimelineItem, TransitionItem } from './types';
+import type { AspectFit, BlurRegion, TimelineItem, TransitionItem } from './types';
 import { isAudioTransition } from './types';
 import { clampVisualBorderRadius, objectFitInsideVisualFrame, visibleVisualFrameRect } from './visualFrameGeometry';
 
@@ -66,6 +66,33 @@ function MixedRuntimeAudio({ item, browserRenderer, volume, ...props }: Omit<Bro
   );
 }
 
+export function VideoBlurRegions({ regions }: { regions?: BlurRegion[] }) {
+  if (!regions || regions.length === 0) return null;
+  return (
+    <>
+      {regions.map((region) => (
+        <div
+          key={region.id}
+          style={{
+            position: 'absolute',
+            left: `${region.x}%`,
+            top: `${region.y}%`,
+            width: `${region.width}%`,
+            height: `${region.height}%`,
+            backdropFilter: 'blur(30px)',
+            WebkitBackdropFilter: 'blur(30px)',
+            backgroundColor: 'rgba(0, 0, 0, 0.08)',
+            borderRadius: 4,
+            overflow: 'hidden',
+            pointerEvents: 'none',
+            zIndex: 10,
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
 export function VisualClipSurface({ item, fit, canvasW, canvasH, borderRadius, children }: {
   item: TimelineItem;
   fit: AspectFit;
@@ -84,6 +111,7 @@ export function VisualClipSurface({ item, fit, canvasW, canvasH, borderRadius, c
       fit,
     );
   const resolvedRadius = clampVisualBorderRadius(borderRadius, frame);
+  const blurRegions = (item.blurRegions ?? item.props?.blurRegions) as BlurRegion[] | undefined;
   return (
     <AbsoluteFill>
       <div style={{
@@ -96,6 +124,7 @@ export function VisualClipSurface({ item, fit, canvasW, canvasH, borderRadius, c
         borderRadius: resolvedRadius ? `${resolvedRadius}px` : undefined,
       }}>
         {children}
+        <VideoBlurRegions regions={blurRegions} />
       </div>
     </AbsoluteFill>
   );
@@ -255,6 +284,7 @@ export function SharedVideoVisualGroup({ group, fit, muted, canvasW, canvasH, pr
             borderRadius: resolvedRadius,
           }}>
             {visual}
+            <VideoBlurRegions regions={(item.blurRegions ?? item.props?.blurRegions ?? first.blurRegions ?? first.props?.blurRegions) as BlurRegion[] | undefined} />
           </div>
         </AbsoluteFill>
       </AbsoluteFill>

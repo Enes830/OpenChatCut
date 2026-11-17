@@ -179,6 +179,29 @@ export function Root() {
         }}
       />
       <Composition
+        id="RssdLocationHeadlineUrgent"
+        component={RssdLocationHeadline}
+        durationInFrames={150}
+        fps={25}
+        width={1080}
+        height={1920}
+        defaultProps={{
+          showLocation: true,
+          locationText: 'القاهرة',
+          line1Text: 'انقلاب سيارة على',
+          line2Text: 'طريق مصر الصحراوي',
+          line1BgColor: '#ffffff',
+          line1TextColor: '#000000',
+          line2BgColor: '#F22D2D',
+          line2TextColor: '#ffffff',
+          accentColor: '#F22D2D',
+          showAccentBlock: true,
+          fontSize: 95,
+          locationColor: '#ffffff',
+          backgroundColor: 'transparent',
+        }}
+      />
+      <Composition
         id="RssdLocation"
         component={RssdLocation}
         durationInFrames={150}
