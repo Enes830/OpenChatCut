@@ -658,23 +658,23 @@ function SimplePropertiesPane({
   );
   const a2TrackId = audioTracks[1];
 
-  // Music presets (Exclusive list of 14 WAV sound tracks)
+  // Music presets (Exclusive list of 14 sound tracks in lightweight 192k MP3 format)
   const MUSIC_OPTIONS = useMemo(
     () => [
-      { id: 'mus_aggressor', name: 'Aggressor (حماسي قوي)', src: '/audio/aggressor.wav' },
-      { id: 'mus_chasing_time', name: 'Chasing Time (إيقاع تشويقي وسريع)', src: '/audio/chasing-time.wav' },
-      { id: 'mus_clouds', name: 'Clouds (هادئ وتأملي)', src: '/audio/clouds.wav' },
-      { id: 'mus_conflict', name: 'Conflict (توتر ونزاع إخباري)', src: '/audio/conflict.wav' },
-      { id: 'mus_criminal_elements', name: 'Criminal Elements (غموض وتحقيق)', src: '/audio/criminal-elements.wav' },
-      { id: 'mus_devastation', name: 'Devastation (درامي تراجيدي حزين)', src: '/audio/devastation.wav' },
-      { id: 'mus_digital_dust', name: 'Digital Dust (تقني عصري خفيف)', src: '/audio/digital-dust.wav' },
-      { id: 'mus_disaster', name: 'Disaster (كارثة وتصاعد طوارئ)', src: '/audio/disaster.wav' },
-      { id: 'mus_follow_that_car', name: 'Follow That Car (مطاردة وحركة سريعة)', src: '/audio/follow-that-car.wav' },
-      { id: 'mus_night_living_dead', name: 'Night Of The Living Dead (ريلز قصير وتفاعلي)', src: '/audio/night-of-the-living-dead.wav' },
-      { id: 'mus_oceanside', name: 'Oceanside (موسيقى هادئة ووثائقية)', src: '/audio/oceanside.wav' },
-      { id: 'mus_battle_1066', name: 'The Battle of 1066 (ملحمي حماسي)', src: '/audio/the-battle-of-1066.wav' },
-      { id: 'mus_final_frame', name: 'The Final Frame (نهاية درامية)', src: '/audio/the-final-frame.wav' },
-      { id: 'mus_unsettling', name: 'Unsettling (قلق وترقب شديد)', src: '/audio/unsettling.wav' },
+      { id: 'mus_aggressor', name: 'Aggressor (حماسي قوي)', src: '/audio/aggressor.mp3' },
+      { id: 'mus_chasing_time', name: 'Chasing Time (إيقاع تشويقي وسريع)', src: '/audio/chasing-time.mp3' },
+      { id: 'mus_clouds', name: 'Clouds (هادئ وتأملي)', src: '/audio/clouds.mp3' },
+      { id: 'mus_conflict', name: 'Conflict (توتر ونزاع إخباري)', src: '/audio/conflict.mp3' },
+      { id: 'mus_criminal_elements', name: 'Criminal Elements (غموض وتحقيق)', src: '/audio/criminal-elements.mp3' },
+      { id: 'mus_devastation', name: 'Devastation (درامي تراجيدي حزين)', src: '/audio/devastation.mp3' },
+      { id: 'mus_digital_dust', name: 'Digital Dust (تقني عصري خفيف)', src: '/audio/digital-dust.mp3' },
+      { id: 'mus_disaster', name: 'Disaster (كارثة وتصاعد طوارئ)', src: '/audio/disaster.mp3' },
+      { id: 'mus_follow_that_car', name: 'Follow That Car (مطاردة وحركة سريعة)', src: '/audio/follow-that-car.mp3' },
+      { id: 'mus_night_living_dead', name: 'Night Of The Living Dead (ريلز قصير وتفاعلي)', src: '/audio/night-of-the-living-dead.mp3' },
+      { id: 'mus_oceanside', name: 'Oceanside (موسيقى هادئة ووثائقية)', src: '/audio/oceanside.mp3' },
+      { id: 'mus_battle_1066', name: 'The Battle of 1066 (ملحمي حماسي)', src: '/audio/the-battle-of-1066.mp3' },
+      { id: 'mus_final_frame', name: 'The Final Frame (نهاية درامية)', src: '/audio/the-final-frame.mp3' },
+      { id: 'mus_unsettling', name: 'Unsettling (قلق وترقب شديد)', src: '/audio/unsettling.mp3' },
     ],
     []
   );
@@ -714,7 +714,9 @@ function SimplePropertiesPane({
           it.track !== 'A2' &&
           !it.name.toLowerCase().includes('outro') &&
           !it.id.toLowerCase().includes('outro') &&
+          !it.name.toLowerCase().includes('.mp3') &&
           !it.name.toLowerCase().includes('.wav') &&
+          !MUSIC_OPTIONS.some((opt) => opt.id === it.id || opt.name === it.name || opt.src === it.src) &&
           (it.src?.endsWith('.mp4') || (videoItem && it.name.includes(videoItem.name)))
       )
       .forEach((dup) => {
@@ -722,7 +724,7 @@ function SimplePropertiesPane({
           commands.setItemVolume(dup.id, 0);
         }
       });
-  }, [state.items, a2TrackId, videoItem, commands]);
+  }, [state.items, a2TrackId, videoItem, commands, MUSIC_OPTIONS]);
 
   // Clean up any music clips mistakenly placed on A1 in previous sessions
   useEffect(() => {
@@ -731,7 +733,8 @@ function SimplePropertiesPane({
         it.kind === 'audio' &&
         it.track !== a2TrackId &&
         it.track !== 'A2' &&
-        (it.name.toLowerCase().includes('.wav') ||
+        (it.name.toLowerCase().includes('.mp3') ||
+          it.name.toLowerCase().includes('.wav') ||
           MUSIC_OPTIONS.some((opt) => opt.id === it.id || opt.name === it.name || opt.src === it.src))
     );
     if (misplaced.length > 0) {
@@ -746,6 +749,7 @@ function SimplePropertiesPane({
           it.kind === 'audio' &&
           (it.track === a2TrackId ||
             it.track === 'A2' ||
+            it.name.toLowerCase().includes('.mp3') ||
             it.name.toLowerCase().includes('.wav') ||
             MUSIC_OPTIONS.some((opt) => opt.id === it.id || opt.name === it.name || opt.src === it.src))
       ),
@@ -801,7 +805,7 @@ function SimplePropertiesPane({
       (m) =>
         m.src === musicItem.src ||
         m.id === musicItem.id ||
-        (musicItem.src && musicItem.src.includes(m.src.split('/').pop()?.replace('.wav', '') ?? '___')) ||
+        (musicItem.src && musicItem.src.includes(m.src.split('/').pop()?.replace(/\.(wav|mp3)$/i, '') ?? '___')) ||
         (musicItem.name && musicItem.name.toLowerCase().includes(m.id.replace('mus_', '').replace(/_/g, ' '))) ||
         (musicItem.name && musicItem.name.toLowerCase().includes(m.name.split(' ')[0]!.toLowerCase()))
     );
@@ -993,6 +997,7 @@ function SimplePropertiesPane({
           it.kind === 'audio' &&
           (it.track === targetA2Id ||
             it.track === 'A2' ||
+            it.name.toLowerCase().includes('.mp3') ||
             it.name.toLowerCase().includes('.wav') ||
             MUSIC_OPTIONS.some((opt) => opt.id === it.id || opt.name === it.name || opt.src === it.src))
       )
@@ -1022,6 +1027,7 @@ function SimplePropertiesPane({
           it.kind === 'audio' &&
           it.track !== targetA2Id &&
           it.track !== 'A2' &&
+          !it.name.toLowerCase().includes('.mp3') &&
           !it.name.toLowerCase().includes('.wav') &&
           !it.name.toLowerCase().includes('outro')
       );
@@ -1068,7 +1074,7 @@ function SimplePropertiesPane({
         musicEnd = Math.max(state.fps * 10, ...state.items.map((it) => it.startFrame + it.durationInFrames));
       }
     }
-    commands.updateItemProps(musicItem.id, { durationInFrames: musicEnd });
+    commands.setItemTiming(musicItem.id, { durationInFrames: musicEnd });
   };
 
   const labelStyle: CSSProperties = {
