@@ -782,6 +782,33 @@ function SimplePropertiesPane({
 
   const isCaptionsVisible = state.captionsHidden !== true;
 
+  const subtitleItems = useMemo(
+    () =>
+      state.items
+        .filter(
+          (it) =>
+            it.kind === 'motion-graphic' &&
+            (it.templateId === 'rssd-subtitle-template' ||
+              it.props?.subtitleRaw !== undefined ||
+              it.props?.subtitleText !== undefined)
+        )
+        .sort((a, b) => a.startFrame - b.startFrame),
+    [state.items]
+  );
+
+  const primarySubProps = subtitleItems[0]?.props;
+  const subtitleSingleLine = primarySubProps?.singleLine !== false;
+  const subtitleFontSize = Number(primarySubProps?.subtitleFontSize ?? 46);
+  const subtitleTop = Number(primarySubProps?.subtitleTop ?? 1395);
+  const subtitleTextColor = String(primarySubProps?.subtitleTextColor ?? '#ffffff');
+  const subtitleBgColor = String(primarySubProps?.subtitleBgColor ?? '#000000');
+
+  const updateSubtitleProps = (patch: Record<string, unknown>) => {
+    subtitleItems.forEach((item) => {
+      commands.updateItemProps(item.id, patch);
+    });
+  };
+
   // Video Volume (controls video clips on V1 directly)
   const currentVideoVol = videoItem ? (videoItem.volume ?? 1) : 1;
   const isVideoMuted = currentVideoVol === 0;
@@ -1402,6 +1429,190 @@ function SimplePropertiesPane({
                 ? 'الترجمة معروضة فوق الفيديو مع مراعاة التزامن الصوتي التام.'
                 : 'تم إخفاء الترجمة من على شاشة الفيديو بالكامل.'}
             </div>
+
+            {isCaptionsVisible && subtitleItems.length > 0 && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  paddingTop: 10,
+                  borderTop: `0.5px solid ${theme.border}`,
+                }}
+              >
+                {/* سطر واحد / متعدد الأسطر */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: theme.textDim }}>نمط الأسطر</span>
+                  <button
+                    type="button"
+                    onClick={() => updateSubtitleProps({ singleLine: !subtitleSingleLine })}
+                    style={toggleBtnStyle(subtitleSingleLine)}
+                  >
+                    <span>{subtitleSingleLine ? 'سطر واحد' : 'متعدد الأسطر'}</span>
+                  </button>
+                </div>
+
+                {/* حجم الخط */}
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, color: theme.textDim }}>حجم الخط</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: theme.text, fontVariantNumeric: 'tabular-nums' }}>
+                      {subtitleFontSize}px
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={24}
+                    max={72}
+                    step={2}
+                    value={subtitleFontSize}
+                    onChange={(e) => updateSubtitleProps({ subtitleFontSize: Number(e.target.value) })}
+                    style={{ width: '100%', accentColor: theme.accent, cursor: 'pointer' }}
+                  />
+                </div>
+
+                {/* الموقع الرأسي */}
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, color: theme.textDim }}>الموقع الرأسي</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: theme.text, fontVariantNumeric: 'tabular-nums' }}>
+                      {subtitleTop}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={500}
+                    max={1750}
+                    step={10}
+                    value={subtitleTop}
+                    onChange={(e) => updateSubtitleProps({ subtitleTop: Number(e.target.value) })}
+                    style={{ width: '100%', accentColor: theme.accent, cursor: 'pointer' }}
+                  />
+                </div>
+
+                {/* لون النص والخلفية */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '6px 9px',
+                      borderRadius: 7,
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      border: `0.5px solid ${theme.border}`,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span style={{ fontSize: 11, color: theme.textDim }}>لون النص</span>
+                    <input
+                      type="color"
+                      value={subtitleTextColor}
+                      onChange={(e) => updateSubtitleProps({ subtitleTextColor: e.target.value })}
+                      style={{ width: 22, height: 22, border: 'none', background: 'transparent', padding: 0, cursor: 'pointer' }}
+                    />
+                  </label>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '6px 9px',
+                      borderRadius: 7,
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      border: `0.5px solid ${theme.border}`,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span style={{ fontSize: 11, color: theme.textDim }}>لون الخلفية</span>
+                    <input
+                      type="color"
+                      value={subtitleBgColor}
+                      onChange={(e) => updateSubtitleProps({ subtitleBgColor: e.target.value })}
+                      style={{ width: 22, height: 22, border: 'none', background: 'transparent', padding: 0, cursor: 'pointer' }}
+                    />
+                  </label>
+                </div>
+
+                {/* تحرير نصوص الترجمة */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 6, borderTop: `0.5px solid ${theme.border}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: theme.textDim }}>
+                      تحرير نصوص الترجمة ({subtitleItems.length})
+                    </span>
+                    <span style={{ fontSize: 10, color: theme.textDim }}>اضغط للمعاينة والتعديل</span>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                      maxHeight: 240,
+                      overflowY: 'auto',
+                      paddingLeft: 2,
+                    }}
+                  >
+                    {subtitleItems.map((item, idx) => {
+                      const cueValue = String(item.props?.subtitleText ?? item.props?.subtitleRaw ?? '');
+                      const totalSec = Math.max(0, Math.floor(item.startFrame / Math.max(1, state.fps)));
+                      const mins = String(Math.floor(totalSec / 60)).padStart(2, '0');
+                      const secs = String(totalSec % 60).padStart(2, '0');
+                      return (
+                        <div
+                          key={item.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            title={`الانتقال إلى ${mins}:${secs}`}
+                            onClick={() => onSeek(item.startFrame + 2)}
+                            style={{
+                              flexShrink: 0,
+                              padding: '5px 7px',
+                              borderRadius: 6,
+                              border: `0.5px solid ${theme.border}`,
+                              background: 'rgba(255, 255, 255, 0.04)',
+                              color: theme.accent,
+                              fontSize: 10.5,
+                              fontWeight: 700,
+                              fontVariantNumeric: 'tabular-nums',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {mins}:{secs}
+                          </button>
+                          <input
+                            type="text"
+                            dir="rtl"
+                            aria-label={`ترجمة ${idx + 1}`}
+                            value={cueValue}
+                            onFocus={() => onSeek(item.startFrame + 2)}
+                            onChange={(e) => {
+                              const nextText = e.target.value;
+                              commands.updateItemProps(item.id, {
+                                subtitleText: nextText,
+                                subtitleRaw: nextText,
+                              });
+                            }}
+                            style={{
+                              ...inputStyle,
+                              flex: 1,
+                              minWidth: 0,
+                              padding: '6px 9px',
+                              fontSize: 12,
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
