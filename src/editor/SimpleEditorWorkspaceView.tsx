@@ -787,10 +787,12 @@ function SimplePropertiesPane({
       state.items
         .filter(
           (it) =>
-            it.kind === 'motion-graphic' &&
-            (it.templateId === 'rssd-subtitle-template' ||
-              it.props?.subtitleRaw !== undefined ||
-              it.props?.subtitleText !== undefined)
+            it.track === 'V5' ||
+            (it.kind === 'motion-graphic' &&
+              (it.templateId === 'rssd-subtitle-template' ||
+                it.id.startsWith('item_sub_') ||
+                it.props?.subtitleRaw !== undefined ||
+                it.props?.subtitleText !== undefined))
         )
         .sort((a, b) => a.startFrame - b.startFrame),
     [state.items]
