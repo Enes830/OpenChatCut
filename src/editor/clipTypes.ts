@@ -133,6 +133,18 @@ export interface ClipEffect {
   overrides?: Record<string, ClipEffectValue>;
 }
 
+export interface BlurRegion {
+  id: string;
+  /** percent 0..100 */
+  x: number;
+  /** percent 0..100 */
+  y: number;
+  /** percent 0..100 */
+  width: number;
+  /** percent 0..100 */
+  height: number;
+}
+
 export interface TimelineItem extends TranscriptCarrier {
   id: string;
   track: TrackId;
@@ -140,6 +152,8 @@ export interface TimelineItem extends TranscriptCarrier {
   durationInFrames: number;
   name: string;
   kind: 'motion-graphic' | 'audio' | 'video' | 'image' | 'text' | 'gif' | 'svg' | 'solid' | 'sequence';
+  // blur overlay regions (applied directly over the media layer, beneath graphics/templates)
+  blurRegions?: BlurRegion[];
   // motion-graphic fields:
   templateId?: string;
   code?: string;
