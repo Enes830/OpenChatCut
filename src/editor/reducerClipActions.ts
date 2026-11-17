@@ -52,9 +52,14 @@ export function applyClipAction(s: TimelineState, a: Action): TimelineState | un
       if (lockedItem(s, a.id)) return s;
       return {
         ...s,
-        items: s.items.map((it) =>
-          it.id === a.id ? { ...it, props: { ...it.props, ...a.patch } } : it,
-        ),
+        items: s.items.map((it) => {
+          if (it.id !== a.id) return it;
+          const nextItem = { ...it, props: { ...it.props, ...a.patch } };
+          if ('blurRegions' in a.patch) {
+            nextItem.blurRegions = a.patch.blurRegions as any;
+          }
+          return nextItem;
+        }),
       };
     case 'relinkTimelineItem': {
       const target = s.items.find((item) => item.id === a.id);

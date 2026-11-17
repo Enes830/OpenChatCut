@@ -3077,15 +3077,14 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const primaryVideoItem = mainVideoItems[0] ?? state.items.find((it) => it.kind === 'video');
 
   const blurRegions = useMemo<BlurRegion[]>(() => {
-    if (primaryVideoItem?.blurRegions && primaryVideoItem.blurRegions.length > 0) {
-      return primaryVideoItem.blurRegions;
-    }
     if (
-      primaryVideoItem?.props?.blurRegions &&
-      Array.isArray(primaryVideoItem.props.blurRegions) &&
-      primaryVideoItem.props.blurRegions.length > 0
+      primaryVideoItem?.props?.blurRegions !== undefined &&
+      Array.isArray(primaryVideoItem.props.blurRegions)
     ) {
       return primaryVideoItem.props.blurRegions as BlurRegion[];
+    }
+    if (primaryVideoItem?.blurRegions && Array.isArray(primaryVideoItem.blurRegions) && primaryVideoItem.blurRegions.length > 0) {
+      return primaryVideoItem.blurRegions;
     }
     const blurTrackItems = state.items.filter(
       (it) => it.track?.startsWith('BLUR') || it.id.startsWith('item_blur_')
@@ -3109,8 +3108,13 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
     return [];
   }, [primaryVideoItem, state.items]);
 
+  const targetVideos = useMemo(
+    () => (mainVideoItems.length > 0 ? mainVideoItems : primaryVideoItem ? [primaryVideoItem] : []),
+    [mainVideoItems, primaryVideoItem]
+  );
+
   const handleAddBlurRegion = useCallback(() => {
-    if (!primaryVideoItem) return;
+    if (targetVideos.length === 0) return;
     const newRegion: BlurRegion = {
       id: `blur_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       x: 30 + (blurRegions.length * 5) % 25,
@@ -3119,16 +3123,16 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
       height: 20,
     };
     const next = [...blurRegions, newRegion];
-    mainVideoItems.forEach((v) => {
+    targetVideos.forEach((v) => {
       commands.updateItemProps(v.id, { blurRegions: next });
     });
     setSelectedBlurId(newRegion.id);
-  }, [blurRegions, commands, mainVideoItems, primaryVideoItem]);
+  }, [blurRegions, commands, targetVideos]);
 
   const handleUpdateBlurRegion = useCallback(
     (updated: BlurRegion) => {
       const next = blurRegions.map((r) => (r.id === updated.id ? updated : r));
-      mainVideoItems.forEach((v) => {
+      targetVideos.forEach((v) => {
         commands.updateItemProps(v.id, { blurRegions: next });
       });
       const bItem = state.items.find(
@@ -3145,13 +3149,13 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
         });
       }
     },
-    [blurRegions, commands, mainVideoItems, state.items]
+    [blurRegions, commands, targetVideos, state.items]
   );
 
   const handleRemoveBlurRegion = useCallback(
     (id: string) => {
       const next = blurRegions.filter((r) => r.id !== id);
-      mainVideoItems.forEach((v) => {
+      targetVideos.forEach((v) => {
         commands.updateItemProps(v.id, { blurRegions: next });
       });
       const bItem = state.items.find((it) => it.id === id || it.id === `item_blur_${id}`);
@@ -3160,7 +3164,7 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
       }
       if (selectedBlurId === id) setSelectedBlurId(null);
     },
-    [blurRegions, commands, mainVideoItems, selectedBlurId, state.items]
+    [blurRegions, commands, targetVideos, selectedBlurId, state.items]
   );
 
   const handleQuickComment = useCallback(() => {
