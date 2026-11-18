@@ -3075,16 +3075,37 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
     [state.items]
   );
   const primaryVideoItem = mainVideoItems[0] ?? state.items.find((it) => it.kind === 'video');
+  const coverItem = useMemo(
+    () =>
+      state.items.find(
+        (it) =>
+          it.id === 'item_cover_1' ||
+          (it.name && it.name.includes('غلاف')) ||
+          (it.name && it.name.toLowerCase().includes('thumbnail')) ||
+          it.track === 'V6'
+      ),
+    [state.items]
+  );
 
   const blurRegions = useMemo<BlurRegion[]>(() => {
+    const candidateItem = primaryVideoItem ?? coverItem;
     if (
-      primaryVideoItem?.props?.blurRegions !== undefined &&
-      Array.isArray(primaryVideoItem.props.blurRegions)
+      candidateItem?.props?.blurRegions !== undefined &&
+      Array.isArray(candidateItem.props.blurRegions)
     ) {
-      return primaryVideoItem.props.blurRegions as BlurRegion[];
+      return candidateItem.props.blurRegions as BlurRegion[];
     }
-    if (primaryVideoItem?.blurRegions && Array.isArray(primaryVideoItem.blurRegions) && primaryVideoItem.blurRegions.length > 0) {
-      return primaryVideoItem.blurRegions;
+    if (candidateItem?.blurRegions && Array.isArray(candidateItem.blurRegions) && candidateItem.blurRegions.length > 0) {
+      return candidateItem.blurRegions;
+    }
+    if (
+      coverItem?.props?.blurRegions !== undefined &&
+      Array.isArray(coverItem.props.blurRegions)
+    ) {
+      return coverItem.props.blurRegions as BlurRegion[];
+    }
+    if (coverItem?.blurRegions && Array.isArray(coverItem.blurRegions) && coverItem.blurRegions.length > 0) {
+      return coverItem.blurRegions;
     }
     const blurTrackItems = state.items.filter(
       (it) => it.track?.startsWith('BLUR') || it.id.startsWith('item_blur_')
@@ -3106,15 +3127,18 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
       });
     }
     return [];
-  }, [primaryVideoItem, state.items]);
+  }, [primaryVideoItem, coverItem, state.items]);
 
-  const targetVideos = useMemo(
-    () => (mainVideoItems.length > 0 ? mainVideoItems : primaryVideoItem ? [primaryVideoItem] : []),
-    [mainVideoItems, primaryVideoItem]
-  );
+  const targetMedia = useMemo(() => {
+    const list = mainVideoItems.length > 0 ? [...mainVideoItems] : primaryVideoItem ? [primaryVideoItem] : [];
+    if (coverItem && !list.some((it) => it.id === coverItem.id)) {
+      list.push(coverItem);
+    }
+    return list;
+  }, [mainVideoItems, primaryVideoItem, coverItem]);
 
   const handleAddBlurRegion = useCallback(() => {
-    if (targetVideos.length === 0) return;
+    if (targetMedia.length === 0) return;
     const newRegion: BlurRegion = {
       id: `blur_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       x: 30 + (blurRegions.length * 5) % 25,
@@ -3123,20 +3147,23 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
       height: 20,
     };
     const next = [...blurRegions, newRegion];
-    targetVideos.forEach((v) => {
+    targetMedia.forEach((v) => {
       commands.updateItemProps(v.id, { blurRegions: next });
     });
     setSelectedBlurId(newRegion.id);
-  }, [blurRegions, commands, targetVideos]);
+  }, [blurRegions, commands, targetMedia]);
 
   const handleUpdateBlurRegion = useCallback(
     (updated: BlurRegion) => {
       const next = blurRegions.map((r) => (r.id === updated.id ? updated : r));
-      targetVideos.forEach((v) => {
+      targetMedia.forEach((v) => {
         commands.updateItemProps(v.id, { blurRegions: next });
       });
       const bItem = state.items.find(
-        (it) => it.id === updated.id || it.id === `item_blur_${updated.id}`
+        (it) =>
+          it.id === updated.id ||
+          it.id === `item_blur_${updated.id}` ||
+          it.id === updated.id.replace(/^blur_/, 'item_blur_')
       );
       if (bItem) {
         commands.setItemTransform(bItem.id, {
@@ -3149,22 +3176,27 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
         });
       }
     },
-    [blurRegions, commands, targetVideos, state.items]
+    [blurRegions, commands, targetMedia, state.items]
   );
 
   const handleRemoveBlurRegion = useCallback(
     (id: string) => {
       const next = blurRegions.filter((r) => r.id !== id);
-      targetVideos.forEach((v) => {
+      targetMedia.forEach((v) => {
         commands.updateItemProps(v.id, { blurRegions: next });
       });
-      const bItem = state.items.find((it) => it.id === id || it.id === `item_blur_${id}`);
+      const bItem = state.items.find(
+        (it) =>
+          it.id === id ||
+          it.id === `item_blur_${id}` ||
+          it.id === id.replace(/^blur_/, 'item_blur_')
+      );
       if (bItem) {
         commands.removeItem(bItem.id);
       }
       if (selectedBlurId === id) setSelectedBlurId(null);
     },
-    [blurRegions, commands, targetVideos, selectedBlurId, state.items]
+    [blurRegions, commands, targetMedia, selectedBlurId, state.items]
   );
 
   const handleQuickComment = useCallback(() => {

@@ -125,6 +125,32 @@ export function moveItemWithGroups(
   };
 }
 
+function syncRetimedItemProps(
+  item: TimelineItem,
+  nextDurationInFrames: number,
+): TimelineItem['props'] {
+  if (!item.props || item.durationInFrames === nextDurationInFrames) return item.props;
+  const hasCompanionLayers = Boolean(
+    item.props.showSource || item.props.showSubtitle || item.props.showBrandLogo
+  );
+  if (hasCompanionLayers) return item.props;
+  const hasHeadlineDuration = 'headlineDurationFrames' in item.props;
+  const hasExitStartFrame = 'exitStartFrame' in item.props;
+  const hasExitDelay = 'exitDelayFrames' in item.props;
+  if (!hasHeadlineDuration && !hasExitStartFrame && !hasExitDelay) return item.props;
+  const nextProps: Record<string, unknown> = { ...item.props };
+  if (hasHeadlineDuration) {
+    nextProps.headlineDurationFrames = nextDurationInFrames;
+  }
+  if (hasExitStartFrame) {
+    delete nextProps.exitStartFrame;
+  }
+  if (hasExitDelay) {
+    nextProps.exitDelayFrames = Math.max(10, nextDurationInFrames - 25);
+  }
+  return nextProps;
+}
+
 /**
  * Apply a trim to linked members using source-domain math. The direct clip's
  * source delta is converted back to timeline time before it is projected into
@@ -140,7 +166,18 @@ export function retimeItemWithGroups(
   const ids = new Set(linkedItemIds(state, [id]));
   if (locked(state, ids)) return state;
   if (ids.size === 1) {
-    return { ...state, items: state.items.map((item) => item.id === id ? { ...item, ...targetPatch } : item) };
+    return {
+      ...state,
+      items: state.items.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              ...targetPatch,
+              props: syncRetimedItemProps(item, targetPatch.durationInFrames),
+            }
+          : item
+      ),
+    };
   }
 
   const startDelta = targetPatch.startFrame - target.startFrame;
@@ -148,7 +185,11 @@ export function retimeItemWithGroups(
   const endDelta = targetPatch.startFrame + targetPatch.durationInFrames - oldEnd;
   const sourceDelta = (targetPatch.srcInFrame ?? 0) - (target.srcInFrame ?? 0);
   const sourceTimelineDelta = sourceFramesToTimelineFrames(target, sourceDelta);
-  const replacements = new Map<string, TimelineItem>([[id, { ...target, ...targetPatch }]]);
+  const replacements = new Map<string, TimelineItem>([[id, {
+    ...target,
+    ...targetPatch,
+    props: syncRetimedItemProps(target, targetPatch.durationInFrames),
+  }]]);
 
   for (const item of state.items) {
     if (!ids.has(item.id) || item.id === id) continue;
@@ -161,6 +202,7 @@ export function retimeItemWithGroups(
       startFrame: nextStart,
       durationInFrames: nextDuration,
       srcInFrame: nextSrcIn,
+      props: syncRetimedItemProps(item, nextDuration),
     });
   }
   return { ...state, items: state.items.map((item) => replacements.get(item.id) ?? item) };

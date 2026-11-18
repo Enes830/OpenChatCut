@@ -493,7 +493,8 @@ def main():
                 probe_cmd = [
                     'ffprobe', '-v', 'error',
                     '-select_streams', 'v:0',
-                    '-show_entries', 'stream=width,height,duration:format=duration',
+                    '-show_streams',
+                    '-show_format',
                     '-of', 'json',
                     str(src_path)
                 ]
@@ -505,6 +506,27 @@ def main():
                         s0 = streams[0]
                         pw = int(s0.get('width', 0) or 0)
                         ph = int(s0.get('height', 0) or 0)
+
+                        rot_deg = 0
+                        for sd in s0.get('side_data_list', []):
+                            if 'rotation' in sd:
+                                try:
+                                    rot_deg = int(float(sd['rotation']))
+                                    break
+                                except Exception:
+                                    pass
+                        if rot_deg == 0:
+                            tags_dict = s0.get('tags', {}) or {}
+                            for r_k in ('rotate', 'rotation', 'ROTATE'):
+                                if r_k in tags_dict:
+                                    try:
+                                        rot_deg = int(float(tags_dict[r_k]))
+                                        break
+                                    except Exception:
+                                        pass
+                        if abs(rot_deg) in (90, 270):
+                            pw, ph = ph, pw
+
                         if pw > 0 and ph > 0:
                             media_w, media_h = pw, ph
                             if media_w > media_h:

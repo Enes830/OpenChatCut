@@ -147,6 +147,24 @@ function MotionGraphicWindow({ item, children }: { item: TimelineItem; children:
   );
 }
 
+function syncMotionGraphicTimingProps(item: TimelineItem): Record<string, unknown> {
+  const raw = item.props ?? {};
+  const hasCompanionLayers = Boolean(raw.showSource || raw.showSubtitle || raw.showBrandLogo);
+  if (hasCompanionLayers) return raw;
+  const effectiveDuration = item.designDurationInFrames ?? item.durationInFrames;
+  const next: Record<string, unknown> = { ...raw };
+  if ('headlineDurationFrames' in next) {
+    next.headlineDurationFrames = effectiveDuration;
+  }
+  if ('exitStartFrame' in next) {
+    delete next.exitStartFrame;
+  }
+  if ('exitDelayFrames' in next) {
+    next.exitDelayFrames = Math.max(10, effectiveDuration - 25);
+  }
+  return next;
+}
+
 export function ItemLayer({ item, canvasW, canvasH, fit, borderRadius }: {
   item: TimelineItem;
   canvasW: number;
@@ -157,6 +175,7 @@ export function ItemLayer({ item, canvasW, canvasH, fit, borderRadius }: {
   const dw = item.width ?? 1920;
   const dh = item.height ?? 1080;
   const scale = fit === 'cover' ? Math.max(canvasW / dw, canvasH / dh) : Math.min(canvasW / dw, canvasH / dh);
+  const effectiveProps = syncMotionGraphicTimingProps(item);
   try {
     const Template = getCompiledTemplate(item.code ?? '');
     return (
@@ -167,7 +186,7 @@ export function ItemLayer({ item, canvasW, canvasH, fit, borderRadius }: {
             style={{ width: dw, height: dh, position: 'relative', flexShrink: 0, transform: `scale(${scale})` }}
           >
             <MotionGraphicWindow item={item}>
-              <Template item={{ props: item.props ?? {}, width: dw, height: dh }} />
+              <Template item={{ props: effectiveProps, width: dw, height: dh }} />
             </MotionGraphicWindow>
           </div>
         </div>

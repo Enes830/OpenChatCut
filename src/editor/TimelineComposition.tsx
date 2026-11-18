@@ -8,7 +8,7 @@ import type { SelectedPreviewStatus, SelectedPreviewStatusListener } from '../gl
 import { timelineItemAssetId } from './mediaAssetUsage';
 import { captionOverlayVisible, captionTrackEntries, CSS_TRANSITION_TYPES, isAudioTransition, isRasterMediaKind, isVisualItemKind, timelineTrackIds, trackKind } from './types';
 import { previewTextEditFields } from '../components/preview/previewTextEdit';
-import type { AspectFit, CssTransitionType, GlslTransitionType, ProjectDoc, Timeline, TimelineItem, TimelineState, TransitionDirection } from './types';
+import type { AspectFit, BlurRegion, CssTransitionType, GlslTransitionType, ProjectDoc, Timeline, TimelineItem, TimelineState, TransitionDirection } from './types';
 import { sourceFrameAt } from './sourceLimit';
 import { nestedSequenceFrom, resolveTimelineRenderPlan, SequenceGraphError, type SequenceGraphLimits } from './sequenceGraph';
 import { PreviewTransitionIn } from './transitionPreview.tsx';
@@ -146,8 +146,18 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
   const isMuted = (t: TimelineItem['track']) => forceMuted || (state.tracks?.[t]?.muted ?? false);
   const trackIds = timelineTrackIds(state);
   const visualTracks = trackIds.filter((id) => trackKind(state, id) === 'video');
+  const hasInlineBlurRegions = state.items.some((it) =>
+    !it.track?.startsWith('BLUR')
+    && !it.id.startsWith('item_blur_')
+    && (Array.isArray(it.blurRegions) || Array.isArray(it.props?.blurRegions))
+  );
   // hidden track = fully disabled (no picture, no sound)
-  const visual = state.items.filter((it) => isVisualItemKind(it.kind) && visualTracks.includes(it.track) && !isHidden(it.track));
+  const visual = state.items.filter((it) =>
+    isVisualItemKind(it.kind)
+    && visualTracks.includes(it.track)
+    && !isHidden(it.track)
+    && !(hasInlineBlurRegions && (it.track?.startsWith('BLUR') || it.id.startsWith('item_blur_')))
+  );
   // Paint visual bottom-to-top. Timeline rows are stored top-to-bottom.
   const ordered = [...visual].sort((a, b) => a.track === b.track
     ? a.startFrame - b.startFrame
@@ -275,7 +285,9 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
     // effects/transitions/animations keeps its own element and breaks the run.
     const runs: TimelineItem[][] = [];
     for (const item of group) {
-      const shareable = shareableVisualItem({
+      const itemBlurRegions = (item.blurRegions ?? item.props?.blurRegions) as BlurRegion[] | undefined;
+      const hasBlurRegions = Array.isArray(itemBlurRegions) && itemBlurRegions.length > 0;
+      const shareable = !hasBlurRegions && shareableVisualItem({
         item,
         hasGlEffect: !!firstGlEffect(item),
         hasBackgroundFill: isBackgroundFillActive(state, item),
@@ -348,11 +360,66 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
                     ? onSelectedPreviewStatus : undefined} />}
           </ClipWrapper>
         );
+        const blurRegions = ((item.blurRegions ?? item.props?.blurRegions) as BlurRegion[] | undefined)
+          ?.filter((r) => r && r.width > 0 && r.height > 0);
+        const blurLayers = blurRegions?.length && isRasterMediaKind(item.kind)
+          ? blurRegions.map((region) => {
+              const regionLeft = Math.max(0, Math.min(1, region.x / 100));
+              const regionTop = Math.max(0, Math.min(1, region.y / 100));
+              const regionRight = Math.max(0, Math.min(1, 1 - (region.x + region.width) / 100));
+              const regionBottom = Math.max(0, Math.min(1, 1 - (region.y + region.height) / 100));
+              const baseCrop = item.transform?.crop;
+              const blurredItem: TimelineItem = {
+                ...item,
+                blurRegions: undefined,
+                props: item.props ? { ...item.props, blurRegions: undefined } : undefined,
+                transform: {
+                  ...item.transform,
+                  crop: {
+                    left: Math.max(baseCrop?.left ?? 0, regionLeft),
+                    top: Math.max(baseCrop?.top ?? 0, regionTop),
+                    right: Math.max(baseCrop?.right ?? 0, regionRight),
+                    bottom: Math.max(baseCrop?.bottom ?? 0, regionBottom),
+                  },
+                },
+                filters: {
+                  brightness: item.filters?.brightness ?? 1,
+                  contrast: item.filters?.contrast ?? 1,
+                  saturate: item.filters?.saturate ?? 1,
+                  blur: (item.filters?.blur ?? 0) + 28,
+                },
+              };
+              return (
+                <ClipWrapper
+                  key={`blur:${item.id}:${region.id}`}
+                  item={blurredItem}
+                  frameOffset={-eb}
+                  hiddenByCaptions={hiddenByCaptions}
+                >
+                  {(borderRadius) => (
+                    <MediaFill
+                      item={blurredItem}
+                      frameOffset={-eb}
+                      fit={fillBackground ? 'contain' : fit}
+                      muted={true}
+                      groupedAudio={true}
+                      gainAt={() => 0}
+                      canvasW={state.width}
+                      canvasH={state.height}
+                      borderRadius={borderRadius}
+                      browserRenderer={browserRenderer}
+                    />
+                  )}
+                </ClipWrapper>
+              );
+            })
+          : null;
         const content = (
           <>
             {fillBackground && <BackgroundFillLayer item={item} frameOffset={-eb} canvasW={state.width}
               canvasH={state.height} browserRenderer={browserRenderer} />}
             {foreground}
+            {blurLayers}
           </>
         );
         return (

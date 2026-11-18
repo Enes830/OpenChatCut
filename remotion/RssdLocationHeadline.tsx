@@ -195,12 +195,17 @@ export const RssdLocationHeadline: React.FC<
   const bottomOffset =
     props.bottomOffset !== undefined ? props.bottomOffset : isPortrait ? 647 : 120;
 
-  // Animation Timing: Headline stays for headlineDurationFrames (or clip durationInFrames) then exits,
-  // while Source, Logo, and Subtitle stay for the full durationInFrames!
+  // Animation Timing: When used as a standalone timeline clip (without embedded source/logo/subtitle),
+  // always follow the timeline clip's durationInFrames so dragging the clip on the timeline extends the headline.
   const enableEntrance = props.enableEntrance !== false;
   const enableExitAnimation = props.enableExitAnimation !== false;
-  const headlineDuration = props.headlineDurationFrames ?? durationInFrames;
-  const exitStartFrame = props.exitStartFrame ?? Math.max(35, headlineDuration - 15);
+  const hasCompanionLayers = Boolean(showSource || showSubtitle || showBrandLogo);
+  const headlineDuration = hasCompanionLayers && props.headlineDurationFrames
+    ? props.headlineDurationFrames
+    : durationInFrames;
+  const exitStartFrame = hasCompanionLayers && props.exitStartFrame
+    ? props.exitStartFrame
+    : Math.max(35, headlineDuration - 15);
 
   // ─── Location Entrance Animations ──────────────────────────────────────────
   const pinSpring = enableEntrance
