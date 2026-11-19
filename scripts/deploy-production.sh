@@ -12,16 +12,16 @@ echo "🚀 [1/5] Building production bundle locally on Mac..."
 npm run build
 
 echo "📦 [2/5] Packaging dist directory..."
-COPYFILE_DISABLE=1 tar --no-xattrs -czf dist.tar.gz -C dist .
+COPYFILE_DISABLE=1 tar --no-xattrs --exclude="media/uploads*" -czf dist.tar.gz -C dist .
 ARCHIVE_SIZE=$(du -h dist.tar.gz | cut -f1)
 echo "   Package created: dist.tar.gz ($ARCHIVE_SIZE)"
 
 echo "📥 [3/5] Uploading bundle to VPS ($REMOTE)..."
-scp dist.tar.gz "$REMOTE:$REMOTE_DIR/dist.tar.gz"
+scp -o IPQoS=none dist.tar.gz "$REMOTE:$REMOTE_DIR/dist.tar.gz"
 rm -f dist.tar.gz
 
 echo "🔄 [4/5] Syncing repo and performing atomic PM2 swap on VPS..."
-ssh "$REMOTE" "
+ssh -o IPQoS=none "$REMOTE" "
   set -euo pipefail
   cd $REMOTE_DIR
 
