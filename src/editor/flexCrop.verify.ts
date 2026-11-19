@@ -103,4 +103,20 @@ assert.ok(Math.abs(maxLeft - (1 - 0.4 - PREVIEW_CROP_MIN_SPAN)) < 1e-9, 'left ma
 const clampedLeft = flexCropInsetPatch({ right: 0.8 }, 'left', 0.9).crop?.left;
 assert.ok(clampedLeft !== undefined && Math.abs(clampedLeft - flexCropEdgeMax({ right: 0.8 }, 'left')) < 1e-6, 'oversize inset is clamped then compacted');
 
+assert.equal(
+  flexCropClipPath({ left: 0.1, top: 0.1, right: 0.1, bottom: 0.1 }, 1000, 1000, 24),
+  'inset(100px 100px 100px 100px round 24px)',
+  'flexCropClipPath outputs round <radius>px when borderRadius number is given',
+);
+assert.equal(
+  flexCropClipPath({ left: 0.1, top: 0.1, right: 0.1, bottom: 0.1 }, 1000, 1000, '9999px'),
+  'inset(100px 100px 100px 100px round 9999px)',
+  'flexCropClipPath outputs round for string radius (e.g. circle pill)',
+);
+assert.equal(
+  flexCropClipPath({ left: 0.1, top: 0.1, right: 0.1, bottom: 0.1 }, 1000, 1000, 0),
+  'inset(100px 100px 100px 100px)',
+  'flexCropClipPath omits round when borderRadius is 0 (square)',
+);
+
 console.log('flexCrop.verify: ok');

@@ -170,6 +170,13 @@ export function BlurCanvasOverlay({
         const isSelected = selectedId === region.id;
         const isHovered = hoveredId === region.id;
 
+        const isCircle = activeRegion.shape === 'circle' || (activeRegion.borderRadius !== undefined && activeRegion.borderRadius >= 100);
+        const resolvedRadius = isCircle
+          ? 9999
+          : activeRegion.shape === 'rounded'
+            ? (activeRegion.borderRadius ?? 24)
+            : (activeRegion.borderRadius ?? 0);
+
         return (
           <div
             key={region.id}
@@ -196,7 +203,7 @@ export function BlurCanvasOverlay({
               background: isSelected
                 ? 'rgba(59, 130, 246, 0.12)'
                 : 'transparent',
-              borderRadius: 4,
+              borderRadius: resolvedRadius,
               transition: isDragging ? 'none' : 'border-color 0.15s ease',
             }}
           >
@@ -224,6 +231,36 @@ export function BlurCanvasOverlay({
               >
                 <Icon name="eyeOff" size={11} color="#ffffff" />
                 <span>تمويه {idx + 1}</span>
+
+                {/* Quick Shape Toggle Button */}
+                <button
+                  type="button"
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    const nextShape = activeRegion.shape === 'circle' ? 'square' : activeRegion.shape === 'rounded' ? 'circle' : 'rounded';
+                    const nextRadius = nextShape === 'circle' ? 9999 : nextShape === 'rounded' ? 24 : 0;
+                    onChangeRegion({
+                      ...activeRegion,
+                      shape: nextShape,
+                      borderRadius: nextRadius,
+                    });
+                  }}
+                  title={`تبديل الشكل: ${activeRegion.shape === 'circle' ? 'دائري' : activeRegion.shape === 'rounded' ? 'مستدير' : 'مربع'}`}
+                  style={{
+                    border: 'none',
+                    background: 'rgba(255, 255, 255, 0.22)',
+                    color: '#ffffff',
+                    cursor: 'pointer',
+                    padding: '1px 6px',
+                    borderRadius: 3,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    marginLeft: 2,
+                  }}
+                >
+                  {activeRegion.shape === 'circle' ? '⚪ دائري' : activeRegion.shape === 'rounded' ? '▢ مستدير' : '⬛ مربع'}
+                </button>
+
                 <button
                   type="button"
                   onPointerDown={(e) => {

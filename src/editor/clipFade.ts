@@ -55,12 +55,15 @@ export function appearanceAt(
     ? `translate(${keyframeValue('x') ?? transform?.x ?? 0}%, ${keyframeValue('y') ?? transform?.y ?? 0}%) rotate(${keyframeValue('rotation') ?? transform?.rotation ?? 0}deg) scale(${scaleX}, ${scaleY})`
     : undefined;
   const crop = transform?.crop;
-  const clipPath = hasFlexCrop(crop) ? flexCropClipPath(crop, canvas.width, canvas.height) : undefined;
+  const borderRadius = Math.max(0, keyframeValue('borderRadius') ?? transform?.borderRadius ?? 0);
+  const clipPath = hasFlexCrop(crop)
+    ? flexCropClipPath(crop, canvas.width, canvas.height, borderRadius > 0 ? (borderRadius >= 999 ? '9999px' : `${borderRadius}px`) : undefined)
+    : undefined;
   const opacity = clipOpacityAt(item, frame, hiddenByCaptions);
   const filters = item.filters;
   return {
     opacity,
-    borderRadius: Math.max(0, keyframeValue('borderRadius') ?? transform?.borderRadius ?? 0),
+    borderRadius,
     foregroundStyle: {
       transform: cssTransform,
       transformOrigin: '50% 50%',

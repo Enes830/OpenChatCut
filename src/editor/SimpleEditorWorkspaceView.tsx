@@ -577,6 +577,7 @@ interface SimplePropertiesPaneProps {
   onSelectBlur: (id: string | null) => void;
   onAddBlur: () => void;
   onRemoveBlur: (id: string) => void;
+  onChangeBlur?: (updated: BlurRegion) => void;
 }
 
 function SimplePropertiesPane({
@@ -591,6 +592,7 @@ function SimplePropertiesPane({
   onSelectBlur,
   onAddBlur,
   onRemoveBlur,
+  onChangeBlur,
 }: SimplePropertiesPaneProps) {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     texts: true,
@@ -679,10 +681,14 @@ function SimplePropertiesPane({
     []
   );
 
-  // Restore video volume if it was set to 0 by previous auto-mute bug
+  // Restore video volume if missing or undefined (do not override intentional mutes where volume === 0)
   const didRestoreVideoRef = useRef(false);
   useEffect(() => {
-    if (!didRestoreVideoRef.current && videoItem && (videoItem.volume === 0 || videoItem.volume === undefined)) {
+    if (
+      !didRestoreVideoRef.current &&
+      videoItem &&
+      videoItem.volume === undefined
+    ) {
       commands.setItemVolume(videoItem.id, 1);
       didRestoreVideoRef.current = true;
     }
@@ -1773,7 +1779,9 @@ function SimplePropertiesPane({
                   مربعات التمويه النشطة ({blurRegions.length}):
                 </div>
                 {blurRegions.map((region, idx) => {
-                  const isSelected = selectedBlurId === region.id;
+                  const isSelected = selectedBlurId === region.id || (selectedBlurId === null && blurRegions.length === 1);
+                  const isCircle = region.shape === 'circle' || (region.borderRadius !== undefined && region.borderRadius >= 100);
+                  const isRounded = region.shape === 'rounded' || (!isCircle && (region.borderRadius ?? 0) > 0);
                   return (
                     <div
                       key={region.id}
@@ -1794,6 +1802,9 @@ function SimplePropertiesPane({
                         <Icon name="eyeOff" size={12} color={isSelected ? '#3b82f6' : theme.textDim} />
                         <span style={{ fontSize: 11.5, fontWeight: isSelected ? 700 : 500, color: theme.text }}>
                           تمويه {idx + 1}
+                        </span>
+                        <span style={{ fontSize: 9.5, color: theme.accent, background: 'rgba(59, 130, 246, 0.15)', padding: '1px 5px', borderRadius: 3 }}>
+                          {isCircle ? '⚪ دائري' : isRounded ? '▢ مستدير' : '⬛ مربع'}
                         </span>
                         <span style={{ fontSize: 10, color: theme.textDim }}>
                           ({Math.round(region.width)}% × {Math.round(region.height)}%)
@@ -1822,8 +1833,222 @@ function SimplePropertiesPane({
                     </div>
                   );
                 })}
+
+                {/* Selected Blur Region Configuration */}
+                {(() => {
+                  const targetRegion = blurRegions.find((r) => r.id === selectedBlurId) ?? (blurRegions.length === 1 ? blurRegions[0] : null);
+                  if (!targetRegion || !onChangeBlur) return null;
+                  const isCircle = targetRegion.shape === 'circle' || (targetRegion.borderRadius !== undefined && targetRegion.borderRadius >= 100);
+                  const isRounded = targetRegion.shape === 'rounded' || (!isCircle && (targetRegion.borderRadius ?? 0) > 0);
+                  const isSquare = !isCircle && !isRounded;
+                  const currentStrength = targetRegion.strength ?? 70;
+
+                  return (
+                    <div style={{
+                      marginTop: 6,
+                      padding: '10px 12px',
+                      borderRadius: 7,
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      border: `0.5px solid ${theme.border}`,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: theme.text }}>
+                          إعدادات التمويه المختار
+                        </span>
+                        <span style={{ fontSize: 10, color: '#60a5fa', fontWeight: 600 }}>
+                          {isCircle ? 'دائري' : isRounded ? 'مستدير' : 'مربع'} • {currentStrength}px
+                        </span>
+                      </div>
+
+                      {/* 1. Shape Selection: Square vs Rounded vs Circle */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 10.5, color: theme.textDim, fontWeight: 600 }}>
+                            الشكل (Shape):
+                          </span>
+                          <span style={{ fontSize: 9.5, color: theme.textDim }}>
+                            {isCircle ? 'دائري / بيضاوي' : isRounded ? 'زوايا ناعمة' : 'مربع حاد'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onChangeBlur({
+                                ...targetRegion,
+                                shape: 'square',
+                                borderRadius: 0,
+                              });
+                            }}
+                            style={{
+                              height: 28,
+                              borderRadius: 5,
+                              border: `1px solid ${isSquare ? '#3b82f6' : theme.border}`,
+                              background: isSquare ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                              color: isSquare ? '#60a5fa' : theme.text,
+                              fontSize: 10.5,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <span>⬛ مربع</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onChangeBlur({
+                                ...targetRegion,
+                                shape: 'rounded',
+                                borderRadius: targetRegion.borderRadius && targetRegion.borderRadius < 100 ? targetRegion.borderRadius : 24,
+                              });
+                            }}
+                            style={{
+                              height: 28,
+                              borderRadius: 5,
+                              border: `1px solid ${isRounded ? '#3b82f6' : theme.border}`,
+                              background: isRounded ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                              color: isRounded ? '#60a5fa' : theme.text,
+                              fontSize: 10.5,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <span>▢ مستدير</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onChangeBlur({
+                                ...targetRegion,
+                                shape: 'circle',
+                                borderRadius: 9999,
+                              });
+                            }}
+                            style={{
+                              height: 28,
+                              borderRadius: 5,
+                              border: `1px solid ${isCircle ? '#3b82f6' : theme.border}`,
+                              background: isCircle ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                              color: isCircle ? '#60a5fa' : theme.text,
+                              fontSize: 10.5,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <span>⚪ دائري</span>
+                          </button>
+                        </div>
+
+                        {/* Continuous Roundness Slider for fine-tuning */}
+                        {isRounded && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                            <span style={{ fontSize: 9.5, color: theme.textDim, minWidth: 65 }}>
+                              نصف القطر:
+                            </span>
+                            <input
+                              type="range"
+                              min={6}
+                              max={64}
+                              step={2}
+                              value={targetRegion.borderRadius ?? 24}
+                              onChange={(e) => {
+                                onChangeBlur({
+                                  ...targetRegion,
+                                  shape: 'rounded',
+                                  borderRadius: Number(e.target.value),
+                                });
+                              }}
+                              style={{ flex: 1, accentColor: '#3b82f6', height: 4 }}
+                            />
+                            <span style={{ fontSize: 10, color: theme.text, minWidth: 32, textAlign: 'left' }}>
+                              {targetRegion.borderRadius ?? 24}px
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 2. Blur Strength / Intensity */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 10.5, color: theme.textDim, fontWeight: 600 }}>
+                            قوة التمويه (Strength):
+                          </span>
+                          <span style={{ fontSize: 10, color: '#60a5fa', fontWeight: 600 }}>
+                            {currentStrength}px
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <input
+                            type="range"
+                            min={20}
+                            max={130}
+                            step={5}
+                            value={currentStrength}
+                            onChange={(e) => {
+                              onChangeBlur({
+                                ...targetRegion,
+                                strength: Number(e.target.value),
+                              });
+                            }}
+                            style={{ flex: 1, accentColor: '#3b82f6', height: 4 }}
+                          />
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+                          {[
+                            { label: 'خفيف', val: 35 },
+                            { label: 'متوسط', val: 55 },
+                            { label: 'قوي', val: 75 },
+                            { label: 'شديد', val: 110 },
+                          ].map((preset) => {
+                            const active = currentStrength === preset.val;
+                            return (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                onClick={() => {
+                                  onChangeBlur({
+                                    ...targetRegion,
+                                    strength: preset.val,
+                                  });
+                                }}
+                                style={{
+                                  height: 22,
+                                  borderRadius: 4,
+                                  border: `0.5px solid ${active ? '#3b82f6' : theme.border}`,
+                                  background: active ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                                  color: active ? '#60a5fa' : theme.textDim,
+                                  fontSize: 9.5,
+                                  fontWeight: active ? 700 : 500,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {preset.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <div style={{ fontSize: 10, color: theme.textDim, marginTop: 2 }}>
-                  * يمكنك سحب المربع من الشاشة مباشرة وتغيير حجمه من الزوايا.
+                  * يمكنك سحب المربع من الشاشة مباشرة وتغيير حجمه من الزوايا أو تبديل شكله من الشارة أعلاه.
                 </div>
               </div>
             )}
@@ -3148,6 +3373,9 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
       y: 35 + (blurRegions.length * 5) % 25,
       width: 40,
       height: 20,
+      shape: 'square',
+      borderRadius: 0,
+      strength: 70,
     };
     const next = [...blurRegions, newRegion];
     targetMedia.forEach((v) => {
@@ -3169,7 +3397,14 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
           it.id === updated.id.replace(/^blur_/, 'item_blur_')
       );
       if (bItem) {
+        const isCircle = updated.shape === 'circle' || (updated.borderRadius !== undefined && updated.borderRadius >= 100);
+        const resolvedRadius = isCircle
+          ? 9999
+          : updated.shape === 'rounded'
+            ? (updated.borderRadius ?? 24)
+            : (updated.borderRadius ?? 0);
         commands.setItemTransform(bItem.id, {
+          borderRadius: resolvedRadius,
           crop: {
             left: updated.x / 100,
             top: updated.y / 100,
@@ -3379,6 +3614,7 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
             onSelectBlur={setSelectedBlurId}
             onAddBlur={handleAddBlurRegion}
             onRemoveBlur={handleRemoveBlurRegion}
+            onChangeBlur={handleUpdateBlurRegion}
           />
         ) : (
           <SimpleCommentsPane

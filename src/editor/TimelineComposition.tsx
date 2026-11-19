@@ -149,7 +149,8 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
   const hasInlineBlurRegions = state.items.some((it) =>
     !it.track?.startsWith('BLUR')
     && !it.id.startsWith('item_blur_')
-    && (Array.isArray(it.blurRegions) || Array.isArray(it.props?.blurRegions))
+    && ((Array.isArray(it.blurRegions) && it.blurRegions.length > 0)
+      || (Array.isArray(it.props?.blurRegions) && (it.props.blurRegions as any[]).length > 0))
   );
   // hidden track = fully disabled (no picture, no sound)
   const visual = state.items.filter((it) =>
@@ -369,12 +370,24 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
               const regionRight = Math.max(0, Math.min(1, 1 - (region.x + region.width) / 100));
               const regionBottom = Math.max(0, Math.min(1, 1 - (region.y + region.height) / 100));
               const baseCrop = item.transform?.crop;
+
+              const isCircle = region.shape === 'circle' || (region.borderRadius !== undefined && region.borderRadius >= 100);
+              const resolvedRadius = isCircle
+                ? 9999
+                : region.shape === 'rounded'
+                  ? (region.borderRadius ?? 24)
+                  : (region.borderRadius ?? 0);
+
+              // Substantially stronger default blur: 70px (effective & strong enough that 1 blur conceals completely, no need to stack 3!)
+              const blurStrength = Math.max(15, region.strength ?? 70);
+
               const blurredItem: TimelineItem = {
                 ...item,
                 blurRegions: undefined,
                 props: item.props ? { ...item.props, blurRegions: undefined } : undefined,
                 transform: {
                   ...item.transform,
+                  borderRadius: resolvedRadius,
                   crop: {
                     left: Math.max(baseCrop?.left ?? 0, regionLeft),
                     top: Math.max(baseCrop?.top ?? 0, regionTop),
@@ -386,7 +399,7 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
                   brightness: item.filters?.brightness ?? 1,
                   contrast: item.filters?.contrast ?? 1,
                   saturate: item.filters?.saturate ?? 1,
-                  blur: (item.filters?.blur ?? 0) + 28,
+                  blur: (item.filters?.blur ?? 0) + blurStrength,
                 },
               };
               return (

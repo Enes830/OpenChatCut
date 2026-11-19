@@ -143,6 +143,12 @@ export interface BlurRegion {
   width: number;
   /** percent 0..100 */
   height: number;
+  /** 'square' | 'rounded' | 'circle' */
+  shape?: 'square' | 'rounded' | 'circle';
+  /** border radius in px (0 for sharp square, 16..40 for rounded, 9999 for circle/pill) */
+  borderRadius?: number;
+  /** blur strength in px (default 70, range 15..150) */
+  strength?: number;
 }
 
 export interface TimelineItem extends TranscriptCarrier {

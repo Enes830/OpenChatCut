@@ -122,6 +122,7 @@ export function flexCropClipPath(
   crop: FlexCrop | undefined,
   width: number,
   height: number,
+  borderRadius?: number | string,
 ): string | undefined {
   if (!hasFlexCrop(crop) || !(width > 0) || !(height > 0)) return undefined;
   const rect = flexCropRect(crop, width, height);
@@ -130,6 +131,10 @@ export function flexCropClipPath(
   const right = Math.max(0, width - rect.x - rect.width);
   const bottom = Math.max(0, height - rect.y - rect.height);
   if (top + right + bottom + left <= 0) return undefined;
+  if (borderRadius !== undefined && borderRadius !== 0 && borderRadius !== '0' && borderRadius !== '0px') {
+    const r = typeof borderRadius === 'number' ? `${borderRadius}px` : borderRadius;
+    return `inset(${top}px ${right}px ${bottom}px ${left}px round ${r})`;
+  }
   return `inset(${top}px ${right}px ${bottom}px ${left}px)`;
 }
 
