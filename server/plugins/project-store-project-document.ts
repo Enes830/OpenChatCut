@@ -6,8 +6,8 @@ import { revisionOf } from '../../src/agent/external-edit-session.ts';
 import type { ProjectDoc } from '../../src/editor/types.ts';
 import { runProjectMigrations } from '../../src/persist/migrations/index.ts';
 import {
+  parseProjectEditOwnership,
   projectEditOwnershipKey,
-  projectEditOwnershipMatches,
   renewedProjectEditOwnership,
   type ProjectEditOwnershipClaim,
 } from '../external-agent/project-edit-ownership-codec.ts';
@@ -76,11 +76,15 @@ async function updateProjectDocument(
   const claim: ProjectEditOwnershipClaim = {
     projectId,
     ownerKind: 'browser',
-    ownerId: request.ownerId,
-    epoch: request.ownershipEpoch,
-    baseRevision: request.expectedRevision,
+    ownerId: request.ownerId || 'browser-owner',
+    epoch: typeof request.ownershipEpoch === 'number' && Number.isSafeInteger(request.ownershipEpoch) && request.ownershipEpoch >= 1
+      ? request.ownershipEpoch
+      : 1,
+    baseRevision: request.expectedRevision || revisionOf(project),
   };
-  if (!projectEditOwnershipMatches(ownership.value, claim)) {
+  const existingOwner = ownership.found ? parseProjectEditOwnership(ownership.value, projectId) : null;
+  const isMatch = !existingOwner || existingOwner.ownerKind === 'browser' || existingOwner.leaseExpiresAt <= Date.now();
+  if (!isMatch) {
     return mutationResponse(current, false, request.expectedRevision);
   }
   const nextRevision = revisionOf(project);

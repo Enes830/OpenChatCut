@@ -66,13 +66,16 @@ export async function claimBrowserProjectOwnership(
   }
   return withSerializedProjectStore(async (store) => {
     const project = await storedProject(store, projectId);
-    if (!project || project.revision !== expectedRevision) {
-      return { status: 'stale', currentRevision: project?.revision };
+    if (!project) {
+      return { status: 'stale' };
     }
     const entry = await store.readEntry(projectEditOwnershipKey(projectId));
     const compatibility = ownershipCompatibility(entry, projectId);
     if (compatibility === 'blocked') return { status: 'blocked' };
     const current = compatibility === 'current' ? parseProjectEditOwnership(entry.value, projectId)! : null;
+    if (project.revision !== expectedRevision && current && current.ownerKind !== 'browser' && current.leaseExpiresAt > Date.now()) {
+      return { status: 'stale', currentRevision: project.revision };
+    }
     const sameOwner = current?.ownerKind === 'browser'
       && current.ownerId === ownerId
       && current.leaseExpiresAt > Date.now();

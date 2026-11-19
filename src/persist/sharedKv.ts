@@ -290,8 +290,7 @@ async function setProjectDocument(key: string, value: unknown): Promise<void> {
   let ownership = browserProjectOwnership(projectId);
   const local = await localGet<unknown>(key);
   if (!ownership && local !== undefined) {
-    ownership = await waitForBrowserProjectOwnership(projectId);
-    if (!ownership) throw new Error('工程编辑权尚未注册，工程未保存');
+    ownership = await waitForBrowserProjectOwnership(projectId, 1500);
   }
   const request: ProjectDocumentWriteRequest = ownership
     ? {

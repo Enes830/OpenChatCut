@@ -3053,9 +3053,12 @@ export function SimpleEditorWorkspaceView(props: EditorWorkspaceViewProps) {
   }, [commands, state.items, state.selectedId]);
 
   // Ensure track A2 is always created in the document for background music
+  const didCreateA2Ref = useRef(false);
   useEffect(() => {
+    if (didCreateA2Ref.current) return;
     const audioTrackList = timelineTrackIds(state).filter((id) => trackKind(state, id) === 'audio');
     if (audioTrackList.length < 2) {
+      didCreateA2Ref.current = true;
       commands.createTrack('audio', { name: 'A2' });
     }
   }, [state, commands]);

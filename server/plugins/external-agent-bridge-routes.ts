@@ -131,21 +131,13 @@ async function registerBridgeEditor(
 ): Promise<void> {
   const input = registrationInput(await readBridgeJson(req));
   const capability = registrationCapability(req, false);
-  // A matching registration capability marks a legitimate renewal from the
-  // currently connected runtime. A reload or different window with a
-  // missing/mismatched capability is no longer blocked —
-  // that window simply takes over (single-window desktop has no cross-window
-  // exclusivity). Stale-revision protection below still prevents clobbering.
-  const renewing = capability !== null && operations.editorRegistrationMatches(
-    input.projectId,
-    input.editorId,
-    capability,
-  );
+  // A reload or different window with a missing/mismatched capability is no longer blocked —
+  // that window simply takes over (single-window desktop and web sessions have no cross-window exclusivity).
   const claimed = await operations.claimBrowserOwnership(
     input.projectId,
     input.editorId,
     input.baseRevision,
-    renewing,
+    true,
   );
   if (claimed.status === 'stale') {
     sendBridgeJson(res, 409, {
