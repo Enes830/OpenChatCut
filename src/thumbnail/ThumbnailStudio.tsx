@@ -420,6 +420,30 @@ export default function ThumbnailStudio({
             </span>
           )}
 
+          {coverUrl && (
+            <a
+              href={coverUrl}
+              download={`cover_${projectId}.jpg`}
+              style={{
+                height: 32,
+                padding: '0 12px',
+                borderRadius: 7,
+                border: `0.5px solid ${theme.border}`,
+                background: theme.panelAlt,
+                color: theme.text,
+                fontSize: 12,
+                fontWeight: 600,
+                textDecoration: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <Icon name="download" size={13} />
+              <span>تحميل الغلاف</span>
+            </a>
+          )}
+
           <button
             type="button"
             disabled={saving || uploading}
