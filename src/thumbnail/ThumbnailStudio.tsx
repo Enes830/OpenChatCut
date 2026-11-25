@@ -641,6 +641,31 @@ export default function ThumbnailStudio({
                   }}
                 />
               </div>
+
+              <button
+                type="button"
+                disabled={saving || uploading}
+                onClick={() => void runRender({ successText: 'تم تحديث النص' })}
+                style={{
+                  height: 32,
+                  padding: '0 12px',
+                  borderRadius: 7,
+                  border: '1px solid rgba(59, 130, 246, 0.4)',
+                  background: '#2563eb',
+                  color: '#ffffff',
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  cursor: saving || uploading ? 'wait' : 'pointer',
+                  opacity: saving || uploading ? 0.7 : 1,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                }}
+              >
+                <Icon name="check" size={13} />
+                <span>{saving ? 'جاري التحديث...' : 'تحديث'}</span>
+              </button>
             </div>
           )}
         </div>
