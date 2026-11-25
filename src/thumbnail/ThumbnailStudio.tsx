@@ -321,7 +321,7 @@ export default function ThumbnailStudio({
 
   return (
     <div
-      dir="rtl"
+      dir="ltr"
       style={{
         height: '100vh',
         width: '100vw',
@@ -336,6 +336,7 @@ export default function ThumbnailStudio({
     >
       {/* Top Bar matching SimpleTopBar */}
       <header
+        dir="rtl"
         style={{
           gridColumn: '1 / -1',
           gridRow: 1,
@@ -477,11 +478,12 @@ export default function ThumbnailStudio({
 
       {/* Right Control Panel — Simple Editor Style */}
       <aside
+        dir="rtl"
         style={{
           gridColumn: 2,
           gridRow: 2,
           background: theme.panel,
-          borderRight: `0.5px solid ${theme.border}`,
+          borderLeft: `0.5px solid ${theme.border}`,
           overflowY: 'auto',
           padding: 12,
           display: 'flex',
