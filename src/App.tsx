@@ -5,7 +5,7 @@ import {
   useAppRoute,
   useProjects,
 } from './app/appShell';
-import { AppSplash, DashboardRoute, EditorRoute } from './app/AppViews';
+import { AppSplash, DashboardRoute, EditorRoute, ThumbnailRoute } from './app/AppViews';
 import { useInferenceWarmup } from './hooks/useInferenceWarmup';
 import { useUiScaleShortcuts } from './hooks/useUiScaleShortcuts';
 
@@ -18,6 +18,9 @@ export default function App() {
   useUiScaleShortcuts();
   const { projects, refresh } = useProjects();
 
+  if (route.name === 'thumbnail') {
+    return <ThumbnailRoute route={route} projects={projects} />;
+  }
   if (!projects) return <AppSplash text={t('加载中…')} />;
   if (route.name === 'editor') {
     return <EditorRoute route={route} projects={projects} refresh={refresh} />;

@@ -102,6 +102,29 @@ export function TopBar({ projectId, projectName, canUndo, canRedo, exporting, ex
       <TopBarIconButton icon="layoutPanel" label={t('切换面板布局')} onClick={() => invokeAction('toggle-layout', undefined, 'toolbar')} />
       <button
         type="button"
+        onClick={() => { window.location.hash = `#/thumbnail/${projectId}`; }}
+        className="cc-tip cc-tip-r"
+        data-tip="تعديل الغلاف والتمويه"
+        aria-label="تعديل الغلاف والتمويه"
+        style={{
+          height: 26,
+          background: theme.panelAlt,
+          color: theme.text,
+          border: `0.5px solid ${theme.border}`,
+          borderRadius: 5,
+          padding: '0 10px',
+          fontSize: 11.5,
+          fontWeight: 600,
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+        }}
+      >
+        <span>تعديل الغلاف</span>
+      </button>
+      <button
+        type="button"
         onClick={() => { window.location.hash = `#/simple/${projectId}`; }}
         className="cc-tip cc-tip-r"
         data-tip="واجهة المحرر المبسطة"

@@ -21,7 +21,8 @@ import { projectStoreWriteCredential } from '../persist/projectStoreTransport';
 export type EditorViewMode = 'full' | 'simple';
 export type AppRoute =
   | { name: 'dashboard' }
-  | { name: 'editor'; id: string; mode?: EditorViewMode };
+  | { name: 'editor'; id: string; mode?: EditorViewMode }
+  | { name: 'thumbnail'; id: string };
 
 interface LiveAgentStatus {
   readonly caps?: Record<string, boolean>;
@@ -44,6 +45,8 @@ export const emptyProjectDoc = (): ProjectDoc => docFromTimeline(emptyState());
 const seedDoc = async (): Promise<ProjectDoc> => docFromTimeline((await import('../editor/initial')).INITIAL);
 
 export function parseHash(hash = window.location.hash): AppRoute {
+  const thumbMatch = hash.match(/^#\/thumbnail\/(.+)$/);
+  if (thumbMatch) return { name: 'thumbnail', id: thumbMatch[1] };
   const simpleMatch = hash.match(/^#\/simple\/(.+)$/);
   if (simpleMatch) return { name: 'editor', id: simpleMatch[1], mode: 'simple' };
   const match = hash.match(/^#\/editor\/(.+)$/);

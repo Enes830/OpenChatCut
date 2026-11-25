@@ -288,6 +288,35 @@ function SimpleTopBar({
         <button
           type="button"
           onClick={() => {
+            window.location.hash = `#/thumbnail/${projectId}`;
+          }}
+          title="تعديل الغلاف والتمويه"
+          aria-label="تعديل الغلاف والتمويه"
+          style={{
+            height: 28,
+            padding: '0 10px',
+            borderRadius: 6,
+            border: `0.5px solid ${theme.border}`,
+            background: theme.panelAlt,
+            color: theme.text,
+            fontSize: 11.5,
+            fontWeight: 500,
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+          }}
+        >
+          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <polyline points="21 15 16 10 5 21" />
+          </svg>
+          <span>تعديل الغلاف</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
             window.location.hash = `#/editor/${projectId}`;
           }}
           title="الواجهة الاحترافية"
@@ -660,9 +689,10 @@ function SimplePropertiesPane({
   );
   const a2TrackId = audioTracks[1];
 
-  // Music presets (Exclusive list of 14 sound tracks in lightweight 192k MP3 format)
+  // Music presets (Exclusive list of 15 sound tracks in lightweight 192k MP3 format)
   const MUSIC_OPTIONS = useMemo(
     () => [
+      { id: 'mus_short_version', name: 'Short Version (إيقاع سريع)', src: '/audio/short-version.mp3' },
       { id: 'mus_aggressor', name: 'Aggressor (حماسي قوي)', src: '/audio/aggressor.mp3' },
       { id: 'mus_chasing_time', name: 'Chasing Time (إيقاع تشويقي وسريع)', src: '/audio/chasing-time.mp3' },
       { id: 'mus_clouds', name: 'Clouds (هادئ وتأملي)', src: '/audio/clouds.mp3' },

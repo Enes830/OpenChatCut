@@ -11,6 +11,7 @@ import { EditorErrorBoundary, SecureContextRequiredView } from './EditorGuards';
 import { useDashboardActions } from './useDashboardActions';
 
 const Editor = lazy(() => import('../Editor'));
+const ThumbnailStudio = lazy(() => import('../thumbnail/ThumbnailStudio'));
 
 export function AppSplash({ text }: { text: string }) {
   return (
@@ -125,6 +126,25 @@ export function EditorRoute({ route, projects, refresh }: EditorRouteProps) {
       onHome={() => navigateTo('#/')}
       onRename={async (name) => { await renameProject(meta.id, name); refresh(); }}
     />
+  );
+}
+
+export function ThumbnailRoute({
+  route,
+  projects,
+}: {
+  route: Extract<AppRoute, { name: 'thumbnail' }>;
+  projects: ProjectMeta[] | null;
+}) {
+  const meta = projects?.find((project) => project.id === route.id);
+  return (
+    <Suspense fallback={<AppSplash text="جاري تحميل محرر الغلاف..." />}>
+      <ThumbnailStudio
+        projectId={route.id}
+        projectName={meta?.name}
+        onBackToEditor={() => navigateTo(`#/simple/${route.id}`)}
+      />
+    </Suspense>
   );
 }
 
