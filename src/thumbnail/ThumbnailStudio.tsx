@@ -1,169 +1,74 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ChangeEvent,
-  type DragEvent,
+  type CSSProperties,
 } from 'react';
+import { Icon, type IconName } from '../components/icons';
+import { theme, themeAlpha } from '../theme';
 import {
-  fetchThumbnailSchema,
   fetchThumbnailState,
-  fetchVideoFrames,
   generateThumbnail,
-  runAutoBlur,
-  selectVideoFrame,
   uploadThumbnailSource,
 } from './api';
 import { ThumbnailBlurCanvas } from './ThumbnailBlurCanvas';
-import type {
-  BlurBox,
-  PalettePreset,
-  TemplateSchema,
-  ThumbnailSchemaResponse,
-  VideoFrameCandidate,
-} from './types';
+import type { BlurBox } from './types';
 
-type Lang = 'ar' | 'en';
-type ProcessingMode = 'image_system' | 'template_only' | 'direct_replace';
-type CanvasViewMode = 'blur' | 'final';
-
-const STRINGS: Record<Lang, Record<string, string>> = {
-  ar: {
-    studioTitle: 'محرر الغلاف والتمويه',
-    backToEditor: 'العودة لمحرر الفيديو',
-    viewBlur: 'تحرير التمويه والمصدر',
-    viewFinal: 'معاينة الغلاف النهائي',
-    saveAndApply: 'حفظ وتحديث الغلاف',
-    saving: 'جاري التوليد والحفظ...',
-    downloadCover: 'تحميل الغلاف',
-    loading: 'جاري تحميل بيانات الغلاف...',
-    sourceSection: 'مصدر الصورة',
-    uploadNew: 'رفع صورة جديدة',
-    uploading: 'جاري الرفع...',
-    uploadHint: 'اسحب صورة هنا أو اضغط للرفع (JPG / PNG / WebP)',
-    pickFrame: 'اختيار لقطة من الفيديو',
-    loadingFrames: 'جاري استخراج اللقطات...',
-    processingMode: 'وضع المعالجة',
-    modeImageSystem: 'معالجة ذكية + قالب',
-    modeImageSystemDesc: 'قص ذكي للشخصية، إطار أبيض، تلوين الخلفية، ونصوص القالب',
-    modeTemplateOnly: 'القالب بدون قص',
-    modeTemplateOnlyDesc: 'استخدام الصورة كاملة مع التمويه ونصوص القالب',
-    modeDirect: 'صورة جاهزة مباشرة',
-    modeDirectDesc: 'استبدال الغلاف بالصورة المرفوعة مع التمويه فقط بدون نصوص',
-    strokeWidth: 'سمك الإطار الأبيض',
-    templateSection: 'القالب والألوان',
-    templateLabel: 'قالب كشيدة',
-    paletteLabel: 'لوحة الألوان',
-    textSection: 'نصوص الغلاف',
-    blurSection: 'نظام التمويه',
-    autoBlurBtn: 'تشغيل التمويه التلقائي',
-    autoBlurRunning: 'جاري فحص التمويه...',
-    clearBlurBtn: 'مسح الكل',
-    blurStrength: 'شدة التمويه',
-    blurBoxPrefix: 'منطقة تمويه',
-    noBlurBoxes: 'لا توجد مناطق تمويه. اسحب على الصورة لإضافة منطقة جديدة أو استخدم التمويه التلقائي.',
-    canvasEmpty: 'ارفع صورة أو اختر لقطة من الفيديو للبدء',
-    canvasHint: 'اسحب بالماوس على الصورة لإضافة منطقة تمويه — اسحب المنطقة لتحريكها أو الزاوية لتغيير حجمها',
-    savedOk: 'تم تحديث الغلاف وحفظه في المشروع بنجاح',
-    uploadedOk: 'تم رفع الصورة الجديدة بنجاح',
-    frameSelectedOk: 'تم اختيار اللقطة من الفيديو',
-    autoBlurNone: 'لم يتم العثور على شعارات أو نصوص تحتاج إلى تمويه',
-    autoBlurFound: 'تم اكتشاف مناطق التمويه بنجاح',
-    remove: 'حذف',
-    layerKicker: 'العنوان العلوي',
-    layerHeadline: 'العنوان الرئيسي',
-  },
-  en: {
-    studioTitle: 'Thumbnail & Blur Studio',
-    backToEditor: 'Back to Video Editor',
-    viewBlur: 'Edit Blur & Source',
-    viewFinal: 'Final Cover Preview',
-    saveAndApply: 'Save & Update Cover',
-    saving: 'Rendering & Saving...',
-    downloadCover: 'Download Cover',
-    loading: 'Loading thumbnail workspace...',
-    sourceSection: 'Image Source',
-    uploadNew: 'Upload New Image',
-    uploading: 'Uploading...',
-    uploadHint: 'Drop an image here or click to upload (JPG / PNG / WebP)',
-    pickFrame: 'Pick Frame from Video',
-    loadingFrames: 'Extracting frames...',
-    processingMode: 'Processing Mode',
-    modeImageSystem: 'Image System + Template',
-    modeImageSystemDesc: 'Subject framing, MediaPipe cutout, white stroke, duotone, and typography',
-    modeTemplateOnly: 'Template Only',
-    modeTemplateOnlyDesc: 'Keep full photo with blur boxes and template typography',
-    modeDirect: 'Direct Replace',
-    modeDirectDesc: 'Use uploaded image directly with blur boxes only, no template overlay',
-    strokeWidth: 'White Stroke Width',
-    templateSection: 'Template & Palette',
-    templateLabel: 'Kashida Template',
-    paletteLabel: 'Brand Palette',
-    textSection: 'Cover Text',
-    blurSection: 'Blur System',
-    autoBlurBtn: 'Run Auto-Blur',
-    autoBlurRunning: 'Detecting watermarks...',
-    clearBlurBtn: 'Clear All',
-    blurStrength: 'Blur Strength',
-    blurBoxPrefix: 'Blur Region',
-    noBlurBoxes: 'No blur regions yet. Drag on the image to draw one, or run Auto-Blur.',
-    canvasEmpty: 'Upload an image or pick a video frame to begin',
-    canvasHint: 'Click and drag on the image to draw a blur box — drag to move or use the corner handle to resize',
-    savedOk: 'Cover rendered and saved to project',
-    uploadedOk: 'New source image uploaded',
-    frameSelectedOk: 'Video frame selected',
-    autoBlurNone: 'No watermarks or handles detected',
-    autoBlurFound: 'Auto-blur regions detected',
-    remove: 'Remove',
-    layerKicker: 'Kicker / Top Line',
-    layerHeadline: 'Main Headline',
-  },
-};
-
-const PALETTE_LABELS_AR: Record<string, string> = {
-  blue_navy: 'أزرق كحلي',
-  crimson_grey: 'أحمر رمادي',
-  teal_sage: 'تركواز',
-  green_navy: 'أخضر داكن',
-  purple_grey: 'بنفسجي',
-  olive_pearl: 'زيتي فاتح',
-};
-
-function SvgIcon({ name, size = 15 }: { name: 'back' | 'upload' | 'film' | 'blur' | 'spark' | 'download' | 'trash' | 'check' | 'eye'; size?: number }) {
-  const common = {
-    width: size,
-    height: size,
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.9,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    style: { flexShrink: 0 },
-  };
-  switch (name) {
-    case 'back':
-      return <svg {...common}><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>;
-    case 'upload':
-      return <svg {...common}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>;
-    case 'film':
-      return <svg {...common}><rect x="2" y="4" width="20" height="16" rx="2" /><line x1="7" y1="4" x2="7" y2="20" /><line x1="17" y1="4" x2="17" y2="20" /><line x1="2" y1="12" x2="22" y2="12" /></svg>;
-    case 'blur':
-      return <svg {...common}><rect x="3" y="3" width="18" height="18" rx="3" strokeDasharray="3 3" /><circle cx="12" cy="12" r="3" /></svg>;
-    case 'spark':
-      return <svg {...common}><path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z" /></svg>;
-    case 'download':
-      return <svg {...common}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>;
-    case 'trash':
-      return <svg {...common}><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>;
-    case 'check':
-      return <svg {...common}><polyline points="20 6 9 17 4 12" /></svg>;
-    case 'eye':
-      return <svg {...common}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>;
-  }
+interface ColorTemplateOption {
+  key: 'blue_navy' | 'crimson_grey' | 'teal_sage' | 'green_navy';
+  templateId: string;
+  label: string;
+  kickerColor: string;
+  headlineColor: string;
 }
+
+const KASHIDA_COLOR_TEMPLATES: ColorTemplateOption[] = [
+  {
+    key: 'blue_navy',
+    templateId: '0dc042ab-1bcf-4b4f-8b44-1103202cebd2',
+    label: 'أزرق',
+    kickerColor: '#2881E2',
+    headlineColor: '#15181D',
+  },
+  {
+    key: 'crimson_grey',
+    templateId: '105299dd-d358-4f79-a1ed-e6dabf43f4c0',
+    label: 'أحمر',
+    kickerColor: '#A02426',
+    headlineColor: '#B7B9BB',
+  },
+  {
+    key: 'teal_sage',
+    templateId: '1b899df3-f83d-49b2-b93e-185767125598',
+    label: 'تركواز',
+    kickerColor: '#057F76',
+    headlineColor: '#DFE4D2',
+  },
+  {
+    key: 'green_navy',
+    templateId: 'cac8f105-a51e-491a-8bf3-6da423f7932a',
+    label: 'أخضر',
+    kickerColor: '#15803D',
+    headlineColor: '#15181D',
+  },
+];
+
+const FONT_SIZE_PRESETS = [
+  { label: 'صغير', val: 84 },
+  { label: 'متوسط', val: 106 },
+  { label: 'كبير', val: 126 },
+];
+
+const BLUR_STRENGTH_PRESETS = [
+  { label: 'خفيف', val: 35 },
+  { label: 'متوسط', val: 55 },
+  { label: 'قوي', val: 75 },
+  { label: 'شديد', val: 110 },
+];
+
+type SectionKey = 'photo' | 'text' | 'fontSize' | 'color' | 'blur';
 
 export interface ThumbnailStudioProps {
   projectId: string;
@@ -176,33 +81,29 @@ export default function ThumbnailStudio({
   projectName,
   onBackToEditor,
 }: ThumbnailStudioProps) {
-  const [lang, setLang] = useState<Lang>('ar');
-  const s = STRINGS[lang];
-  const isRtl = lang === 'ar';
-
   const [loading, setLoading] = useState(true);
-  const [schema, setSchema] = useState<ThumbnailSchemaResponse | null>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [sourceImagePath, setSourceImagePath] = useState<string | null>(null);
-  const [sourceImageUrl, setSourceImageUrl] = useState<string | null>(null);
   const [videoPath, setVideoPath] = useState<string | null>(null);
 
-  const [templateKey, setTemplateKey] = useState('rassd_new_brand_thumbnail_template');
-  const [palette, setPalette] = useState('blue_navy');
-  const [dynamicValues, setDynamicValues] = useState<Record<string, string>>({});
+  const [palette, setPalette] = useState<string>('blue_navy');
+  const [kickerText, setKickerText] = useState<string>('');
+  const [headlineText, setHeadlineText] = useState<string>('');
+  const [fontSize, setFontSize] = useState<number>(106);
   const [blurBoxes, setBlurBoxes] = useState<BlurBox[]>([]);
-  const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
-  const [mode, setMode] = useState<ProcessingMode>('image_system');
-  const [strokeWidth, setStrokeWidth] = useState(28);
-  const [viewMode, setViewMode] = useState<CanvasViewMode>('blur');
+  const [selectedBlurId, setSelectedBlurId] = useState<string | null>(null);
 
-  const [frames, setFrames] = useState<VideoFrameCandidate[]>([]);
-  const [loadingFrames, setLoadingFrames] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [autoBlurring, setAutoBlurring] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
-  const [dragOver, setDragOver] = useState(false);
+
+  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({
+    photo: true,
+    color: true,
+    text: true,
+    fontSize: true,
+    blur: true,
+  });
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -210,29 +111,27 @@ export default function ThumbnailStudio({
     let alive = true;
     setLoading(true);
     setNotice(null);
-    Promise.all([fetchThumbnailSchema(), fetchThumbnailState(projectId)])
-      .then(([schemaRes, stateRes]) => {
+    fetchThumbnailState(projectId)
+      .then((stateRes) => {
         if (!alive) return;
-        setSchema(schemaRes);
-        setCoverUrl(stateRes.cover_url);
+        setCoverUrl(stateRes.cover_url || stateRes.source_image_url);
         setSourceImagePath(stateRes.source_image_path);
-        setSourceImageUrl(stateRes.source_image_url);
         setVideoPath(stateRes.video_path);
-        setTemplateKey(stateRes.template_key || schemaRes.default_template);
-        setPalette(stateRes.palette || 'blue_navy');
-        setDynamicValues(stateRes.dynamic_values || {});
+        const matchedPalette = KASHIDA_COLOR_TEMPLATES.find((p) => p.key === stateRes.palette);
+        setPalette(matchedPalette ? matchedPalette.key : 'blue_navy');
+        setKickerText(stateRes.dynamic_values?.kicker_tag || '');
+        setHeadlineText(stateRes.dynamic_values?.headline || '');
+        setFontSize(stateRes.font_size ?? 106);
         setBlurBoxes(
           (stateRes.blur_boxes || []).map((b, idx) => ({
             ...b,
-            id: b.id || `box_${idx}_${Date.now()}`,
-            sigma: b.sigma || 12,
+            id: b.id || `blur_${idx}_${Date.now()}`,
+            sigma: b.sigma || 24,
+            strength: b.strength ?? Math.max(20, Math.min(130, Math.round((b.sigma || 24) / 0.35))),
+            shape: b.shape || 'square',
+            borderRadius: b.borderRadius ?? 0,
           })),
         );
-        if (stateRes.direct_replace) setMode('direct_replace');
-        else if (!stateRes.use_image_system) setMode('template_only');
-        else setMode('image_system');
-        setStrokeWidth(stateRes.stroke_width ?? 28);
-        setViewMode(stateRes.source_image_url ? 'blur' : 'final');
       })
       .catch((err) => {
         if (!alive) return;
@@ -246,94 +145,76 @@ export default function ThumbnailStudio({
     };
   }, [projectId]);
 
-  const activeTemplate: TemplateSchema | undefined = useMemo(() => {
-    if (!schema?.templates?.length) return undefined;
-    return schema.templates.find((t) => t.key === templateKey) || schema.templates[0];
-  }, [schema, templateKey]);
+  const runRender = useCallback(
+    async (overrides?: {
+      imagePath?: string | null;
+      paletteKey?: string;
+      kicker?: string;
+      headline?: string;
+      nextFontSize?: number;
+      nextBlurBoxes?: BlurBox[];
+      successText?: string;
+    }) => {
+      const nextPalette = overrides?.paletteKey ?? palette;
+      const tpl = KASHIDA_COLOR_TEMPLATES.find((t) => t.key === nextPalette) || KASHIDA_COLOR_TEMPLATES[0];
+      const nextKicker = overrides?.kicker ?? kickerText;
+      const nextHeadline = overrides?.headline ?? headlineText;
+      const nextFont = overrides?.nextFontSize ?? fontSize;
+      const nextBoxes = overrides?.nextBlurBoxes ?? blurBoxes;
+      const nextImagePath = overrides?.imagePath !== undefined ? overrides.imagePath : sourceImagePath;
 
-  const textLayers = useMemo(() => {
-    const layers = activeTemplate?.dynamic_layers?.filter((l) => l.type === 'text') || [];
-    if (layers.length > 0) return layers;
-    return [
-      { id: 'kicker_tag_layer', type: 'text', object_key: 'kicker_tag', default_content: '' },
-      { id: 'headline_layer', type: 'text', object_key: 'headline', default_content: '' },
-    ];
-  }, [activeTemplate]);
-
-  const aspectRatio = useMemo(() => {
-    if (!activeTemplate) return 9 / 16;
-    return activeTemplate.canvas_width / Math.max(1, activeTemplate.canvas_height);
-  }, [activeTemplate]);
-
-  const selectedBox = useMemo(
-    () => blurBoxes.find((b) => b.id === selectedBoxId) || null,
-    [blurBoxes, selectedBoxId],
-  );
-
-  const labelForTextLayer = (key: string): string => {
-    if (key === 'kicker_tag') return s.layerKicker;
-    if (key === 'headline') return s.layerHeadline;
-    return key.replace(/_/g, ' ');
-  };
-
-  const handleUploadFile = useCallback(
-    async (file: File) => {
-      setUploading(true);
+      setSaving(true);
       setNotice(null);
       try {
-        const res = await uploadThumbnailSource(projectId, file);
-        setSourceImagePath(res.image_path);
-        setSourceImageUrl(res.image_url);
-        setViewMode('blur');
-        setNotice({ kind: 'ok', text: s.uploadedOk });
+        const res = await generateThumbnail({
+          project_id: projectId,
+          image_path: nextImagePath,
+          video_path: videoPath,
+          template_key: 'rassd_new_brand_thumbnail_template',
+          template_id: tpl.templateId,
+          cover_color: tpl.key,
+          dynamic_values: {
+            kicker_tag: nextKicker,
+            headline: nextHeadline,
+          },
+          kicker_text: nextKicker,
+          headline_text: nextHeadline,
+          font_size: nextFont,
+          blur_boxes: nextBoxes,
+          use_image_system: true,
+          direct_replace: false,
+          stroke_width: 28,
+          auto_blur: false,
+          save_state: true,
+        });
+        if (res.cover_url) {
+          setCoverUrl(`${res.cover_url}${res.cover_url.includes('?') ? '&' : '?'}t=${Date.now()}`);
+        }
+        if (overrides?.successText) {
+          setNotice({ kind: 'ok', text: overrides.successText });
+        }
       } catch (err) {
         setNotice({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
       } finally {
-        setUploading(false);
+        setSaving(false);
       }
     },
-    [projectId, s.uploadedOk],
+    [projectId, sourceImagePath, videoPath, palette, kickerText, headlineText, fontSize, blurBoxes],
   );
 
-  const onFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) void handleUploadFile(file);
     e.target.value = '';
-  };
-
-  const onDropFile = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      void handleUploadFile(file);
-    }
-  };
-
-  const handleLoadFrames = async () => {
-    if (!videoPath) return;
-    setLoadingFrames(true);
-    setNotice(null);
-    try {
-      const res = await fetchVideoFrames(videoPath, 6);
-      setFrames(res.frames || []);
-    } catch (err) {
-      setNotice({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setLoadingFrames(false);
-    }
-  };
-
-  const handlePickFrame = async (timestampSec: number) => {
-    if (!videoPath) return;
+    if (!file) return;
     setUploading(true);
     setNotice(null);
     try {
-      const res = await selectVideoFrame(projectId, videoPath, timestampSec);
-      setSourceImagePath(res.image_path);
-      setSourceImageUrl(res.image_url);
-      setViewMode('blur');
-      setNotice({ kind: 'ok', text: s.frameSelectedOk });
+      const uploaded = await uploadThumbnailSource(projectId, file);
+      setSourceImagePath(uploaded.image_path);
+      await runRender({
+        imagePath: uploaded.image_path,
+        successText: 'تم رفع الصورة وتحديث الغلاف',
+      });
     } catch (err) {
       setNotice({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -341,760 +222,760 @@ export default function ThumbnailStudio({
     }
   };
 
-  const handleAutoBlur = async () => {
-    setAutoBlurring(true);
-    setNotice(null);
-    try {
-      const res = await runAutoBlur({
-        project_id: projectId,
-        image_path: sourceImagePath,
-        video_path: videoPath,
-      });
-      const detected = (res.boxes || []).map((b, idx) => ({
-        ...b,
-        id: b.id || `auto_${idx}_${Date.now()}`,
-        sigma: b.sigma || 12,
-      }));
-      if (detected.length === 0) {
-        setNotice({ kind: 'ok', text: s.autoBlurNone });
-      } else {
-        setBlurBoxes((prev) => [...prev, ...detected]);
-        setSelectedBoxId(detected[0].id);
-        setViewMode('blur');
-        setNotice({ kind: 'ok', text: `${s.autoBlurFound} (${detected.length})` });
-      }
-    } catch (err) {
-      setNotice({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setAutoBlurring(false);
-    }
+  const handleSelectColor = (tpl: ColorTemplateOption) => {
+    setPalette(tpl.key);
+    void runRender({
+      paletteKey: tpl.key,
+      successText: `تم تطبيق لون القالب: ${tpl.label}`,
+    });
   };
 
-  const handleSaveAndRender = async () => {
-    setSaving(true);
-    setNotice(null);
-    try {
-      const res = await generateThumbnail({
-        project_id: projectId,
-        image_path: sourceImagePath,
-        video_path: videoPath,
-        template_key: templateKey,
-        cover_color: palette,
-        dynamic_values: dynamicValues,
-        kicker_text: dynamicValues.kicker_tag,
-        headline_text: dynamicValues.headline,
-        blur_boxes: blurBoxes,
-        use_image_system: mode === 'image_system',
-        direct_replace: mode === 'direct_replace',
-        stroke_width: strokeWidth,
-        auto_blur: false,
-        save_state: true,
-      });
-      if (res.cover_url) setCoverUrl(res.cover_url);
-      if (res.state?.source_image_path) setSourceImagePath(res.state.source_image_path);
-      if (res.state?.source_image_url) setSourceImageUrl(res.state.source_image_url);
-      setViewMode('final');
-      setNotice({ kind: 'ok', text: s.savedOk });
-    } catch (err) {
-      setNotice({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setSaving(false);
-    }
+  const handleAddBlur = () => {
+    const newId = `blur_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const offset = (blurBoxes.length % 4) * 3;
+    const newBox: BlurBox = {
+      id: newId,
+      x: 34 + offset,
+      y: 38 + offset,
+      width: 30,
+      height: 14,
+      sigma: 24,
+      strength: 70,
+      shape: 'square',
+      borderRadius: 0,
+    };
+    setBlurBoxes((prev) => [...prev, newBox]);
+    setSelectedBlurId(newId);
   };
 
-  const updateSelectedSigma = (sigma: number) => {
-    if (!selectedBoxId) return;
-    setBlurBoxes((prev) => prev.map((b) => (b.id === selectedBoxId ? { ...b, sigma } : b)));
+  const handleRemoveBlur = (id: string) => {
+    setBlurBoxes((prev) => prev.filter((b) => b.id !== id));
+    if (selectedBlurId === id) setSelectedBlurId(null);
   };
 
-  const paletteList: PalettePreset[] = useMemo(() => {
-    if (!schema?.palettes) return [];
-    return Object.values(schema.palettes);
-  }, [schema]);
+  const handleUpdateBlur = (updated: BlurBox) => {
+    const nextStrength = updated.strength ?? 70;
+    const normalized: BlurBox = {
+      ...updated,
+      strength: nextStrength,
+      sigma: Math.max(4, Math.round(nextStrength * 0.35)),
+    };
+    setBlurBoxes((prev) => prev.map((b) => (b.id === normalized.id ? normalized : b)));
+  };
 
-  const activeCanvasImage = viewMode === 'final' ? (coverUrl || sourceImageUrl) : (sourceImageUrl || coverUrl);
+  const toggleSection = (key: SectionKey) => {
+    setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
-  if (loading) {
+  const cardContainerStyle = (isOpen: boolean): CSSProperties => ({
+    borderRadius: 9,
+    border: `0.5px solid ${theme.border}`,
+    background: theme.panelAlt,
+    overflow: 'hidden',
+    flexShrink: 0,
+    transition: 'border-color 0.15s ease',
+    ...(isOpen ? {} : {}),
+  });
+
+  const renderCardHeader = (key: SectionKey, iconName: IconName, title: string) => {
+    const isOpen = openSections[key];
     return (
-      <div
-        dir={isRtl ? 'rtl' : 'ltr'}
+      <button
+        type="button"
+        onClick={() => toggleSection(key)}
         style={{
-          height: '100vh',
-          background: '#0b0d11',
-          color: '#cbd5e1',
-          display: 'grid',
-          placeItems: 'center',
-          fontFamily: "'IBM Plex Sans Arabic', 'Segoe UI', system-ui, sans-serif",
-          fontSize: 14,
-        }}
-      >
-        {s.loading}
-      </div>
-    );
-  }
-
-  return (
-    <div
-      dir={isRtl ? 'rtl' : 'ltr'}
-      style={{
-        height: '100vh',
-        display: 'grid',
-        gridTemplateRows: '56px 1fr',
-        background: '#0b0d11',
-        color: '#f1f5f9',
-        fontFamily: "'IBM Plex Sans Arabic', 'Segoe UI', system-ui, sans-serif",
-        overflow: 'hidden',
-      }}
-    >
-      {/* Top Header */}
-      <header
-        style={{
+          width: '100%',
+          height: 38,
+          padding: '0 12px',
+          border: 'none',
+          borderBottom: isOpen ? `0.5px solid ${theme.border}` : 'none',
+          background: 'transparent',
+          color: theme.text,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '0 20px',
-          background: '#11141b',
-          borderBottom: '1px solid rgba(255,255,255,0.08)',
-          gap: 12,
+          cursor: 'pointer',
+          fontSize: 12,
+          fontWeight: 700,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          <Icon name={iconName} size={14} color={theme.accent} />
+          <span>{title}</span>
+        </span>
+        <span
+          style={{
+            display: 'inline-flex',
+            transform: isOpen ? 'rotate(0deg)' : 'rotate(90deg)',
+            transition: 'transform 0.15s ease',
+          }}
+        >
+          <Icon name="chevronDown" size={13} color={theme.textDim} />
+        </span>
+      </button>
+    );
+  };
+
+  const targetBlur =
+    blurBoxes.find((r) => r.id === selectedBlurId) ?? (blurBoxes.length === 1 ? blurBoxes[0] : null);
+
+  return (
+    <div
+      dir="rtl"
+      style={{
+        height: '100vh',
+        width: '100vw',
+        display: 'grid',
+        gridTemplateRows: '48px 1fr',
+        gridTemplateColumns: '1fr 340px',
+        background: theme.bg,
+        color: theme.text,
+        overflow: 'hidden',
+        fontFamily: 'inherit',
+      }}
+    >
+      {/* Top Bar matching SimpleTopBar */}
+      <header
+        style={{
+          gridColumn: '1 / -1',
+          gridRow: 1,
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 14px',
+          borderBottom: `0.5px solid ${theme.border}`,
+          background: theme.panel,
+          gap: 10,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           <button
             type="button"
             onClick={onBackToEditor}
             style={{
-              height: 34,
-              padding: '0 12px',
-              borderRadius: 8,
-              border: '1px solid rgba(255,255,255,0.12)',
-              background: '#181c26',
-              color: '#e2e8f0',
-              fontSize: 12.5,
-              fontWeight: 500,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <SvgIcon name="back" size={14} />
-            <span>{s.backToEditor}</span>
-          </button>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: '#f8fafc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {s.studioTitle}
-            </div>
-            <div style={{ fontSize: 11.5, color: '#8b95a7', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {projectName || projectId}
-            </div>
-          </div>
-        </div>
-
-        {/* Center View Mode Switcher */}
-        <div
-          style={{
-            display: 'inline-flex',
-            background: '#0b0d11',
-            padding: 3,
-            borderRadius: 9,
-            border: '1px solid rgba(255,255,255,0.09)',
-            gap: 2,
-          }}
-        >
-          <button
-            type="button"
-            onClick={() => setViewMode('blur')}
-            style={{
               height: 30,
-              padding: '0 14px',
-              borderRadius: 7,
-              border: 'none',
-              background: viewMode === 'blur' ? '#2881E2' : 'transparent',
-              color: viewMode === 'blur' ? '#ffffff' : '#94a3b8',
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <SvgIcon name="blur" size={14} />
-            <span>{s.viewBlur}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('final')}
-            style={{
-              height: 30,
-              padding: '0 14px',
-              borderRadius: 7,
-              border: 'none',
-              background: viewMode === 'final' ? '#2881E2' : 'transparent',
-              color: viewMode === 'final' ? '#ffffff' : '#94a3b8',
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <SvgIcon name="eye" size={14} />
-            <span>{s.viewFinal}</span>
-          </button>
-        </div>
-
-        {/* Right Actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button
-            type="button"
-            onClick={() => setLang((prev) => (prev === 'ar' ? 'en' : 'ar'))}
-            style={{
-              height: 34,
               padding: '0 10px',
-              borderRadius: 8,
-              border: '1px solid rgba(255,255,255,0.12)',
-              background: 'transparent',
-              color: '#cbd5e1',
-              fontSize: 12,
+              borderRadius: 6,
+              border: `0.5px solid ${theme.border}`,
+              background: theme.panelAlt,
+              color: theme.text,
+              fontSize: 11.5,
               fontWeight: 600,
               cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
             }}
           >
-            {lang === 'ar' ? 'EN' : 'عربي'}
+            <Icon name="home" size={13} />
+            <span>العودة للمحرر</span>
           </button>
 
-          {coverUrl && (
-            <a
-              href={coverUrl}
-              download={`cover_${projectId}.jpg`}
+          <span style={{ width: 1, height: 18, background: theme.border }} />
+
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '2px 8px',
+              borderRadius: 999,
+              background: themeAlpha.accent(0.14),
+              color: theme.accent,
+            }}
+          >
+            محرر الغلاف
+          </span>
+
+          {projectName && (
+            <span
               style={{
-                height: 34,
-                padding: '0 12px',
-                borderRadius: 8,
-                border: '1px solid rgba(255,255,255,0.12)',
-                background: '#181c26',
-                color: '#e2e8f0',
-                fontSize: 12.5,
-                fontWeight: 500,
-                textDecoration: 'none',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
+                fontSize: 12,
+                color: theme.textDim,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
-              <SvgIcon name="download" size={14} />
-              <span>{s.downloadCover}</span>
-            </a>
+              {projectName}
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {notice && (
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '4px 10px',
+                borderRadius: 6,
+                background: notice.kind === 'error' ? 'rgba(239, 68, 68, 0.14)' : 'rgba(34, 197, 94, 0.14)',
+                color: notice.kind === 'error' ? '#f87171' : '#4ade80',
+                border: `0.5px solid ${notice.kind === 'error' ? 'rgba(239, 68, 68, 0.35)' : 'rgba(34, 197, 94, 0.35)'}`,
+              }}
+            >
+              {notice.text}
+            </span>
           )}
 
           <button
             type="button"
-            onClick={() => void handleSaveAndRender()}
-            disabled={saving || (!sourceImagePath && !videoPath)}
+            disabled={saving || uploading}
+            onClick={() => void runRender({ successText: 'تم حفظ وتحديث الغلاف بنجاح' })}
             style={{
-              height: 34,
-              padding: '0 16px',
-              borderRadius: 8,
-              border: 'none',
-              background: saving ? '#1e4d82' : '#2881E2',
+              height: 32,
+              padding: '0 14px',
+              borderRadius: 7,
+              border: '1px solid rgba(59, 130, 246, 0.45)',
+              background: '#2563eb',
               color: '#ffffff',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: saving ? 'wait' : 'pointer',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: saving || uploading ? 'wait' : 'pointer',
+              opacity: saving || uploading ? 0.7 : 1,
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              opacity: !sourceImagePath && !videoPath ? 0.5 : 1,
             }}
           >
-            <SvgIcon name="check" size={14} />
-            <span>{saving ? s.saving : s.saveAndApply}</span>
+            <Icon name="check" size={13} />
+            <span>{saving ? 'جاري التحديث...' : 'حفظ التعديلات'}</span>
           </button>
         </div>
       </header>
 
-      {/* Main Split Workspace */}
-      <div
+      {/* Center Preview Canvas */}
+      <main
         style={{
-          display: 'grid',
-          gridTemplateColumns: '380px 1fr',
-          minHeight: 0,
+          gridColumn: 1,
+          gridRow: 2,
+          background: theme.bg,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           overflow: 'hidden',
+          position: 'relative',
         }}
       >
-        {/* Control Sidebar */}
-        <aside
-          style={{
-            background: '#11141b',
-            borderInlineEnd: '1px solid rgba(255,255,255,0.08)',
-            overflowY: 'auto',
-            padding: 18,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 18,
-          }}
-        >
-          {notice && (
-            <div
-              style={{
-                padding: '10px 12px',
-                borderRadius: 8,
-                fontSize: 12.5,
-                lineHeight: 1.5,
-                background: notice.kind === 'error' ? 'rgba(220, 38, 38, 0.14)' : 'rgba(22, 163, 74, 0.14)',
-                border: `1px solid ${notice.kind === 'error' ? 'rgba(220, 38, 38, 0.4)' : 'rgba(34, 197, 94, 0.35)'}`,
-                color: notice.kind === 'error' ? '#fca5a5' : '#86efac',
-              }}
-            >
-              {notice.text}
-            </div>
-          )}
+        {loading ? (
+          <div style={{ color: theme.textDim, fontSize: 13 }}>جاري تحميل الغلاف...</div>
+        ) : (
+          <ThumbnailBlurCanvas
+            imageUrl={coverUrl}
+            aspectRatio={9 / 16}
+            blurBoxes={blurBoxes}
+            selectedBoxId={selectedBlurId}
+            editable={true}
+            busy={saving || uploading}
+            emptyLabel="ارفع صورة للبدء"
+            onSelectBox={setSelectedBlurId}
+            onChangeBoxes={setBlurBoxes}
+          />
+        )}
+      </main>
 
-          {/* Section 1: Image Source & Processing Mode */}
-          <section style={sectionStyle}>
-            <div style={sectionTitleStyle}>{s.sourceSection}</div>
-
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragOver(true);
-              }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={onDropFile}
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                border: `1.5px dashed ${dragOver ? '#2881E2' : 'rgba(255,255,255,0.16)'}`,
-                background: dragOver ? 'rgba(40,129,226,0.1)' : '#161a23',
-                borderRadius: 10,
-                padding: '14px 12px',
-                textAlign: 'center',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              <SvgIcon name="upload" size={18} />
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#f1f5f9' }}>
-                {uploading ? s.uploading : s.uploadNew}
-              </div>
-              <div style={{ fontSize: 11.5, color: '#8b95a7' }}>{s.uploadHint}</div>
+      {/* Right Control Panel — Simple Editor Style */}
+      <aside
+        style={{
+          gridColumn: 2,
+          gridRow: 2,
+          background: theme.panel,
+          borderRight: `0.5px solid ${theme.border}`,
+          overflowY: 'auto',
+          padding: 12,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}
+      >
+        {/* 1. Upload Photo */}
+        <div style={cardContainerStyle(openSections.photo)}>
+          {renderCardHeader('photo', 'image', 'صورة الغلاف')}
+          {openSections.photo && (
+            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
-                onChange={onFileInputChange}
+                accept="image/jpeg,image/png,image/webp"
+                onChange={handleFileChange}
                 style={{ display: 'none' }}
               />
+              <button
+                type="button"
+                disabled={uploading || saving}
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  height: 34,
+                  padding: '0 12px',
+                  borderRadius: 7,
+                  border: `0.5px solid ${theme.border}`,
+                  background: theme.bg,
+                  color: theme.text,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: uploading || saving ? 'wait' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 7,
+                }}
+              >
+                <Icon name="upload" size={14} color={theme.accent} />
+                <span>{uploading ? 'جاري الرفع...' : 'رفع صورة جديدة'}</span>
+              </button>
             </div>
+          )}
+        </div>
 
-            {videoPath && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => void handleLoadFrames()}
-                  disabled={loadingFrames}
-                  style={secondaryBtnStyle}
-                >
-                  <SvgIcon name="film" size={14} />
-                  <span>{loadingFrames ? s.loadingFrames : s.pickFrame}</span>
-                </button>
-
-                {frames.length > 0 && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-                    {frames.map((fr) => (
-                      <button
-                        key={fr.frame_index}
-                        type="button"
-                        onClick={() => void handlePickFrame(fr.timestamp_sec)}
-                        style={{
-                          position: 'relative',
-                          padding: 0,
-                          border: '1px solid rgba(255,255,255,0.14)',
-                          borderRadius: 6,
-                          overflow: 'hidden',
-                          background: '#0b0d11',
-                          cursor: 'pointer',
-                          aspectRatio: '9 / 12',
-                        }}
-                      >
-                        <img
-                          src={`data:image/jpeg;base64,${fr.preview_base64}`}
-                          alt=""
-                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                        />
-                        <span
-                          style={{
-                            position: 'absolute',
-                            bottom: 3,
-                            right: 3,
-                            background: 'rgba(0,0,0,0.75)',
-                            color: '#ffffff',
-                            fontSize: 10,
-                            padding: '1px 4px',
-                            borderRadius: 3,
-                          }}
-                        >
-                          {fr.timestamp_sec}s
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Processing Mode */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-              <div style={fieldLabelStyle}>{s.processingMode}</div>
-              {(
-                [
-                  { id: 'image_system', title: s.modeImageSystem, desc: s.modeImageSystemDesc },
-                  { id: 'template_only', title: s.modeTemplateOnly, desc: s.modeTemplateOnlyDesc },
-                  { id: 'direct_replace', title: s.modeDirect, desc: s.modeDirectDesc },
-                ] as const
-              ).map((opt) => {
-                const active = mode === opt.id;
+        {/* 2. Change Color (4 Kashida Templates) */}
+        <div style={cardContainerStyle(openSections.color)}>
+          {renderCardHeader('color', 'palette', 'لون القالب')}
+          {openSections.color && (
+            <div style={{ padding: '12px 14px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {KASHIDA_COLOR_TEMPLATES.map((tpl) => {
+                const active = palette === tpl.key;
                 return (
                   <button
-                    key={opt.id}
+                    key={tpl.key}
                     type="button"
-                    onClick={() => setMode(opt.id)}
+                    disabled={saving || uploading}
+                    onClick={() => handleSelectColor(tpl)}
                     style={{
-                      textAlign: isRtl ? 'right' : 'left',
-                      padding: '9px 11px',
-                      borderRadius: 8,
-                      border: active ? '1.5px solid #2881E2' : '1px solid rgba(255,255,255,0.1)',
-                      background: active ? 'rgba(40, 129, 226, 0.14)' : '#161a23',
-                      color: '#f1f5f9',
-                      cursor: 'pointer',
+                      height: 36,
+                      padding: '0 10px',
+                      borderRadius: 7,
+                      border: `1px solid ${active ? '#3b82f6' : theme.border}`,
+                      background: active ? 'rgba(59, 130, 246, 0.16)' : theme.bg,
+                      color: active ? '#60a5fa' : theme.text,
+                      fontSize: 12,
+                      fontWeight: active ? 700 : 500,
+                      cursor: saving || uploading ? 'wait' : 'pointer',
                       display: 'flex',
-                      flexDirection: 'column',
-                      gap: 2,
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
                     }}
                   >
-                    <span style={{ fontSize: 12.5, fontWeight: 600 }}>{opt.title}</span>
-                    <span style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>{opt.desc}</span>
+                    <span>{tpl.label}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                      <span
+                        style={{
+                          width: 12,
+                          height: 12,
+                          borderRadius: 3,
+                          background: tpl.kickerColor,
+                          border: '1px solid rgba(255,255,255,0.2)',
+                        }}
+                      />
+                      <span
+                        style={{
+                          width: 12,
+                          height: 12,
+                          borderRadius: 3,
+                          background: tpl.headlineColor,
+                          border: '1px solid rgba(255,255,255,0.2)',
+                        }}
+                      />
+                    </span>
                   </button>
                 );
               })}
             </div>
-
-            {mode === 'image_system' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#cbd5e1' }}>
-                  <span>{s.strokeWidth}</span>
-                  <span>{strokeWidth}px</span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={60}
-                  step={2}
-                  value={strokeWidth}
-                  onChange={(e) => setStrokeWidth(Number(e.target.value))}
-                  style={{ width: '100%', accentColor: '#2881E2' }}
-                />
-              </div>
-            )}
-          </section>
-
-          {/* Section 2: Template & Brand Palette (hidden in direct_replace mode) */}
-          {mode !== 'direct_replace' && (
-            <>
-              <section style={sectionStyle}>
-                <div style={sectionTitleStyle}>{s.templateSection}</div>
-
-                {schema && schema.templates.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <label style={fieldLabelStyle}>{s.templateLabel}</label>
-                    <select
-                      value={templateKey}
-                      onChange={(e) => setTemplateKey(e.target.value)}
-                      style={inputStyle}
-                    >
-                      {schema.templates.map((tpl) => (
-                        <option key={tpl.key} value={tpl.key} style={{ background: '#161a23', color: '#f1f5f9' }}>
-                          {tpl.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {paletteList.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <label style={fieldLabelStyle}>{s.paletteLabel}</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 7 }}>
-                      {paletteList.map((p) => {
-                        const active = palette === p.name;
-                        return (
-                          <button
-                            key={p.name}
-                            type="button"
-                            onClick={() => setPalette(p.name)}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              padding: '7px 9px',
-                              borderRadius: 8,
-                              border: active ? '1.5px solid #2881E2' : '1px solid rgba(255,255,255,0.1)',
-                              background: active ? 'rgba(40,129,226,0.14)' : '#161a23',
-                              color: '#f1f5f9',
-                              cursor: 'pointer',
-                              fontSize: 12,
-                            }}
-                          >
-                            <span style={{ display: 'inline-flex', borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.2)', flexShrink: 0 }}>
-                              <span style={{ width: 12, height: 16, background: p.kicker_color, display: 'block' }} />
-                              <span style={{ width: 12, height: 16, background: p.headline_color, display: 'block' }} />
-                            </span>
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {lang === 'ar' ? (PALETTE_LABELS_AR[p.name] || p.name) : p.name.replace(/_/g, ' ')}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </section>
-
-              {/* Section 3: Schema-Driven Dynamic Text Fields */}
-              <section style={sectionStyle}>
-                <div style={sectionTitleStyle}>{s.textSection}</div>
-                {textLayers.map((layer) => {
-                  const key = layer.object_key;
-                  const val = dynamicValues[key] ?? '';
-                  return (
-                    <div key={layer.id || key} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                      <label style={fieldLabelStyle}>{labelForTextLayer(key)}</label>
-                      <textarea
-                        rows={2}
-                        value={val}
-                        dir="auto"
-                        onChange={(e) =>
-                          setDynamicValues((prev) => ({
-                            ...prev,
-                            [key]: e.target.value,
-                          }))
-                        }
-                        placeholder={layer.default_content || ''}
-                        style={{
-                          ...inputStyle,
-                          resize: 'vertical',
-                          minHeight: 54,
-                          lineHeight: 1.5,
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-              </section>
-            </>
           )}
+        </div>
 
-          {/* Section 4: Blur System */}
-          <section style={sectionStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={sectionTitleStyle}>{s.blurSection}</div>
-              {blurBoxes.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBlurBoxes([]);
-                    setSelectedBoxId(null);
-                  }}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#f87171',
-                    fontSize: 11.5,
-                    cursor: 'pointer',
-                    padding: 0,
-                  }}
-                >
-                  {s.clearBlurBtn}
-                </button>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => void handleAutoBlur()}
-              disabled={autoBlurring || (!sourceImagePath && !videoPath)}
-              style={secondaryBtnStyle}
-            >
-              <SvgIcon name="spark" size={14} />
-              <span>{autoBlurring ? s.autoBlurRunning : s.autoBlurBtn}</span>
-            </button>
-
-            {selectedBox && (
-              <div
-                style={{
-                  padding: '10px 11px',
-                  borderRadius: 8,
-                  background: '#161a23',
-                  border: '1px solid rgba(40,129,226,0.35)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 6,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#cbd5e1' }}>
-                  <span>{s.blurStrength}</span>
-                  <span>{selectedBox.sigma}</span>
-                </div>
+        {/* 3. Change Text */}
+        <div style={cardContainerStyle(openSections.text)}>
+          {renderCardHeader('text', 'text', 'نص الغلاف')}
+          {openSections.text && (
+            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <label style={{ fontSize: 11, color: theme.textDim, fontWeight: 600 }}>
+                  العنوان العلوي
+                </label>
                 <input
-                  type="range"
-                  min={4}
-                  max={36}
-                  step={1}
-                  value={selectedBox.sigma}
-                  onChange={(e) => updateSelectedSigma(Number(e.target.value))}
-                  style={{ width: '100%', accentColor: '#2881E2' }}
+                  type="text"
+                  value={kickerText}
+                  onChange={(e) => setKickerText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      void runRender({ successText: 'تم تحديث النص' });
+                    }
+                  }}
+                  placeholder="أدخل العنوان العلوي..."
+                  style={{
+                    height: 34,
+                    padding: '0 10px',
+                    borderRadius: 6,
+                    border: `0.5px solid ${theme.border}`,
+                    background: theme.bg,
+                    color: theme.text,
+                    fontSize: 12.5,
+                    outline: 'none',
+                  }}
                 />
               </div>
-            )}
 
-            {blurBoxes.length === 0 ? (
-              <div style={{ fontSize: 12, color: '#8b95a7', lineHeight: 1.5 }}>{s.noBlurBoxes}</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {blurBoxes.map((box, idx) => {
-                  const active = box.id === selectedBoxId;
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <label style={{ fontSize: 11, color: theme.textDim, fontWeight: 600 }}>
+                  العنوان الرئيسي
+                </label>
+                <textarea
+                  rows={2}
+                  value={headlineText}
+                  onChange={(e) => setHeadlineText(e.target.value)}
+                  placeholder="أدخل العنوان الرئيسي..."
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 6,
+                    border: `0.5px solid ${theme.border}`,
+                    background: theme.bg,
+                    color: theme.text,
+                    fontSize: 12.5,
+                    resize: 'vertical',
+                    outline: 'none',
+                    fontFamily: 'inherit',
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 4. Change Font Size */}
+        <div style={cardContainerStyle(openSections.fontSize)}>
+          {renderCardHeader('fontSize', 'sliders', 'حجم الخط')}
+          {openSections.fontSize && (
+            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 11, color: theme.textDim, fontWeight: 600 }}>حجم خط العنوان</span>
+                <span style={{ fontSize: 11, color: '#60a5fa', fontWeight: 700 }}>{fontSize}px</span>
+              </div>
+              <input
+                type="range"
+                min={64}
+                max={140}
+                step={2}
+                value={fontSize}
+                onChange={(e) => setFontSize(Number(e.target.value))}
+                onPointerUp={() => void runRender({ nextFontSize: fontSize, successText: 'تم تحديث حجم الخط' })}
+                style={{ width: '100%', accentColor: '#3b82f6', height: 4 }}
+              />
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                {FONT_SIZE_PRESETS.map((preset) => {
+                  const active = fontSize === preset.val;
                   return (
-                    <div
-                      key={box.id}
+                    <button
+                      key={preset.label}
+                      type="button"
+                      disabled={saving || uploading}
                       onClick={() => {
-                        setSelectedBoxId(box.id);
-                        setViewMode('blur');
+                        setFontSize(preset.val);
+                        void runRender({ nextFontSize: preset.val, successText: 'تم تحديث حجم الخط' });
                       }}
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '7px 10px',
-                        borderRadius: 8,
-                        border: active ? '1px solid #2881E2' : '1px solid rgba(255,255,255,0.08)',
-                        background: active ? 'rgba(40,129,226,0.12)' : '#161a23',
+                        height: 26,
+                        borderRadius: 5,
+                        border: `1px solid ${active ? '#3b82f6' : theme.border}`,
+                        background: active ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                        color: active ? '#60a5fa' : theme.text,
+                        fontSize: 10.5,
+                        fontWeight: 600,
                         cursor: 'pointer',
-                        fontSize: 12,
                       }}
                     >
-                      <span style={{ color: '#e2e8f0' }}>
-                        {s.blurBoxPrefix} #{idx + 1}
-                        {box.label ? ` — ${box.label}` : ''}
-                      </span>
-                      <button
-                        type="button"
-                        aria-label={s.remove}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setBlurBoxes((prev) => prev.filter((b) => b.id !== box.id));
-                          if (selectedBoxId === box.id) setSelectedBoxId(null);
-                        }}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          color: '#94a3b8',
-                          cursor: 'pointer',
-                          padding: 2,
-                          display: 'grid',
-                          placeItems: 'center',
-                        }}
-                      >
-                        <SvgIcon name="trash" size={14} />
-                      </button>
-                    </div>
+                      {preset.label}
+                    </button>
                   );
                 })}
               </div>
-            )}
-          </section>
-        </aside>
+            </div>
+          )}
+        </div>
 
-        {/* Center Canvas Stage */}
-        <main
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 24,
-            background: 'radial-gradient(circle at center, #141925 0%, #0b0d11 75%)',
-            minHeight: 0,
-            overflow: 'hidden',
-          }}
-        >
-          <ThumbnailBlurCanvas
-            imageUrl={activeCanvasImage}
-            aspectRatio={aspectRatio}
-            blurBoxes={blurBoxes}
-            selectedBoxId={selectedBoxId}
-            editable={viewMode === 'blur'}
-            defaultSigma={12}
-            emptyLabel={s.canvasEmpty}
-            hintLabel={s.canvasHint}
-            onSelectBox={setSelectedBoxId}
-            onChangeBoxes={setBlurBoxes}
-          />
-        </main>
-      </div>
+        {/* 5. Add Blur — Exact Simple Editor Style (Zero Emojis) */}
+        <div style={cardContainerStyle(openSections.blur)}>
+          {renderCardHeader('blur', 'eyeOff', 'تمويه الخصوصية (Blur)')}
+          {openSections.blur && (
+            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 11 }}>
+              <button
+                type="button"
+                onClick={handleAddBlur}
+                style={{
+                  height: 32,
+                  padding: '0 12px',
+                  borderRadius: 7,
+                  border: '1px solid rgba(59, 130, 246, 0.4)',
+                  background: '#2563eb',
+                  color: '#ffffff',
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  boxShadow: '0 1px 4px rgba(37, 99, 235, 0.25)',
+                }}
+              >
+                <Icon name="plus" size={13} />
+                <span>إضافة تمويه جديد (Blur)</span>
+              </button>
+
+              {blurBoxes.length === 0 ? (
+                <div
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 7,
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    border: `0.5px dashed ${theme.border}`,
+                    textAlign: 'center',
+                    fontSize: 11,
+                    color: theme.textDim,
+                  }}
+                >
+                  لا توجد مربعات تمويه حالياً. اضغط "إضافة تمويه جديد" أو اسحب على الصورة.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontSize: 10.5, color: theme.textDim }}>
+                    مربعات التمويه النشطة ({blurBoxes.length}):
+                  </div>
+
+                  {blurBoxes.map((region, idx) => {
+                    const isSelected =
+                      selectedBlurId === region.id || (selectedBlurId === null && blurBoxes.length === 1);
+                    const isCircle =
+                      region.shape === 'circle' || (region.borderRadius !== undefined && region.borderRadius >= 100);
+                    const isRounded =
+                      region.shape === 'rounded' || (!isCircle && (region.borderRadius ?? 0) > 0);
+                    return (
+                      <div
+                        key={region.id}
+                        onClick={() => setSelectedBlurId(region.id)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '6px 10px',
+                          borderRadius: 6,
+                          border: `0.5px solid ${isSelected ? '#3b82f6' : theme.border}`,
+                          background: isSelected ? 'rgba(59, 130, 246, 0.12)' : theme.bg,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Icon name="eyeOff" size={12} color={isSelected ? '#3b82f6' : theme.textDim} />
+                          <span style={{ fontSize: 11.5, fontWeight: isSelected ? 700 : 500, color: theme.text }}>
+                            تمويه {idx + 1}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 9.5,
+                              color: theme.accent,
+                              background: 'rgba(59, 130, 246, 0.15)',
+                              padding: '1px 5px',
+                              borderRadius: 3,
+                            }}
+                          >
+                            {isCircle ? 'دائري' : isRounded ? 'مستدير' : 'مربع'}
+                          </span>
+                          <span style={{ fontSize: 10, color: theme.textDim }}>
+                            ({Math.round(region.width)}% × {Math.round(region.height)}%)
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveBlur(region.id);
+                          }}
+                          title="حذف مربع التمويه"
+                          style={{
+                            border: 'none',
+                            background: 'transparent',
+                            color: theme.danger || '#ef4444',
+                            cursor: 'pointer',
+                            padding: '2px 4px',
+                            borderRadius: 4,
+                            display: 'grid',
+                            placeItems: 'center',
+                          }}
+                        >
+                          <Icon name="x" size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  {targetBlur && (() => {
+                    const isCircle =
+                      targetBlur.shape === 'circle' ||
+                      (targetBlur.borderRadius !== undefined && targetBlur.borderRadius >= 100);
+                    const isRounded =
+                      targetBlur.shape === 'rounded' || (!isCircle && (targetBlur.borderRadius ?? 0) > 0);
+                    const isSquare = !isCircle && !isRounded;
+                    const currentStrength = targetBlur.strength ?? 70;
+
+                    return (
+                      <div
+                        style={{
+                          marginTop: 4,
+                          padding: '10px 12px',
+                          borderRadius: 7,
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          border: `0.5px solid ${theme.border}`,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 10,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: theme.text }}>
+                            إعدادات التمويه المختار
+                          </span>
+                          <span style={{ fontSize: 10, color: '#60a5fa', fontWeight: 600 }}>
+                            {isCircle ? 'دائري' : isRounded ? 'مستدير' : 'مربع'} • {currentStrength}px
+                          </span>
+                        </div>
+
+                        {/* Shape Selection */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                          <span style={{ fontSize: 10.5, color: theme.textDim, fontWeight: 600 }}>
+                            الشكل:
+                          </span>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                            {[
+                              { label: 'مربع', active: isSquare, shape: 'square' as const, borderRadius: 0 },
+                              {
+                                label: 'مستدير',
+                                active: isRounded,
+                                shape: 'rounded' as const,
+                                borderRadius:
+                                  targetBlur.borderRadius && targetBlur.borderRadius < 100
+                                    ? targetBlur.borderRadius
+                                    : 24,
+                              },
+                              { label: 'دائري', active: isCircle, shape: 'circle' as const, borderRadius: 9999 },
+                            ].map((opt) => (
+                              <button
+                                key={opt.label}
+                                type="button"
+                                onClick={() =>
+                                  handleUpdateBlur({
+                                    ...targetBlur,
+                                    shape: opt.shape,
+                                    borderRadius: opt.borderRadius,
+                                  })
+                                }
+                                style={{
+                                  height: 28,
+                                  borderRadius: 5,
+                                  border: `1px solid ${opt.active ? '#3b82f6' : theme.border}`,
+                                  background: opt.active ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                                  color: opt.active ? '#60a5fa' : theme.text,
+                                  fontSize: 10.5,
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {isRounded && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                              <span style={{ fontSize: 9.5, color: theme.textDim, minWidth: 55 }}>
+                                نصف القطر:
+                              </span>
+                              <input
+                                type="range"
+                                min={6}
+                                max={64}
+                                step={2}
+                                value={targetBlur.borderRadius ?? 24}
+                                onChange={(e) =>
+                                  handleUpdateBlur({
+                                    ...targetBlur,
+                                    shape: 'rounded',
+                                    borderRadius: Number(e.target.value),
+                                  })
+                                }
+                                style={{ flex: 1, accentColor: '#3b82f6', height: 4 }}
+                              />
+                              <span style={{ fontSize: 10, color: theme.text, minWidth: 30, textAlign: 'left' }}>
+                                {targetBlur.borderRadius ?? 24}px
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Blur Strength */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: 10.5, color: theme.textDim, fontWeight: 600 }}>
+                              قوة التمويه:
+                            </span>
+                            <span style={{ fontSize: 10, color: '#60a5fa', fontWeight: 600 }}>
+                              {currentStrength}px
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={20}
+                            max={130}
+                            step={5}
+                            value={currentStrength}
+                            onChange={(e) =>
+                              handleUpdateBlur({
+                                ...targetBlur,
+                                strength: Number(e.target.value),
+                              })
+                            }
+                            style={{ width: '100%', accentColor: '#3b82f6', height: 4 }}
+                          />
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+                            {BLUR_STRENGTH_PRESETS.map((preset) => {
+                              const active = currentStrength === preset.val;
+                              return (
+                                <button
+                                  key={preset.label}
+                                  type="button"
+                                  onClick={() =>
+                                    handleUpdateBlur({
+                                      ...targetBlur,
+                                      strength: preset.val,
+                                    })
+                                  }
+                                  style={{
+                                    height: 22,
+                                    borderRadius: 4,
+                                    border: `0.5px solid ${active ? '#3b82f6' : theme.border}`,
+                                    background: active ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                                    color: active ? '#60a5fa' : theme.textDim,
+                                    fontSize: 9.5,
+                                    fontWeight: active ? 700 : 500,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  {preset.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }
-
-const sectionStyle = {
-  display: 'flex',
-  flexDirection: 'column' as const,
-  gap: 10,
-  paddingBottom: 14,
-  borderBottom: '1px solid rgba(255,255,255,0.07)',
-};
-
-const sectionTitleStyle = {
-  fontSize: 12.5,
-  fontWeight: 700,
-  color: '#e2e8f0',
-  letterSpacing: '0.01em',
-};
-
-const fieldLabelStyle = {
-  fontSize: 11.5,
-  color: '#94a3b8',
-  fontWeight: 500,
-};
-
-const inputStyle = {
-  width: '100%',
-  padding: '8px 10px',
-  borderRadius: 8,
-  border: '1px solid rgba(255,255,255,0.12)',
-  background: '#161a23',
-  color: '#f8fafc',
-  fontSize: 13,
-  fontFamily: 'inherit',
-  boxSizing: 'border-box' as const,
-  outline: 'none',
-};
-
-const secondaryBtnStyle = {
-  height: 34,
-  padding: '0 12px',
-  borderRadius: 8,
-  border: '1px solid rgba(255,255,255,0.12)',
-  background: '#181c26',
-  color: '#e2e8f0',
-  fontSize: 12.5,
-  fontWeight: 500,
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 7,
-  width: '100%',
-};

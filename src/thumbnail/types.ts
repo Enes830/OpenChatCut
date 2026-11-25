@@ -10,6 +10,12 @@ export interface BlurBox {
   height: number;
   /** Gaussian blur sigma (4..36) */
   sigma: number;
+  /** Simple editor strength (20..130) */
+  strength?: number;
+  /** Blur region shape matching Simple Editor */
+  shape?: 'square' | 'rounded' | 'circle';
+  /** Corner radius in px for rounded shape */
+  borderRadius?: number;
   label?: string;
   category?: string;
 }
@@ -66,6 +72,7 @@ export interface ThumbnailStateResponse {
   use_image_system: boolean;
   direct_replace: boolean;
   stroke_width: number;
+  font_size?: number;
   bg_color: string | null;
   updated_at: number;
 }
@@ -83,6 +90,7 @@ export interface ThumbnailGeneratePayload {
   image_path?: string | null;
   video_path?: string | null;
   template_key: string;
+  template_id?: string;
   cover_color: string;
   dynamic_values: Record<string, string>;
   kicker_text?: string;
@@ -91,6 +99,7 @@ export interface ThumbnailGeneratePayload {
   use_image_system: boolean;
   direct_replace: boolean;
   stroke_width: number;
+  font_size?: number;
   auto_blur: boolean;
   save_state: boolean;
 }
